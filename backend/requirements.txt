@@ -1,0 +1,12 @@
+python-pptx==1.0.2
+fastapi==0.115.11
+uvicorn==0.34.0
+PyMuPDF==1.22.3
+Pillow==11.1.0
+python-dotenv==1.0.0
+torch
+transformers==4.53.0
+pathlib==1.0.1
+python-multipart==0.0.20
+scipy==1.15.3
+imagehash==4.3.2

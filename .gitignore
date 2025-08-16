@@ -1,0 +1,60 @@
+# setup
+.env
+.env.development
+.env.test_backup
+/thirdparty
+/dist
+/data
+
+# Exclude Python cache files and directories
+__pycache__/
+*.py[cod]
+
+# Exclude virtual environment directories
+venv/
+
+# Backend
+/backend/images
+
+# Dependencies
+/node_modules
+/node
+/package.json
+/package-lock.json
+
+# Local Node.js environment files
+node_env.sh
+node_env.bat
+
+# Distribution packages
+/dist
+
+# Ollama
+/ollama
+
+# Next.js build output
+/frontend/.next
+/frontend/next-faculty
+/frontend/next-lecturer
+/frontend/next-student
+
+# Frontend package lock file
+/frontend/package-lock.json
+
+# Test generated files
+/tests/logs/
+/tests/temp/
+*.log
+/tests/**/temp_*
+/tests/thirdparty/
+/tests/scan-reports/
+/test_packages/
+/tests/coverity_capture/
+/test_package_*/
+
+# Local build artifacts
+*.zip
+*.tgz
+
+# temp
+/test
