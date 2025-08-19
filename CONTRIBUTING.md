@@ -2,7 +2,7 @@
 
 ### License
 
-University Curriculum Enabling Tool is licensed under the terms in [Apache License 2.0](https://github.com/intel/university-curriculum-enabling-tool/blob/main/LICENSE). By contributing to the project, you agree to the license and copyright terms therein and release your contribution under these terms.
+University Curriculum Enabling Tool is licensed under the terms in [Apache License 2.0](./LICENSE). By contributing to the project, you agree to the license and copyright terms therein and release your contribution under these terms.
 
 ### Sign your work
 
