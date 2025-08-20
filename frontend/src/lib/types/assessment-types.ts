@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 export interface ExplanationObject {
   criteria: Array<{ name: string; weight: number; description?: string }>
   markAllocation: Array<{ component: string; marks: number; description?: string }>

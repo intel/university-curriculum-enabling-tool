@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import { getPayload } from 'payload'
 import config from '@payload-config'
 import { EmbeddingChunk } from '../types/embedding-chunk'

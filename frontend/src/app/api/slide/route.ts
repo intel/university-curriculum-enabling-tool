@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import { NextResponse } from 'next/server'
 import type { CourseContentRequest } from './types'
 import { generateCourseContent } from './content-generator'

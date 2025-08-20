@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 'use client'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'

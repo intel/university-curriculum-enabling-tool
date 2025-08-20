@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import type { ContextChunk } from '@/lib/types/context-chunk'
 import type { ClientSource } from '@/lib/types/client-source'
 import { getStoredChunks } from '@/lib/chunk/get-stored-chunks'

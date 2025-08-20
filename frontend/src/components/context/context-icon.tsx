@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import type { ReactNode } from 'react'
 import { BookOpen, Box } from 'lucide-react'
 

@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import { execSync, spawn } from 'child_process';
 import fs from 'fs-extra';
 import path from 'path';

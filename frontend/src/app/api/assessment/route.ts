@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import type { Source } from '../../../payload-types'
 import { NextResponse } from 'next/server'
 import { createOllama } from 'ollama-ai-provider'

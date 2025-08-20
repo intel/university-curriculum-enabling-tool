@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import { errorResponse, successResponse } from '@/lib/api-response'
 import { NextResponse } from 'next/server'
 import type { CollectionConfig } from 'payload'

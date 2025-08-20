@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 // Default values from environment variables
 const DEFAULT_OLLAMA_URL = process.env.OLLAMA_URL || ''
 const DEFAULT_MODEL_NAME = process.env.RAG_EMBEDDING_MODEL || 'all-minilm:latest'

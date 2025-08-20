@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import React, { memo, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import Markdown from 'react-markdown'

@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import { ContextChunk } from '../types/context-chunk'
 import { CoreMessage } from 'ai'
 import { effectiveTokenCountForText } from '@/lib/utils'

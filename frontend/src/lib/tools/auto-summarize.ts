@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import { z } from 'zod'
 import { tool } from 'ai'
 import { summarizeDocument } from './summarize-document'

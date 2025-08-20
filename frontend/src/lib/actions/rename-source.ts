@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import { useSourcesStore } from '@/lib/store/sources-store'
 import { toast } from 'sonner'
 import useSWRMutation from 'swr/mutation'

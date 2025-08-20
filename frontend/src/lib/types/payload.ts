@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Represents a paginated response for a collection query.
  * All collection find queries are paginated automatically, and the response

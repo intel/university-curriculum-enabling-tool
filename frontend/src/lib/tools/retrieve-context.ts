@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import { z } from 'zod'
 import { cosineSimilarity, tool } from 'ai'
 import { getUserEmbedding } from '../embedding/get-user-embedding'

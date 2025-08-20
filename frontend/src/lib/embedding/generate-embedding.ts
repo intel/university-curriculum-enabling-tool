@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import { createOllama } from 'ollama-ai-provider'
 import { EmbeddingChunk } from '../types/embedding-chunk'
 import { embed } from 'ai'

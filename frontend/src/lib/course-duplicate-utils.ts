@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 // Utility functions for course duplicate detection
 
 import type { Course } from '../payload-types'

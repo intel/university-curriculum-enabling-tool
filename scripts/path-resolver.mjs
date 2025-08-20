@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath } from 'url';

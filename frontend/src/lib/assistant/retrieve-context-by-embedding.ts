@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import { ClientSource } from '../types/client-source'
 import { ContextChunk } from '../types/context-chunk'
 import { generateEmbeddings } from '../embedding/generate-embedding'
