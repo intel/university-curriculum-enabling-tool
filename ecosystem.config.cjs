@@ -1,4 +1,5 @@
-// filepath: /home/user/workspaces/ai/rag/academic/dev/dev-linux-script/ecosystem.config.cjs
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
 
 const path = require('path');
 const fs = require('fs');
