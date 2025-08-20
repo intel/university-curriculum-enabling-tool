@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import { extractFileData, FileType } from '@/lib/extract-file-data'
 import { generateEmbeddings } from '@/lib/embedding/generate-embedding'
 import sharp from 'sharp'

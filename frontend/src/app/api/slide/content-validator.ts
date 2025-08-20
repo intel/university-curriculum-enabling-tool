@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import type { LectureContent } from './types'
 
 // Interface for the input content that may be partially formed

@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import { ContextChunk } from './context-chunk'
 
 // Very flexible generation function type that can accommodate various AI library signatures

@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import React from 'react'
 import ChatMessage from './chat-message'
 import { ChatMessageList } from '../ui/chat/chat-message-list'

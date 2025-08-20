@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 

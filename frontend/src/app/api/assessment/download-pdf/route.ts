@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import { NextResponse, type NextRequest } from 'next/server'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'

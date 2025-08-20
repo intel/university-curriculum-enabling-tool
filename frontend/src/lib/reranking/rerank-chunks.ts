@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import { CoreMessage, generateText } from 'ai'
 import { ScoredChunk } from '../types/context-chunk'
 import { createOllama } from 'ollama-ai-provider'

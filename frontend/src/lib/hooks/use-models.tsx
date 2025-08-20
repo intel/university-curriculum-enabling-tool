@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import useSWR from 'swr'
 import useChatStore from '@/lib/store/chat-store'
 import { useModelStore } from '../store/model-store'

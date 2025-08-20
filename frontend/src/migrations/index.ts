@@ -1,3 +1,6 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 import * as migration_20250610_002750 from './20250610_002750'
 
 export const migrations = [

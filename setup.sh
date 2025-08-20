@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Copyright (C) 2025 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+
 # setup.sh: System-level setup (requires sudo privileges)
 # This script installs system dependencies required for the application
 # It handles ONLY dependencies that require root/sudo privileges
