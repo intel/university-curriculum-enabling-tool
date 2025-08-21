@@ -14,7 +14,7 @@ Powered by Intel CPUs and GPUs, the tool ensures accurate, contextually relevant
 
 ### Software Requirements
 
-- **Operating System**: At least one of the following:
+- **Operating System**: 
 
   | Type        | Version                   |
   |-------------|---------------------------|
@@ -23,7 +23,7 @@ Powered by Intel CPUs and GPUs, the tool ensures accurate, contextually relevant
 ### Hardware Requirements
 
 - **CPU**: Intel® Core™ Ultra Processor (Products formerly Meteor Lake-UH) and above
-- **RAM**: Minimum 32GB, 64GB recommended
+- **RAM**: Minimum: 32GB, Recommended: 64GB 
 - **Storage**: 256GB free space
 - **GPU**: At least one of the following:
 
@@ -47,7 +47,7 @@ Powered by Intel CPUs and GPUs, the tool ensures accurate, contextually relevant
 
 ## Quick Start
 
-
+> **Pre-requisite:** Follow the [Edge Developer Kit Reference Scripts](https://github.com/intel/edge-developer-kit-reference-scripts) to install the necessary drivers and compute-related packages for Intel® GPUs 
 
 1. **Setup** - Install system dependencies:
 
