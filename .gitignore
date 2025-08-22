@@ -38,9 +38,6 @@ node_env.bat
 /frontend/next-lecturer
 /frontend/next-student
 
-# Frontend package lock file
-/frontend/package-lock.json
-
 # Test generated files
 /tests/logs/
 /tests/temp/
