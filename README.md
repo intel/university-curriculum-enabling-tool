@@ -8,7 +8,7 @@ University Curriculum Enabling Tool is an advanced application leveraging fine-t
 - **Expert Advisor:** Lecturers can customize and enhance their teaching resources, generate assignments, quizzes, and research prompts, and access tools to support effective course delivery.
 - **Learning Companion:** Students benefit from personalized learning experiences, including practice quizzes, material summarization, and interactive note-taking, both within and beyond the content provided by lecturers.
 
-Powered by Intel CPUs and GPUs, the tool ensures accurate, contextually relevant responses, making it a valuable asset for curriculum development, teaching, and student learning.
+Powered by Intel® CPUs and GPUs, the tool ensures accurate, contextually relevant responses, making it a valuable asset for curriculum development, teaching, and student learning.
 
 ## System Requirements
 
