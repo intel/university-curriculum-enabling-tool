@@ -55,7 +55,7 @@ async def parse_pdf(file: UploadFile = File(...)):
                     base_image = pdf_file.extract_image(xref)
                     image_bytes = base_image["image"]
                     image_ext = base_image["ext"]
-
+                    
                     # Compute perceptual hash
                     pil_img = Image.open(io.BytesIO(image_bytes))
                     phash = str(imagehash.phash(pil_img))
