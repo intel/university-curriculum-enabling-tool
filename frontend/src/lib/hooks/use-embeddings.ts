@@ -3,27 +3,29 @@
 
 'use client'
 
-import useSWR from 'swr'
+import { useQuery } from '@tanstack/react-query'
 import { ClientSource } from '../types/client-source'
 import { Embedding } from '@/payload-types'
 
 /**
- * Fetcher function for SWR.
+ * Fetcher function for TanStack Query.
  *
- * This function fetches data from the given URL with credentials included.
+ * This function fetches embeddings for the provided source IDs.
  *
- * @param url - The URL to fetch data from.
- * @returns A promise that resolves to the JSON response.
+ * @param sourceIds - Comma-separated list of source IDs.
+ * @returns A promise that resolves to the embeddings data.
  */
-const fetcher = (url: string) => {
-  const apiUrl = new URL(url, window.location.origin).href
-  return fetch(apiUrl, { credentials: 'include' }).then((res) => res.json())
+const fetchEmbeddings = async (sourceIds: string): Promise<Embedding[]> => {
+  const apiUrl = new URL(`/api/embeddings?where[source][in]=${sourceIds}`, window.location.origin)
+    .href
+  const response = await fetch(apiUrl, { credentials: 'include' })
+  return response.json()
 }
 
 /**
  * Hook to fetch embeddings for selected sources.
  *
- * This hook uses SWR to fetch embeddings for the provided selected sources.
+ * This hook uses TanStack Query to fetch embeddings for the provided selected sources.
  * It constructs a query string from the source IDs and fetches the embeddings
  * from the API.
  *
@@ -33,15 +35,15 @@ const fetcher = (url: string) => {
 export function useEmbeddings(selectedSources: ClientSource[]) {
   const sourceIds = selectedSources.map((s) => s.id).join(',')
 
-  // Use SWR to fetch embeddings
-  const { data, error, isLoading } = useSWR<Embedding[]>(
-    sourceIds ? `/api/embeddings?where[source][in]=${sourceIds}` : null,
-    fetcher,
-  )
+  const { data, error, isPending } = useQuery({
+    queryKey: ['embeddings', sourceIds],
+    queryFn: () => fetchEmbeddings(sourceIds),
+    enabled: Boolean(sourceIds),
+  })
 
   return {
     embeddings: data || [],
-    isLoading,
+    isLoading: isPending,
     error,
   }
 }

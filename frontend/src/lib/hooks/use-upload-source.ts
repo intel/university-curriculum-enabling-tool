@@ -3,34 +3,40 @@
 
 'use client'
 
-import { useState } from 'react'
 import { useSourcesStore } from '@/lib/store/sources-store'
-import { useSources } from './use-sources'
-import useSWRMutation from 'swr/mutation'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
 /**
- * Fetcher function for uploading a source.
+ * Function for uploading a source.
  *
  * This function sends a POST request to upload a file to the specified URL.
- * It handles errors by rejecting the promise with an error message.
+ * It handles errors by throwing an exception with an error message.
  *
- * @param url - The API endpoint URL for uploading the source.
- * @param arg - An object containing the FormData to upload.
+ * @param formData - The FormData containing the file to upload.
  * @returns A promise that resolves to the JSON response.
  * @throws An error if the upload fails.
  */
-async function uploadSourceFetcher(url: string, { arg }: { arg: FormData }) {
-  const uploadSourceUrl = new URL(url, window.location.origin).href
-  const response = await fetch(uploadSourceUrl, {
+async function uploadSourceFetcher(formData: FormData) {
+  const response = await fetch(`/api/sources/upload`, {
     method: 'POST',
-    body: arg,
+    body: formData,
   })
+
   if (!response.ok) {
-    const errorData = await response.json()
-    const errorMessage = errorData.errors?.[0]?.message || 'Upload failed'
-    return Promise.reject(new Error(errorMessage))
+    let errorMessage = 'Upload failed'
+    try {
+      const text = await response.text()
+      console.error('Upload failed response:', text)
+      const errorData = JSON.parse(text)
+      errorMessage =
+        errorData.errors?.[0]?.message || errorData.message || `Upload failed: ${response.status}`
+    } catch {
+      errorMessage = `Upload failed: ${response.status}`
+    }
+    throw new Error(errorMessage)
   }
+
   return response.json()
 }
 
@@ -43,43 +49,58 @@ async function uploadSourceFetcher(url: string, { arg }: { arg: FormData }) {
  * @returns An object containing the uploadSource function and the isUploading state.
  */
 export function useUploadSource() {
-  const [isUploading, setIsUploading] = useState(false)
   const { addSource } = useSourcesStore()
-  const { mutate } = useSources()
-  const { trigger } = useSWRMutation('/api/sources/upload', uploadSourceFetcher)
+  const queryClient = useQueryClient()
+
+  const mutation = useMutation({
+    mutationFn: uploadSourceFetcher,
+    onSuccess: (newSource, formData) => {
+      const file = formData.get('file') as File | null
+      const fileName = file?.name || 'File'
+      addSource({ ...newSource, selected: false })
+
+      // Invalidate and refetch sources
+      queryClient.invalidateQueries({ queryKey: ['sources'] })
+
+      toast.success(`${fileName} has been uploaded successfully.`)
+    },
+    onError: (error, formData) => {
+      const file = formData.get('file') as File | null
+      const fileName = file?.name || 'File'
+
+      if (error instanceof Error) {
+        toast.error(`Failed to upload ${fileName}: ${error.message}`)
+      } else if (typeof error === 'object' && error !== null && 'data' in error) {
+        toast.error(`Payload CMS Error: ${(error as { data: string }).data}`)
+      } else {
+        toast.error(`An unexpected error occurred`)
+      }
+    },
+  })
 
   /**
    * Uploads a file as a source.
    *
-   * This function uploads the provided file, updates the local source store,
-   * and displays success or error messages based on the upload result.
+   * This function prepares the FormData with the provided file and triggers the mutation.
    *
    * @param file - The file to upload as a source.
    * @returns A promise that resolves to the new source data.
    */
   const uploadSource = async (file: File) => {
-    setIsUploading(true)
     const formData = new FormData()
     formData.append('file', file)
 
     try {
-      const newSource = await trigger(formData)
-      addSource({ ...newSource, selected: false })
-      mutate()
-      toast.success(`${file.name} has been uploaded successfully.`)
+      const newSource = await mutation.mutateAsync(formData)
       return newSource
     } catch (error) {
-      if (error instanceof Error) {
-        toast.error(`Failed to upload ${file.name}: ${error.message}`)
-      } else if (typeof error === 'object' && error !== null && 'data' in error) {
-        toast.error(`Payload CMS Error: ${error.data}`)
-      } else {
-        toast.error('An unexpected error occurred')
-      }
-    } finally {
-      setIsUploading(false)
+      console.error('Error details:', error)
+      throw error
     }
   }
 
-  return { uploadSource, isUploading }
+  return {
+    uploadSource,
+    isUploading: mutation.isPending,
+  }
 }
