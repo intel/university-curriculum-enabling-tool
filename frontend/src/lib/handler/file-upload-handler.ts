@@ -6,6 +6,9 @@ import { generateEmbeddings } from '@/lib/embedding/generate-embedding'
 import sharp from 'sharp'
 import type { PayloadRequest } from 'payload'
 
+// Only formats supported by sharp
+const validFormats = ['jpeg', 'png', 'webp', 'gif', 'tiff', 'svg', 'avif', 'bmp', 'heif']
+
 // Interface for file object
 interface FileObject {
   name: string
@@ -163,19 +166,38 @@ async function storeFileAndEmbeddings(
     const { filename, embedding, order, image_bytes: imageBytes } = image
 
     // Decode the image_bytes from hex to binary
-    const imageBuffer = Buffer.from(imageBytes, 'hex')
+    const imageBuffer: Buffer = Buffer.from(imageBytes, 'hex')
+
+    // Get extension from filename
+    const extMatch = filename.match(/\.([a-zA-Z0-9]+)$/i)
+    const ext = extMatch ? extMatch[1].toLowerCase() : ''
+    if (!ext) {
+      console.warn(`No file extension found for file: ${filename}`)
+      continue
+    }
+
+    // Check for unsupported extensions like .jpx
+    if (!validFormats.includes(ext)) {
+      console.warn(`Skipping unsupported image format by extension: ${ext} (${filename})`)
+      continue
+    }
+
     const imageFile = sharp(imageBuffer)
     const metadata = await imageFile.metadata()
-    // console.log("DEBUG image metadata", metadata)
 
-    const validFormats = ['jpeg', 'png', 'webp', 'gif', 'tiff', 'svg', 'avif', 'bmp', 'heif']
-    const format =
-      typeof metadata.format === 'string' && validFormats.includes(metadata.format.toLowerCase())
-        ? metadata.format.toLowerCase()
-        : 'jpeg' // fallback to jpeg if invalid or missing
+    let format: string
+    const formatFromMetadata =
+      typeof metadata.format === 'string' ? metadata.format.toLowerCase() : ''
+    if (formatFromMetadata && validFormats.includes(formatFromMetadata)) {
+      format = formatFromMetadata
+    } else {
+      // fallback to jpeg if metadata format is missing but extension is valid
+      format = 'jpeg'
+      console.warn(`Metadata format missing or invalid for ${filename}, falling back to 'jpeg'`)
+    }
 
     // Convert Sharp metadata to a plain JSON-serializable object
-    const jsonMetadata: { [key: string]: unknown } = {
+    const jsonMetadata: Record<string, unknown> = {
       format: metadata.format,
       width: metadata.width,
       height: metadata.height,
@@ -186,7 +208,6 @@ async function storeFileAndEmbeddings(
       hasProfile: metadata.hasProfile,
       hasAlpha: metadata.hasAlpha,
       isProgressive: metadata.isProgressive,
-      // Add any other relevant metadata properties, excluding Buffers
       ...(metadata.size && { size: metadata.size }),
       ...(metadata.pages && { pages: metadata.pages }),
       ...(metadata.pageHeight && { pageHeight: metadata.pageHeight }),
@@ -202,14 +223,14 @@ async function storeFileAndEmbeddings(
         collection: 'media',
         data: {
           source: source.id,
-          filename: filename,
+          filename,
           metadata: jsonMetadata,
-          order: order,
+          order,
         },
         file: {
           name: filename,
           data: imageBuffer,
-          mimetype: 'image/' + format,
+          mimetype: `image/${format}`,
           size: imageBuffer.length,
         },
       })
