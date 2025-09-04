@@ -3,39 +3,40 @@
 
 import { useSourcesStore } from '@/lib/store/sources-store'
 import { toast } from 'sonner'
-import useSWRMutation from 'swr/mutation'
+import { useMutation } from '@tanstack/react-query'
 import type { Source } from '@/payload-types'
 
 /**
- * Fetcher function for renaming a source.
+ * Interface for rename source arguments
+ */
+interface RenameSourceArgs {
+  id: string
+  name: string
+}
+
+/**
+ * Function for renaming a source.
  *
- * @param url - The API endpoint URL for renaming the source.
  * @param arg - An object containing the ID and new name of the source.
  * @returns A promise that resolves to the updated source data.
  * @throws An error if the renaming fails.
  */
-async function renameSourceFetcher(
-  url: string,
-  { arg }: { arg: { id: string; name: string } },
-): Promise<Source> {
-  const renameSourceUrl = new URL(
-    url.endsWith('/') ? `${arg.id}` : `/${arg.id}`,
-    url.startsWith('http') ? url : window.location.origin + url,
-  ).href
+async function renameSourceFetcher({ id, name }: RenameSourceArgs): Promise<Source> {
+  const renameSourceUrl = new URL(`/api/sources/${id}`, window.location.origin).href
 
   const response = await fetch(renameSourceUrl, {
-    method: 'PATCH', // or 'PATCH' depending on your API
+    method: 'PATCH',
     headers: {
-      'Content-Type': 'application/json',
+      'Content-Type': `application/json`,
     },
-    body: JSON.stringify({ name: arg.name }),
+    body: JSON.stringify({ name }),
   })
+
   if (!response.ok) {
     const errorData = await response.json()
     const errorMessage = errorData.errors?.[0]?.message || 'Failed to rename source'
-    return Promise.reject(new Error(errorMessage))
+    throw new Error(errorMessage)
   }
-  console.log(response)
 
   return response.json()
 }
@@ -47,7 +48,10 @@ async function renameSourceFetcher(
  */
 export function useRenameSource() {
   const { renameSource } = useSourcesStore.getState()
-  const { trigger } = useSWRMutation('/api/sources', renameSourceFetcher)
+
+  const mutation = useMutation({
+    mutationFn: renameSourceFetcher,
+  })
 
   /**
    * Renames a source by its ID.
@@ -58,8 +62,11 @@ export function useRenameSource() {
    */
   const renameSourceById = async (id: number, newName: string) => {
     try {
-      // Pass the argument object correctly
-      const updatedSource = await trigger({ id: id.toString(), name: newName })
+      // Use mutateAsync instead of trigger
+      const updatedSource = await mutation.mutateAsync({
+        id: id.toString(),
+        name: newName,
+      })
 
       // Update the local state
       renameSource(id, updatedSource.name)
@@ -70,7 +77,7 @@ export function useRenameSource() {
       if (error instanceof Error) {
         toast.error(`${error.message}`)
       } else if (typeof error === 'object' && error !== null && 'data' in error) {
-        toast.error(`Payload CMS Error: ${error.data}`)
+        toast.error(`Payload CMS Error: ${(error as { data: string }).data}`)
       } else {
         toast.error(`Failed to rename source ID #${id}`)
       }

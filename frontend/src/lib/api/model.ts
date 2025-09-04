@@ -3,36 +3,37 @@
 
 import { useModelStore } from '@/lib/store/model-store'
 import { toast } from 'sonner'
-import useSWRMutation from 'swr/mutation'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 
 interface DeleteModelResponse {
   success: boolean
   message?: string
 }
 
+interface DeleteModelArgs {
+  name: string
+}
+
 /**
- * Fetcher function for deleting a model.
+ * Function for deleting a model.
  *
- * @param url - The API endpoint URL for deleting the model.
+ * @param arg - An object containing the name of the model to delete.
  * @returns A promise that resolves to the response data.
  * @throws An error if the deletion fails.
  */
-async function deleteModelFetcher(
-  url: string,
-  { arg }: { arg: { name: string } },
-): Promise<DeleteModelResponse> {
-  const deleteModelFetcherUrl = new URL(url, window.location.origin).href
+async function deleteModelFetcher({ name }: DeleteModelArgs): Promise<DeleteModelResponse> {
+  const deleteModelFetcherUrl = new URL('/api/model', window.location.origin).href
   const response = await fetch(deleteModelFetcherUrl, {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ model: arg.name }),
+    body: JSON.stringify({ model: name }),
   })
   if (!response.ok) {
     const errorData = await response.json()
     const errorMessage = errorData.errors?.[0]?.message || 'Failed to delete model'
-    return Promise.reject(new Error(errorMessage))
+    throw new Error(errorMessage)
   }
   return response.json()
 }
@@ -44,11 +45,32 @@ async function deleteModelFetcher(
  */
 export function useDeleteModel() {
   const { deleteModel } = useModelStore.getState()
+  const queryClient = useQueryClient() // Get the query client instance
 
-  // Use useSWRMutation with the correct types
-  // const OLLAMA_URL = process.env.OLLAMA_URL;
-  // console.log(`OLLAMA_URL: ${OLLAMA_URL}`);
-  const { trigger } = useSWRMutation(`/api/model`, deleteModelFetcher)
+  // Use useMutation with query client for better cache management
+  const mutation = useMutation({
+    mutationFn: deleteModelFetcher,
+    onSuccess: (_, variables) => {
+      // Update the local store
+      deleteModel(variables.name)
+
+      // Invalidate the models query to refresh the data
+      queryClient.invalidateQueries({ queryKey: ['models'] })
+
+      toast.success('Model Deleted', {
+        description: `${variables.name} has been deleted successfully.`,
+      })
+    },
+    onError: (error, variables) => {
+      if (error instanceof Error) {
+        toast.error(`${error.message}`)
+      } else if (typeof error === 'object' && error !== null && 'data' in error) {
+        toast.error(`Ollama server error: ${(error as { data: string }).data}`)
+      } else {
+        toast.error(`Failed to delete model ${variables.name}`)
+      }
+    },
+  })
 
   /**
    * Deletes a model by its name.
@@ -57,23 +79,15 @@ export function useDeleteModel() {
    */
   const deleteModelByName = async (name: string) => {
     try {
-      // Trigger the mutation with the model name
-      await trigger({ name: name })
-
-      deleteModel(name)
-      toast.success('Model Deleted', {
-        description: `${name} has been deleted successfully.`,
-      })
+      await mutation.mutateAsync({ name })
     } catch (error) {
-      if (error instanceof Error) {
-        toast.error(`${error.message}`)
-      } else if (typeof error === 'object' && error !== null && 'data' in error) {
-        toast.error(`Ollama server error: ${error.data}`)
-      } else {
-        toast.error(`Failed to delete model ${name}`)
-      }
+      // Error is already handled in onError callback
+      console.error('Error details:', error)
     }
   }
 
-  return { deleteModelByName }
+  return {
+    deleteModelByName,
+    isPending: mutation.isPending,
+  }
 }
