@@ -35,6 +35,8 @@ import { Slider } from '@/components/ui/slider'
 import { useContextAvailability } from '@/lib/hooks/use-context-availability'
 import { getSelectContextDescription } from '@/lib/utils/context-messages'
 import { ContextRequirementMessage } from '@/components/context-requirement-message'
+import { useCourses } from '@/lib/hooks/use-courses'
+import { usePersonaStore } from '@/lib/store/persona-store'
 import { Progress } from '@/components/ui/progress'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
@@ -55,6 +57,8 @@ export default function FAQComponent() {
   const [useReranker, setUseReranker] = useState(true)
   const { getActiveContextModelName, getContextTypeLabel } = useContextAvailability()
   const selectedSources = useSourcesStore((state) => state.selectedSources)
+  const { data: coursesData } = useCourses()
+  const { selectedCourseId } = usePersonaStore()
 
   // Function to trigger the API and fetch initial FAQs
   const fetchAPI = async () => {
@@ -66,8 +70,11 @@ export default function FAQComponent() {
       return false
     }
     const selectedSourcesCount = selectedSources.filter((source) => source.selected).length
-    if (selectedSourcesCount !== 1) {
-      toast.error('Please select exactly one source.')
+    // Allow generation with no sources or exactly one source, but not multiple sources
+    if (selectedSourcesCount > 1) {
+      toast.error(
+        'Multiple sources selected. Please select only one source or none to use course context.',
+      )
       return
     }
 
@@ -82,6 +89,16 @@ export default function FAQComponent() {
     try {
       const modelName = getActiveContextModelName()
 
+      // Get course information from context - using proven method from assessment page
+      const selectedCourse = coursesData?.docs.find((course) => course.id === selectedCourseId)
+      const courseDescription = selectedCourse?.description || ''
+      const courseInfo = selectedCourse
+        ? {
+            courseName: selectedCourse.name,
+            courseDescription: courseDescription,
+          }
+        : undefined
+
       const response = await fetch('/api/faq', {
         method: 'POST',
         headers: {
@@ -95,6 +112,7 @@ export default function FAQComponent() {
           multiPassState: null, // No state for initial request
           continueFaqs: false,
           useReranker: useReranker, // Add this line
+          courseInfo, // Add course info
         }),
       })
 
@@ -129,6 +147,16 @@ export default function FAQComponent() {
     try {
       const modelName = getActiveContextModelName()
 
+      // Get course information from context (same as initial call) - using proven method
+      const selectedCourse = coursesData?.docs.find((course) => course.id === selectedCourseId)
+      const courseDescription = selectedCourse?.description || ''
+      const courseInfo = selectedCourse
+        ? {
+            courseName: selectedCourse.name,
+            courseDescription: courseDescription,
+          }
+        : undefined
+
       const response = await fetch('/api/faq', {
         method: 'POST',
         headers: {
@@ -142,6 +170,7 @@ export default function FAQComponent() {
           multiPassState: multiPassState, // Pass the state for continuation
           continueFaqs: true, // Flag that this is a continuation request
           useReranker: useReranker, // Add this line
+          courseInfo, // Add course info
         }),
       })
 
