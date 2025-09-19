@@ -13,6 +13,7 @@ import {
   SystemPromptGenerator,
   ContentProcessor,
   GenerationFunction,
+  ProcessResult,
 } from '@/lib/rag/multi-pass'
 import { ContextChunk } from '@/lib/types/context-chunk'
 
@@ -44,9 +45,19 @@ const CONTENT_TYPE_FAQ = 'faq'
  */
 const faqSystemPromptGenerator: SystemPromptGenerator = (isFirstPass, query, options) => {
   const faqCount = options.faqCount || 5
+  const hasValidSources = options.hasValidSources || false
+  const courseInfo = options.courseInfo as
+    | { courseName?: string; courseDescription?: string }
+    | undefined
+
+  const contextInstruction = hasValidSources
+    ? 'based on the context provided'
+    : courseInfo?.courseName
+      ? `for the course "${courseInfo.courseName}"${courseInfo.courseDescription ? ` (${courseInfo.courseDescription})` : ''}. Use general academic knowledge relevant to this course`
+      : 'using general academic knowledge'
 
   return `
-  Your job is to generate diverse and interesting FAQs with question answer pairs based on the context provided.
+  Your job is to generate diverse and interesting FAQs with question answer pairs ${contextInstruction}.
 
   Format ALL FAQs as a JSON object with this structure:
   {
@@ -65,7 +76,8 @@ const faqSystemPromptGenerator: SystemPromptGenerator = (isFirstPass, query, opt
   4. Focus on different aspects of the content - find unique angles and insights.
   5. Ensure all quotes and special characters in the JSON are properly escaped.
   6. The JSON must be valid and parsable without errors.
-  7. Answers should be detailed, descriptive, and provide clear explanations based on the context.
+  7. Answers should be detailed, descriptive, and provide clear explanations${hasValidSources ? ' based on the context' : ''}.
+  ${!hasValidSources && courseInfo?.courseName ? `8. Focus on questions and answers that would be relevant for students in ${courseInfo.courseName}.` : ''}
   `
 }
 
@@ -233,7 +245,12 @@ export async function POST(req: Request) {
       continueFaqs = false,
       useReranker, // Add this line with default value true
       _recursionDepth = 0,
+      courseInfo, // Add courseInfo parameter
     } = await req.json()
+
+    // Debug logging
+    console.log('DEBUG FAQ API: courseInfo received:', courseInfo)
+    console.log('DEBUG FAQ API: selectedSources length:', selectedSources?.length || 0)
 
     // Safety check to prevent infinite loops
     if (_recursionDepth > 10) {
@@ -253,6 +270,9 @@ export async function POST(req: Request) {
     }
     const ollama = createOllama({ baseURL: ollamaUrl + '/api' })
 
+    // Check if we have valid sources
+    const hasValidSources = Array.isArray(selectedSources) && selectedSources.length > 0
+
     // Process user query
     const safeSearchQuery = typeof searchQuery === 'string' ? searchQuery : ''
     const hasUserQuery = safeSearchQuery.trim() !== ''
@@ -260,8 +280,8 @@ export async function POST(req: Request) {
     let retrievedChunks: ContextChunk[] = []
     let usedHybridSearch = false
 
-    // Only retrieve chunks on initial request
-    if (!continueFaqs) {
+    // Only retrieve chunks on initial request and if we have valid sources
+    if (!continueFaqs && hasValidSources) {
       if (hasUserQuery) {
         retrievedChunks = await hybridSearch(
           userQuery,
@@ -278,6 +298,10 @@ export async function POST(req: Request) {
       }
     }
 
+    // Additional debug logging
+    console.log('DEBUG FAQ API: hasValidSources:', hasValidSources)
+    console.log('DEBUG FAQ API: retrievedChunks length:', retrievedChunks.length)
+
     // Set up processing options
     const actualFaqCount = faqCount || 5
     const faqContentProcessor = createFaqContentProcessor(actualFaqCount)
@@ -289,6 +313,8 @@ export async function POST(req: Request) {
       temperature: TEMPERATURE + 0.1,
       faqCount: actualFaqCount,
       preserveOrder: !hasUserQuery,
+      hasValidSources, // Add this for system prompt
+      courseInfo, // Add this for system prompt
     }
 
     // Start processing timer
@@ -297,20 +323,84 @@ export async function POST(req: Request) {
     // Create the FAQ generation function
     const faqGenerationFunction = createFaqGenerationFunction()
 
-    // Process chunks using multi-pass approach
-    const processResult = await processChunksMultiPass<FaqResult>(
-      userQuery,
-      continueFaqs ? [] : retrievedChunks,
-      faqGenerationFunction,
-      ollama(selectedModel, { numCtx: TOKEN_RESPONSE_BUDGET }),
-      options,
-      CONTENT_TYPE_FAQ,
-      faqSystemPromptGenerator,
-      (query) =>
-        `Generate FAQs for the following query: "${query}". Use the provided context to answer.`,
-      faqContentProcessor,
-      multiPassState,
-    )
+    let processResult: ProcessResult<FaqResult>
+
+    // Handle no-sources case differently
+    if (!hasValidSources && !continueFaqs) {
+      // Direct generation without chunks for course context
+      console.log('DEBUG FAQ API: Generating FAQs using course context only')
+      const systemPrompt = faqSystemPromptGenerator(true, userQuery, options)
+      const userPrompt = courseInfo?.courseName
+        ? `Generate FAQs for the course "${courseInfo.courseName}"${userQuery ? ` related to: "${userQuery}"` : ''}. Use general academic knowledge relevant to this course.`
+        : `Generate FAQs${userQuery ? ` for the topic: "${userQuery}"` : ''}. Use general academic knowledge to provide comprehensive answers.`
+
+      const messages = [
+        { role: 'system' as const, content: systemPrompt },
+        { role: 'user' as const, content: userPrompt },
+      ]
+
+      try {
+        const { object: rawResult, usage } = await faqGenerationFunction({
+          model: ollama(selectedModel, { numCtx: TOKEN_RESPONSE_BUDGET }),
+          output: 'no-schema',
+          messages: messages,
+          temperature: TEMPERATURE + 0.1,
+          maxTokens: TOKEN_RESPONSE_BUDGET,
+        })
+
+        const processedResult = faqContentProcessor(rawResult, [])
+
+        processResult = {
+          result: processedResult,
+          state: {
+            chunks: [],
+            processedChunkIds: [],
+            currentIndex: 0,
+            isComplete: true,
+            generatedContent: [processedResult],
+            progress: 100,
+            lastGenerated: processedResult,
+            contentType: CONTENT_TYPE_FAQ,
+          },
+          debug: {
+            chunksProcessed: 0,
+            totalChunks: 0,
+            remainingChunks: 0,
+            tokenUsage: {
+              prompt: usage?.promptTokens || 0,
+              completion: usage?.completionTokens || 0,
+              total: usage?.totalTokens || 0,
+            },
+            timeTaken: Date.now() - startTime,
+          },
+        }
+      } catch (error) {
+        console.error('DEBUG FAQ API: Error in direct generation:', error)
+        throw error
+      }
+    } else {
+      // Use multi-pass approach for sources
+      processResult = await processChunksMultiPass<FaqResult>(
+        userQuery,
+        continueFaqs ? [] : retrievedChunks,
+        faqGenerationFunction,
+        ollama(selectedModel, { numCtx: TOKEN_RESPONSE_BUDGET }),
+        options,
+        CONTENT_TYPE_FAQ,
+        faqSystemPromptGenerator,
+        (query) => {
+          if (hasValidSources) {
+            return `Generate FAQs for the following query: "${query}". Use the provided context to answer.`
+          } else if (courseInfo?.courseName) {
+            return `Generate FAQs for the course "${courseInfo.courseName}"${query ? ` related to: "${query}"` : ''}. Use general academic knowledge relevant to this course.`
+          } else {
+            return `Generate FAQs${query ? ` for the topic: "${query}"` : ''}. Use general academic knowledge to provide comprehensive answers.`
+          }
+        },
+        faqContentProcessor,
+        multiPassState,
+      )
+    }
 
     // Calculate processing time
     const timeTakenSeconds = (Date.now() - startTime) / 1000
