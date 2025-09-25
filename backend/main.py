@@ -11,7 +11,7 @@ import glob
 from generate_caption import generate_dynamic_caption
 from generate_image_embedding import generate_image_embedding
 from fastapi.responses import FileResponse, JSONResponse
-from generate_pptx import create_pptx 
+from generate_pptx import create_pptx
 from starlette.background import BackgroundTask
 import tempfile
 import imagehash
@@ -25,61 +25,66 @@ BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "images"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+
 @app.post("/parse")
 async def parse_pdf(file: UploadFile = File(...)):
     """
     Endpoint to parse a PDF file uploaded via multipart/form-data.
     Extracts images, generates captions and embeddings, and returns the data.
     """
+    temp_file_path = None
     try:
-        with tempfile.NamedTemporaryFile(delete=True, suffix=".pdf") as temp_file:
+        # Create temp file with delete=False to avoid Windows file locking issues
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
             temp_file.write(await file.read())
             temp_file_path = temp_file.name
 
-            print(f"DEBUG : Temporary PDF file created at: {temp_file_path}")
-            # Open the PDF file using PyMuPDF
-            pdf_file = fitz.open(str(temp_file_path))
-            image_data = []
-            image_order = 1
-            seen_hashes = set()
-            extracted_text = []
+        print(f"DEBUG : Temporary PDF file created at: {temp_file_path}")
+        # Open the PDF file using PyMuPDF (now works on Windows since file is closed)
+        pdf_file = fitz.open(str(temp_file_path))
+        image_data = []
+        image_order = 1
+        seen_hashes = set()
+        extracted_text = []
 
-            for page_index in range(len(pdf_file)):
-                page = pdf_file.load_page(page_index)
-                extracted_text.append(page.get_text())
+        for page_index in range(len(pdf_file)):
+            page = pdf_file.load_page(page_index)
+            extracted_text.append(page.get_text())
 
-                # Extract images from the page
-                image_list = page.get_images(full=True)
-                for image_index, img in enumerate(image_list, start=1):
-                    xref = img[0]
-                    base_image = pdf_file.extract_image(xref)
-                    image_bytes = base_image["image"]
-                    image_ext = base_image["ext"]
-                    
-                    # Compute perceptual hash
-                    pil_img = Image.open(io.BytesIO(image_bytes))
-                    phash = str(imagehash.phash(pil_img))
-                    if phash in seen_hashes:
-                        print(f"DEBUG: Skipping duplicate/similar image (hash: {phash})")
-                        continue
-                    seen_hashes.add(phash)
+            # Extract images from the page
+            image_list = page.get_images(full=True)
+            for image_index, img in enumerate(image_list, start=1):
+                xref = img[0]
+                base_image = pdf_file.extract_image(xref)
+                image_bytes = base_image["image"]
+                image_ext = base_image["ext"]
 
-                    image_name = f"image{page_index+1}_{image_index}.{image_ext}"
+                # Compute perceptual hash
+                pil_img = Image.open(io.BytesIO(image_bytes))
+                phash = str(imagehash.phash(pil_img))
+                if phash in seen_hashes:
+                    print(f"DEBUG: Skipping duplicate/similar image (hash: {phash})")
+                    continue
+                seen_hashes.add(phash)
 
-                    # Generate caption and embedding for the image
-                    try:
-                        caption = generate_dynamic_caption(image_bytes)
-                        if caption is not None:
-                            embedding = generate_image_embedding(image_bytes)
-                            image_data.append({
+                image_name = f"image{page_index+1}_{image_index}.{image_ext}"
+
+                # Generate caption and embedding for the image
+                try:
+                    caption = generate_dynamic_caption(image_bytes)
+                    if caption is not None:
+                        embedding = generate_image_embedding(image_bytes)
+                        image_data.append(
+                            {
                                 "filename": image_name,
                                 "embedding": embedding,
                                 "order": image_order,
-                                "image_bytes": image_bytes.hex()
-                            })
-                            image_order += 1
-                    except Exception as e:
-                        print(f"Error processing image {image_name}: {e}")
+                                "image_bytes": image_bytes.hex(),
+                            }
+                        )
+                        image_order += 1
+                except Exception as e:
+                    print(f"Error processing image {image_name}: {e}")
 
         # Prepare the response data
         response_data = {
@@ -93,10 +98,24 @@ async def parse_pdf(file: UploadFile = File(...)):
 
     except Exception as e:
         print(f"Error processing PDF: {e}")
-        raise HTTPException(status_code=500, detail=f"An error occurred while processing the PDF: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"An error occurred while processing the PDF: {e}"
+        )
+    finally:
+        # Clean up temporary file on Windows
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+                print(f"DEBUG: Cleaned up temporary file: {temp_file_path}")
+            except Exception as cleanup_error:
+                print(
+                    f"Warning: Failed to clean up temporary file {temp_file_path}: {cleanup_error}"
+                )
+
 
 class PPTXRequest(BaseModel):
     content: dict
+
 
 def validate_and_transform_content(content: dict) -> dict:
     """
@@ -160,6 +179,7 @@ def validate_and_transform_content(content: dict) -> dict:
 
     return transformed_content
 
+
 @app.post("/generate-pptx")
 async def generate_pptx(request: PPTXRequest):
     """Endpoint to generate a PowerPoint presentation."""
@@ -170,7 +190,9 @@ async def generate_pptx(request: PPTXRequest):
         transformed_content = validate_and_transform_content(request.content)
 
         # Create a temporary file for the PPTX
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pptx", dir=dir_slide) as temp_pptx_file:
+        with tempfile.NamedTemporaryFile(
+            delete=False, suffix=".pptx", dir=dir_slide
+        ) as temp_pptx_file:
             temp_pptx_path = temp_pptx_file.name
 
         print(temp_pptx_path)
@@ -195,20 +217,24 @@ async def generate_pptx(request: PPTXRequest):
             path=temp_pptx_path,
             media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
             filename="generated_presentation.pptx",
-            background=BackgroundTask(cleanup_temp_file)
+            background=BackgroundTask(cleanup_temp_file),
         )
 
     except Exception as e:
         print(f"Error generating PPTX: {e}")
-        raise HTTPException(status_code=500, detail=f"An error occurred while generating the PPTX file: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"An error occurred while generating the PPTX file: {e}",
+        )
+
 
 if __name__ == "__main__":
     import uvicorn
     import os
-    
+
     # Get host and port from environment variables with defaults
     host = os.environ.get("BACKEND_HOST", "127.0.0.1")
     port = int(os.environ.get("BACKEND_PORT", 8016))
-    
+
     print(f"Starting backend server on {host}:{port}")
     uvicorn.run(app, host=host, port=port)

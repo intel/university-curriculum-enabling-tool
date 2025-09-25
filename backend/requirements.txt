@@ -1,7 +1,7 @@
 python-pptx==1.0.2
 fastapi==0.115.11
 uvicorn==0.34.0
-PyMuPDF==1.22.3
+PyMuPDF==1.26.4
 Pillow==11.1.0
 python-dotenv==1.0.0
 torch

@@ -11,6 +11,9 @@ import archiver from 'archiver';
 import { fileURLToPath } from 'url';
 import { resolvePaths } from './path-resolver.mjs';
 import { spawnSync } from 'child_process';
+import { createWriteStream } from 'fs';
+import { pipeline } from 'stream/promises';
+import { Readable } from 'stream';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -47,7 +50,33 @@ const {
 
 // Platform detection
 const isWindows = process.platform === 'win32';
-const pythonCommand = isWindows ? 'python' : 'python3';
+
+/**
+ * Find available Python command on the system - Simplified
+ */
+function getPythonCommand() {
+  if (isWindows) {
+    // Just try the most common commands, let the shell handle the rest
+    const pythonCommands = ['python', 'python3', 'py'];
+    for (const cmd of pythonCommands) {
+      try {
+        const result = spawnSync(cmd, ['--version'], { 
+          stdio: 'ignore',
+        });
+        if (result.status === 0) {
+          return cmd;
+        }
+      } catch (error) {
+        // Continue to next command
+      }
+    }
+    return 'python'; // fallback - let it fail naturally if not found
+  } else {
+    return 'python3';
+  }
+}
+
+const pythonCommand = getPythonCommand();
 const venvPython = isWindows 
   ? path.join(VENV_DIR, 'Scripts', 'python.exe')
   : path.join(VENV_DIR, 'bin', 'python');
@@ -55,32 +84,221 @@ const venvPip = isWindows
   ? path.join(VENV_DIR, 'Scripts', 'pip.exe')
   : path.join(VENV_DIR, 'bin', 'pip');
 
+// PowerShell path for Windows
+const powerShellCommand = isWindows ? 'powershell' : null;
+
 // Use local Node.js binaries if available
 const nodeBin = isWindows 
-  ? path.join(NODE_DIR, 'bin', 'node.exe')
+  ? path.join(NODE_DIR, 'node.exe')
   : path.join(NODE_DIR, 'bin', 'node');
 
 const npmBin = isWindows
-  ? path.join(NODE_DIR, 'bin', 'npm.cmd') 
+  ? path.join(NODE_DIR, 'npm.cmd') 
   : path.join(NODE_DIR, 'bin', 'npm');
 
 const npmCommand = fs.existsSync(npmBin) ? npmBin : (isWindows ? 'npm.cmd' : 'npm');
 const nodePath = fs.existsSync(nodeBin) ? nodeBin : (isWindows ? 'node.exe' : 'node');
 const pm2Command = isWindows
-  ? (fs.existsSync(nodeBin) ? path.join(NODE_DIR, 'bin', 'npx.cmd') : 'npx.cmd')
+  ? (fs.existsSync(nodeBin) ? path.join(NODE_DIR, 'npx.cmd') : 'npx.cmd')
   : (fs.existsSync(nodeBin) ? path.join(NODE_DIR, 'bin', 'npx') : 'npx');
 
 // Allow list of characters for directory names and filenames for security purposes (i.e. to prevent directory traversal attacks)
 const ALLOWED_PATH_REGEX = /^[a-zA-Z0-9_\-\.\/]+$/;
 
-// Allow list of safe characters for command arguments
-const SAFE_ARG_REGEX = /^[a-zA-Z0-9_\-\/\.=:@+]+$/;
+// Allow list of safe characters for command arguments (including Windows paths)
+const SAFE_ARG_REGEX = /^[a-zA-Z0-9_\-\/\.=:@+\\]+$/;
 
 // Allow URLs for curl
 const SAFE_URL_REGEX = /^https?:\/\/[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+$/;
 
+
+/**
+ * Safely validate a Python executable path to prevent command injection
+ */
+function isValidPythonPath(pythonPath) {
+  if (!pythonPath || typeof pythonPath !== 'string') return false;
+  
+  // Check for basic path safety - no command injection characters
+  const dangerousChars = /[;&|`$(){}[\]<>]/;
+  if (dangerousChars.test(pythonPath)) return false;
+  
+  // Must be an absolute path on Windows
+  if (isWindows && !path.isAbsolute(pythonPath)) return false;
+  
+  // Must end with python.exe on Windows or python/python3 on Unix
+  const validEndings = isWindows 
+    ? [/python\.exe$/i, /python3\.exe$/i]
+    : [/\/python$/, /\/python3$/];
+  
+  if (!validEndings.some(pattern => pattern.test(pythonPath))) return false;
+  
+  // Path must exist
+  if (!fs.existsSync(pythonPath)) return false;
+  
+  // Additional Windows-specific validation
+  if (isWindows) {
+    // Must be in expected locations
+    const allowedPrefixes = [
+      'C:\\Python',
+      'C:\\Program Files\\Python',
+      'C:\\Program Files (x86)\\Python',
+      process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'AppData\\Local\\Programs\\Python') : null,
+      process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'AppData\\Local\\Microsoft\\WindowsApps') : null
+    ].filter(Boolean);
+    
+    const isInAllowedLocation = allowedPrefixes.some(prefix => 
+      pythonPath.toLowerCase().startsWith(prefix.toLowerCase())
+    );
+    
+    if (!isInAllowedLocation) {
+      console.log(`Python path not in allowed location: ${pythonPath}`);
+      return false;
+    }
+  }
+  
+  return true;
+}
+
+/**
+ * Get Python command dynamically at runtime
+ */
+function getDynamicPythonCommand() {
+  if (isWindows) {
+    console.log('Searching for Python installation...');
+    
+    // First try to get the full path using 'where' command
+    try {
+      const whereResult = spawnSync('where', ['python'], { 
+        encoding: 'utf8',
+      });
+      
+      if (whereResult.status === 0 && whereResult.stdout) {
+        const pythonPaths = whereResult.stdout.trim().split('\n').map(p => p.trim()).filter(Boolean);
+        
+        // Validate each path returned by 'where' command
+        for (const pythonPath of pythonPaths) {
+          if (isValidPythonPath(pythonPath)) {
+            console.log(`Found Python with 'where python': ${pythonPath}`);
+            // Test if it actually works using spawn instead of execSync for safety
+            try {
+              const result = spawnSync(pythonPath, ['--version'], { 
+                stdio: ['ignore', 'pipe', 'pipe'],
+                encoding: 'utf8',
+              });
+              if (result.status === 0) {
+                console.log(`Verified Python works: ${pythonPath}`);
+                return pythonPath;
+              }
+            } catch (testError) {
+              console.log(`Python path failed verification: ${pythonPath} - ${testError.message}`);
+            }
+          } else {
+            console.log(`Skipping invalid Python path: ${pythonPath}`);
+          }
+        }
+      }
+    } catch (error) {
+      console.log(`'where python' failed: ${error.message}`);
+    }
+    
+    const pythonCommands = [
+      'python', 
+      'python3', 
+      'py'
+    ];
+    
+    // Allow list of python paths
+    const userProfile = process.env.USERPROFILE || '';
+    const pythonPathPatterns = [
+      'C:\\Python*\\python.exe',  // System root
+      'C:\\Program Files\\Python*\\python.exe', // 64-bit
+      'C:\\Program Files (x86)\\Python*\\python.exe'  // 32-bit
+    ];
+    
+    // Add user-specific patterns if userProfile is available
+    if (userProfile) {
+      pythonPathPatterns.push(
+        path.join(userProfile, 'AppData\\Local\\Programs\\Python\\Python*\\python.exe'),  // User installation
+        path.join(userProfile, 'AppData\\Local\\Microsoft\\WindowsApps\\python*.exe') // Microsoft store
+      );
+    }
+    
+    for (const pattern of pythonPathPatterns) {
+      try {
+        // Extract base directory and pattern from the path
+        const basePath = pattern.substring(0, pattern.lastIndexOf('\\'));
+        const baseDir = basePath.substring(0, basePath.lastIndexOf('\\'));
+        
+        if (fs.existsSync(baseDir)) {
+          const entries = fs.readdirSync(baseDir);
+          
+          // Different matching logic based on the pattern
+          let matchingEntries;
+          if (pattern.includes('WindowsApps')) {
+            // For Microsoft Store: match python*.exe files directly
+            matchingEntries = entries
+              .filter(file => /^python(3(\.\d+)?)?\.exe$/i.test(file))
+              .map(file => path.join(baseDir, file));
+          } else {
+            // For other patterns: match Python* directories containing python.exe
+            matchingEntries = entries
+              .filter(dir => /^Python(\d+(\.\d+)?)?$/i.test(dir))
+              .map(dir => path.join(baseDir, dir, 'python.exe'))
+              .filter(pythonExe => fs.existsSync(pythonExe));
+          }
+          
+          pythonCommands.push(...matchingEntries);
+        }
+      } catch (error) {
+        // Continue if we can't read the directory
+      }
+    }
+    
+    for (const cmd of pythonCommands) {
+      try {
+        // Check if the command exists as a file
+        if (cmd.includes(path.sep) && isValidPythonPath(cmd)) {
+          console.log(`Found Python executable at: ${cmd}`);
+          // Test if it actually works using spawn for safety
+          const result = spawnSync(cmd, ['--version'], { 
+            stdio: ['ignore', 'pipe', 'pipe'],
+            encoding: 'utf8',
+          });
+          if (result.status === 0) {
+            console.log(`Verified Python works: ${cmd}`);
+            return cmd;
+          }
+        } else if (!cmd.includes(path.sep)) {
+          // Test command in PATH using spawn for safety
+          console.log(`Testing Python command in PATH: ${cmd}`);
+          const result = spawnSync(cmd, ['--version'], { 
+            stdio: ['ignore', 'pipe', 'pipe'],
+            encoding: 'utf8',
+          });
+          if (result.status === 0) {
+            console.log(`Verified Python works from PATH: ${cmd}`);
+            return cmd;
+          }
+        }
+      } catch (error) {
+        console.log(`Python command failed: ${cmd} - ${error.message || 'Command not found'}`);
+        // Continue to next command
+      }
+    }
+    
+    console.warn('No working Python installation found!');
+    console.warn('Tried the following commands:');
+    pythonCommands.forEach(cmd => console.warn(`  - ${cmd}`));
+    console.warn('Please install Python using setup.ps1 or manually install Python 3.12+');
+    
+    return 'python'; // fallback
+  } else {
+    return 'python3';
+  }
+}
+
 // Define a whitelist of allowed commands
-const ALLOWED_COMMANDS_CONFIG = {
+export const ALLOWED_COMMANDS_CONFIG = {
   npm: {
     path: npmCommand,
     aliases: ['npm', npmCommand],
@@ -107,7 +325,7 @@ const ALLOWED_COMMANDS_CONFIG = {
     ]),
   },
   python3: {
-    path: pythonCommand,
+    path: getDynamicPythonCommand(),
     aliases: ['python', 'python3', pythonCommand],
     allowedArgs: new Set(['-m', 'pip', 'install', 'venv']),
   },
@@ -119,12 +337,15 @@ const ALLOWED_COMMANDS_CONFIG = {
   node: {
     path: nodePath,
     aliases: ['node', nodePath],
-    allowedArgs: new Set([]),
+    allowedArgs: new Set(['jlist', 'start', 'stop', 'delete', 'restart', 'reload', '--silent', '--namespace', 'all', 'update', 'test', 'test-suite']),
   },
   curl: {
     path: 'curl',
     aliases: ['curl'],
-    allowedArgs: new Set(['-L', '-o']),
+    allowedArgs: new Set([
+      '-L', '-o', '--location', '--output', '--fail', '--retry', '--retry-delay',
+      '--connect-timeout', '--max-time', '--progress-bar'
+    ]),
   },
   tar: {
     path: 'tar',
@@ -137,16 +358,88 @@ const ALLOWED_COMMANDS_CONFIG = {
     allowedArgs: new Set(['+x']),
   },
   powershell: {
-    path: 'powershell',
+    path: isWindows ? (() => {
+      // Try multiple PowerShell locations
+      const powerShellPaths = [
+        'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+        'C:\\Windows\\SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe', 
+        'powershell.exe',
+        'powershell'
+      ];
+
+      for (const psPath of powerShellPaths) {
+        if (psPath.includes('\\') && fs.existsSync(psPath)) {
+          return psPath;
+        } else if (!psPath.includes('\\')) {
+          // Try to find in PATH
+          try {
+            const result = spawnSync('where', [psPath], { 
+              stdio: 'ignore',
+            });
+            if (result.status === 0) {
+              return psPath;
+            }
+          } catch (error) {
+            // Continue to next path
+          }
+        }
+      }
+      return 'powershell'; // fallback
+    })() : null,
     aliases: ['powershell'],
-    allowedArgs: new Set(['-Command', 'Expand-Archive', '-Path', '-DestinationPath', '-Force']),
+    allowedArgs: new Set(['-Command', 'Expand-Archive', '-Path', '-DestinationPath', '-Force', 'Invoke-WebRequest', '-Uri', '-OutFile']),
+  },
+  cmd: {
+    path: isWindows ? 'cmd' : null,
+    aliases: ['cmd'],
+    allowedArgs: new Set(['/c', '/k', 'npx', 'pm2', 'jlist', '--silent', 'start', 'stop', 'delete', 'all', '--namespace']),
+  },
+  pm2bin: {
+    path: path.join(WORKING_DIR, 'node_modules', 'pm2', 'bin', 'pm2'),
+    aliases: [path.join(WORKING_DIR, 'node_modules', 'pm2', 'bin', 'pm2')],
+    allowedArgs: new Set(['jlist', 'start', 'stop', 'delete', 'restart', 'reload', '--silent', '--namespace', 'all', 'update', 'test', 'test-suite']),
   }
 };
 
 /**
  * Finds the ALLOWED_COMMANDS_CONFIG entry that has the given alias.
  */
-function lookupCommandInfo(cmdAlias) {
+export function lookupCommandInfo(cmdAlias) {
+  // For Python commands, refresh the path dynamically
+  if (['python', 'python3'].includes(cmdAlias) || 
+      (cmdAlias.toLowerCase().includes('python') && cmdAlias.toLowerCase().endsWith('.exe'))) {
+    const pythonPath = getDynamicPythonCommand();
+    return {
+      path: pythonPath,
+      aliases: ['python', 'python3', pythonPath],
+      allowedArgs: new Set(['-m', 'pip', 'install', 'venv'])
+    };
+  }
+  
+  // Special handling for PowerShell full paths on Windows
+  if (isWindows && cmdAlias.toLowerCase().includes('powershell.exe')) {
+    const powerShellConfig = ALLOWED_COMMANDS_CONFIG.powershell;
+    if (powerShellConfig && powerShellConfig.path) {
+      return {
+        path: cmdAlias, // Use the full path as provided
+        aliases: [cmdAlias, 'powershell.exe', 'powershell'],
+        allowedArgs: powerShellConfig.allowedArgs
+      };
+    }
+  }
+  
+  // Special handling for Node.js full paths
+  if (cmdAlias.toLowerCase().includes('node.exe') || cmdAlias.toLowerCase().endsWith('node')) {
+    const nodeConfig = ALLOWED_COMMANDS_CONFIG.node;
+    if (nodeConfig && nodeConfig.path) {
+      return {
+        path: cmdAlias, // Use the full path as provided
+        aliases: [cmdAlias, 'node.exe', 'node', nodeConfig.path],
+        allowedArgs: nodeConfig.allowedArgs
+      };
+    }
+  }
+  
   return Object.values(ALLOWED_COMMANDS_CONFIG).find((entry) =>
     entry.aliases.includes(cmdAlias)
   ) || null;
@@ -236,14 +529,190 @@ function getOllamaEnvironmentVariables(rootDir) {
 }
 
 /**
- * Execute a command and return its output
+ * Final validation of command path before execution (for Coverity taint analysis)
  */
+function validateExecutablePath(commandPath) {
+  if (!commandPath || typeof commandPath !== 'string') {
+    throw new Error('Invalid command path: must be a non-empty string');
+  }
+  
+  // Check for dangerous characters that could enable command injection
+  const dangerousChars = /[;&|`$(){}[\]<>]/;
+  if (dangerousChars.test(commandPath)) {
+    throw new Error(`Invalid command path: contains dangerous characters: ${commandPath}`);
+  }
+  
+  // For absolute paths, ensure they're in safe locations
+  if (path.isAbsolute(commandPath)) {
+    // Use static project paths based on __dirname to avoid process.cwd() dependency
+    const projectBasePaths = [
+      ROOT_DIR, // Project root directory (statically defined)
+      path.dirname(ROOT_DIR), // Allow parent of project root for workspace scenarios
+    ];
+    
+    const safePrefixes = isWindows ? [
+      'C:\\Windows\\System32\\',
+      'C:\\Windows\\SysWOW64\\',
+      'C:\\Program Files\\',
+      'C:\\Program Files (x86)\\',
+      'C:\\Python',
+      process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'AppData\\Local\\Programs\\') : null,
+      process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'AppData\\Local\\Microsoft\\WindowsApps\\') : null,
+      ...projectBasePaths, // Add static project paths
+    ].filter(Boolean) : [
+      '/usr/bin/',
+      '/usr/local/bin/',
+      '/bin/',
+      '/opt/',
+      ...projectBasePaths, // Add static project paths
+    ];
+    
+    const isInSafeLocation = safePrefixes.some(prefix => 
+      commandPath.toLowerCase().startsWith(prefix.toLowerCase())
+    );
+    
+    if (!isInSafeLocation) {
+      throw new Error(`Invalid command path: not in safe location: ${commandPath}`);
+    }
+  }
+  
+  return true;
+}
+
+/**
+ * Sanitized command path wrapper to break taint flow for Coverity
+ * This function validates the path and returns a clean object
+ */
+function getSanitizedCommandPath(commandPath) {
+  // First validate the path through our existing validation
+  validateExecutablePath(commandPath);
+  
+  // Explicit whitelist check
+  if (!validateCommandPath(commandPath)) {
+    throw new Error(`Command path not in whitelist: ${commandPath}`);
+  }
+  
+  // Return a clean path object that breaks the taint flow
+  // Using a simple object wrapper to contain the validated path
+  return {
+    executablePath: String(commandPath), // Create a new string to break taint
+    isValidated: true
+  };
+}
+
+/**
+ * Function to validate executable command paths
+ */
+function validateCommandPath(commandPath) {
+  // Explicit hardcoded whitelist of allowed command paths
+  const ALLOWED_COMMAND_PATHS = [
+    // System commands (Windows)
+    'C:\\Windows\\System32\\cmd.exe',
+    'C:\\Windows\\SysWOW64\\cmd.exe',
+    'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+    'C:\\Windows\\SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe',
+    'powershell.exe',
+    'powershell',
+    'cmd',
+    'curl',
+    'tar',
+    'chmod',
+    'where',
+    'robocopy',
+    
+    // Node.js commands
+    'node',
+    'node.exe',
+    'npm',
+    'npm.cmd',
+    'npx',
+    'npx.cmd',
+    
+    // Python commands
+    'python',
+    'python3',
+    'python.exe',
+    'python3.exe',
+    'py',
+    'pip',
+    'pip3',
+    'pip.exe',
+    
+    // PM2 commands
+    'pm2',
+    
+    // Unix/Linux system commands
+    '/usr/bin/python3',
+    '/usr/bin/python',
+    '/usr/local/bin/python3',
+    '/usr/local/bin/python',
+    '/bin/bash',
+    '/bin/sh',
+    '/usr/bin/curl',
+    '/usr/bin/tar',
+    '/usr/bin/chmod'
+  ];
+  
+  // Check if the command path is in our explicit whitelist
+  if (ALLOWED_COMMAND_PATHS.includes(commandPath)) {
+    return true;
+  }
+  
+  // Check if it's a path within our project directories
+  const projectBasePaths = [
+    ROOT_DIR,
+    path.dirname(ROOT_DIR)
+  ];
+  
+  for (const basePath of projectBasePaths) {
+    if (commandPath.startsWith(basePath)) {
+      return true;
+    }
+  }
+  
+  // Check if it's in standard system directories
+  const systemPrefixes = isWindows ? [
+    'C:\\Windows\\System32\\',
+    'C:\\Windows\\SysWOW64\\',
+    'C:\\Program Files\\',
+    'C:\\Program Files (x86)\\',
+    'C:\\Python',
+  ] : [
+    '/usr/bin/',
+    '/usr/local/bin/',
+    '/bin/',
+    '/opt/',
+  ];
+  
+  for (const prefix of systemPrefixes) {
+    if (commandPath.startsWith(prefix)) {
+      return true;
+    }
+  }
+  
+  // Check user directories (Python installations)
+  if (isWindows && process.env.USERPROFILE) {
+    const userPrefixes = [
+      path.join(process.env.USERPROFILE, 'AppData\\Local\\Programs\\'),
+      path.join(process.env.USERPROFILE, 'AppData\\Local\\Microsoft\\WindowsApps\\')
+    ];
+    
+    for (const prefix of userPrefixes) {
+      if (commandPath.startsWith(prefix)) {
+        return true;
+      }
+    }
+  }
+  
+  return false;
+}
+
 function execCommand(command, options = {}) {
   try {
     // Ensure NODE_DIR is in the PATH environment variable
     const env = { ...process.env };
     if (fs.existsSync(NODE_DIR)) {
-      const nodeBinPath = path.join(NODE_DIR, 'bin');
+      const nodeBinPath = isWindows ? NODE_DIR : path.join(NODE_DIR, 'bin');
 
       env.PATH = nodeBinPath + (isWindows ? ';' : ':') + (env.PATH || '');
     }
@@ -271,9 +740,13 @@ function execCommand(command, options = {}) {
       }
     }
 
-    const result = spawnSync(commandInfo.path, args, {
+    // Final validation of executable commands and its respective paths to prevent command injection
+    const sanitizedCommand = getSanitizedCommandPath(commandInfo.path);
+
+    const result = spawnSync(sanitizedCommand.executablePath, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       encoding: 'utf-8',
+      shell: false,
       env,
       ...options,
     });
@@ -294,11 +767,53 @@ function execCommand(command, options = {}) {
 function isSafeArg(command, commandInfo, arg, index, args) {
   if (typeof arg !== 'string') return false;
   if (command === 'curl' && SAFE_URL_REGEX.test(arg)) return true;
-  if (command === 'curl' && args && args[index - 1] === '-o') {
+  if (command === 'curl' && args && (args[index - 1] === '-o' || args[index - 1] === '--output')) {
     return SAFE_ARG_REGEX.test(arg);
   }
-  if (command === 'curl' && (arg === '-L' || arg === '-o')) return true;
-  if (commandInfo.allowedArgs && arg.startsWith('-') && !commandInfo.allowedArgs.has(arg)) return false;
+  if (command === 'curl' && (
+    arg === '-L' || arg === '-o' || arg === '--location' || arg === '--output' ||
+    arg === '--fail' || arg === '--retry' || arg === '--retry-delay' ||
+    arg === '--connect-timeout' || arg === '--max-time' || arg === '--progress-bar'
+  )) return true;
+
+  // Allow numeric values for timeout and retry arguments
+  if (command === 'curl' && args && (
+    args[index - 1] === '--retry' || args[index - 1] === '--retry-delay' ||
+    args[index - 1] === '--connect-timeout' || args[index - 1] === '--max-time'
+  ) && /^\d+$/.test(arg)) return true;
+
+  // PowerShell command validation - check both command name and path
+  const isPowerShellCommand = command === 'powershell' || 
+                              command.toLowerCase().includes('powershell.exe') ||
+                              path.basename(command).toLowerCase() === 'powershell.exe';
+
+  if (isPowerShellCommand) {
+    // Allow URLs for Invoke-WebRequest
+    if (SAFE_URL_REGEX.test(arg)) return true;
+    // Allow file paths
+    if (arg.match(/^[a-zA-Z0-9_\-\.\\\/\s\:]+$/)) return true;
+    // Allow PowerShell command strings with comprehensive character set
+    if (arg.includes('Invoke-WebRequest') || arg.includes('Expand-Archive')) {
+      // Allow PowerShell commands with all necessary characters: letters, numbers, spaces, quotes, 
+      // paths, URLs, parameters, equals signs, colons, periods, hyphens, slashes, backslashes
+      if (arg.match(/^[a-zA-Z0-9_\-\.\\\/\s\:\"'=@+\?\&\[\](){}]+$/)) return true;
+    }
+    // Allow individual PowerShell parameters (like -Command, -Uri, -OutFile, etc.)
+    if (arg.match(/^-[a-zA-Z0-9]+$/)) return true;
+    // Allow quoted strings and file paths
+    if (arg.match(/^\"[^\"]*\"$/) || arg.match(/^'[^']*'$/)) return true;
+    // Allow simple PowerShell parameter values
+    if (arg.match(/^[a-zA-Z0-9_\-\.\\\/\s\:]+$/)) return true;
+    // If none of the PowerShell-specific patterns match, check allowedArgs
+    if (commandInfo.allowedArgs && !commandInfo.allowedArgs.has(arg)) return false;
+    // For PowerShell, return false if it doesn't match any allowed pattern
+    return false;
+  }
+  
+  if (commandInfo.allowedArgs && arg.startsWith('-')) {
+    // If the argument is in allowedArgs, allow it; if not, reject it
+    return commandInfo.allowedArgs.has(arg);
+  }
   if (!SAFE_ARG_REGEX.test(arg)) return false;
   if (command === 'tar' && (arg === '-xzf' || arg === '--strip-components=1')) return true;
   if (
@@ -328,38 +843,61 @@ function sanitizeArgs(command, commandInfo, args) {
 }
 
 /**
- * Execute a command with real-time output
+ * Execute a command with real-time output - Uses lookupCommandInfo and sanitizeArgs
  */
 function spawnCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    // Ensure NODE_DIR is in the PATH environment variable
+    // Use the system's default PATH environment
     const env = { ...process.env };
+    
+    // Only add Node.js to PATH if we have local installation
     if (fs.existsSync(NODE_DIR)) {
-      const nodeBinPath = path.join(NODE_DIR, 'bin');
+      const nodeBinPath = isWindows ? NODE_DIR : path.join(NODE_DIR, 'bin');
       env.PATH = nodeBinPath + (isWindows ? ';' : ':') + (env.PATH || '');
     }
-    
+
+    // Validate command with list of allowed commands
     const commandInfo = lookupCommandInfo(command);
     if (!commandInfo) {
-      return reject({
-        success: false,
-        error: `Blocked execution: command '${command}' is not allowed.`,
-      });
+      return reject(new Error(`Blocked execution: command '${command}' is not allowed.`));
     }
 
+    // Sanitize arguments using the existing sanitizeArgs function
     let sanitizedArgs;
     try {
-      sanitizedArgs = sanitizeArgs(command, commandInfo, args);
-    } catch (err) {
-      return reject({ success: false, error: err.message });
+      sanitizedArgs = sanitizeArgs(command, commandInfo, args || []);
+    } catch (error) {
+      return reject(error);
     }
 
-    // Validate arguments
-    if (!Array.isArray(args)) {
-      return reject({ success: false, error: 'Arguments must be an array' });
+    // Handle Windows .cmd/.bat files securely without shell injection
+    let finalCommand = commandInfo.path;
+    let finalArgs = sanitizedArgs;
+
+    if (isWindows && (commandInfo.path.endsWith('.cmd') || commandInfo.path.endsWith('.bat'))) {
+      // Use hardcoded cmd.exe path to avoid environment variable injection
+      // Common safe locations for cmd.exe on Windows
+      const safeCmdPaths = [
+        'C:\\Windows\\System32\\cmd.exe',
+        'C:\\Windows\\SysWOW64\\cmd.exe'
+      ];
+
+      let cmdPath = 'cmd.exe'; // fallback
+      for (const safePath of safeCmdPaths) {
+        if (fs.existsSync(safePath)) {
+          cmdPath = safePath;
+          break;
+        }
+      }
+
+      finalCommand = cmdPath;
+      finalArgs = ['/d', '/s', '/c', commandInfo.path, ...sanitizedArgs];
     }
 
-    const proc = spawn(commandInfo.path, sanitizedArgs, {
+    // Final validation of executable commands and its respective paths to prevent command injection
+    const sanitizedCommand = getSanitizedCommandPath(finalCommand);
+
+    const proc = spawn(sanitizedCommand.executablePath, finalArgs, {
       stdio: 'inherit',
       shell: false,
       env,
@@ -378,6 +916,27 @@ function spawnCommand(command, args, options = {}) {
       reject({ success: false, error: err });
     });
   });
+}
+
+/**
+ * Execute a PM2 command with proper Windows/Linux compatibility
+ */
+function executePM2Command(pm2Args, options = {}) {
+  if (isWindows) {
+    // On Windows, try to run PM2 directly using Node.js
+    const nodePath = fs.existsSync(path.join(NODE_DIR, 'node.exe')) ? path.join(NODE_DIR, 'node.exe') : 'node';
+    const pm2BinPath = path.join(WORKING_DIR, 'node_modules', 'pm2', 'bin', 'pm2');
+    
+    if (fs.existsSync(pm2BinPath)) {
+      // Use Node.js to run PM2 directly
+      return spawnCommand(nodePath, [pm2BinPath, ...pm2Args], options);
+    } else {
+      // Fallback to npx using cmd.exe
+      return spawnCommand('cmd', ['/c', 'npx', 'pm2', ...pm2Args], options);
+    }
+  } else {
+    return spawnCommand(pm2Command, ['pm2', ...pm2Args], options);
+  }
 }
 
 /**
@@ -452,7 +1011,7 @@ export async function buildPersona(persona, force = false) {
 
   try {
     if (isSafeRelativePath(frontend)) {
-      process.chdir(new URL(`file://${path.resolve(frontend)}`).pathname);
+      process.chdir(fileURLToPath(new URL(`file://${path.resolve(frontend)}`)));
     } else {
       throw new Error(`Unsafe frontend directory detected: ${frontend}`);
     }
@@ -489,7 +1048,7 @@ export async function buildPersona(persona, force = false) {
     return { success: false, error };
   } finally {
       if (isSafeRelativePath(root)) {
-        process.chdir(new URL(`file://${path.resolve(root)}`).pathname);
+        process.chdir(fileURLToPath(new URL(`file://${path.resolve(root)}`)));
       } else {
         console.error(`Unsafe root path detected when attempting to build persona: ${root}`);
       }
@@ -500,7 +1059,9 @@ export async function buildPersona(persona, force = false) {
  * Create a distribution package for a specific persona
  */
 export async function createDistPackage(persona, force = false) {
-  console.log(`Creating distribution package for persona: ${persona}`);
+  console.log(`\n=== Creating Distribution Package ===`);
+  console.log(`Persona: ${persona}`);
+  console.log(`Force rebuild: ${force}`);
 
   // Validate persona before proceeding
   const safePersona = getPersonaFromKey(persona);
@@ -510,35 +1071,35 @@ export async function createDistPackage(persona, force = false) {
   
   // Skip package creation if in distribution package mode
   if (isDistPackage) {
-    console.log(`Running in distribution package mode - package creation skipped for ${safePersona}`);
+    console.log(`✓ Running in distribution package mode - package creation skipped for ${safePersona}`);
     return { success: true, skipped: true };
   }
   
   // Only proceed with package creation if in root repository or forced
   if (!isRootRepo && !force) {
-    console.log(`Not running from root repository - skipping package creation for ${safePersona}`);
+    console.log(`✓ Not running from root repository - skipping package creation for ${safePersona}`);
     return { success: true, skipped: true };
   }
   
   if (!force && checkDistExists(safePersona)) {
-    console.log(`Distribution package for ${safePersona} already exists. Use --force to recreate.`);
+    console.log(`✓ Distribution package for ${safePersona} already exists. Use --force to recreate.`);
     return { success: true, skipped: true };
   }
   
   try {
     // Step 1: Build the persona first
-    console.log(`Step 1: Building persona ${safePersona}...`);
+    console.log(`\n[1/12] Building persona ${safePersona}...`);
     const buildResult = await buildPersona(safePersona, force);
     if (!buildResult.success) {
       throw new Error(`Build failed for persona ${safePersona}`);
     }
     
     // Step 2: Get fresh paths for the specified persona
-    console.log(`Step 2: Resolving paths for ${safePersona}...`);
+    console.log(`[2/12] Resolving paths for ${safePersona}...`);
     const { frontend, backend, dist, ecosystem } = resolvePaths({ safePersona });
     
     // Step 3: Get the name and version from frontend package.json
-    console.log(`Step 3: Reading package information...`);
+    console.log(`[3/12] Reading package information...`);
     const packageJsonPath = path.join(frontend, 'package.json');
     let packageName = 'university-curriculum-enabling-tool';
     let packageVersion = '';
@@ -567,20 +1128,92 @@ export async function createDistPackage(persona, force = false) {
 
     
     fs.mkdirSync(distDir, { recursive: true });
-    fs.mkdirSync(path.join(distDir, 'thirdparty', 'ollama'), { recursive: true });
-    fs.copySync(
-      path.join(root, 'thirdparty', 'ollama'),
-      path.join(distDir, 'thirdparty', 'ollama')
-    );
+    
+    // Step 4.1: Copy thirdparty dependencies (Node.js, jq, pm2, Ollama)
+    console.log(`Step 4.1: Copying thirdparty dependencies...`);
+    fs.mkdirSync(path.join(distDir, 'thirdparty'), { recursive: true });
+    
+    // Copy Node.js if it exists
+    const sourceNodeDir = path.join(root, 'thirdparty', 'node');
+    if (fs.existsSync(sourceNodeDir)) {
+      console.log(`Copying Node.js from ${sourceNodeDir}...`);
+      const targetNodeDir = path.join(distDir, 'thirdparty', 'node');
+      
+      // Use robocopy on Windows for better handling of long paths
+      if (isWindows) {
+        try {
+          const robocopyArgs = [
+            sourceNodeDir,     // Source directory (unquoted for spawnSync)
+            targetNodeDir,     // Target directory (unquoted for spawnSync)
+            '/E',    // Copy subdirectories, including empty ones
+            '/R:3',  // Retry 3 times on failed copies
+            '/W:1',  // Wait 1 second between retries
+            '/NFL',  // No file list (reduce output)
+            '/NDL',  // No directory list
+            '/NJH',  // No job header
+            '/NJS',  // No job summary
+            '/NC',   // No class
+            '/NS',   // No size
+            '/NP'    // No progress
+          ];
+          
+          const robocopyResult = spawnSync('robocopy', robocopyArgs, { 
+            stdio: ['ignore', 'ignore', 'pipe'], 
+            encoding: 'utf8',
+            timeout: 60000 // 60 second timeout for large copy operations
+          });
+          // Robocopy exit codes 0-7 are success, 8+ are errors
+          const exitCode = robocopyResult.status || 0;
+          if (exitCode >= 8) {
+            console.warn(`Warning: Robocopy failed with exit code ${exitCode}, falling back to fs.copySync`);
+            fs.copySync(sourceNodeDir, targetNodeDir);
+          } else {
+            console.log(`Node.js copied successfully using robocopy (exit code: ${exitCode})`);
+          }
+        } catch (error) {
+          console.warn(`Warning: Robocopy command failed, falling back to fs.copySync: ${error.message}`);
+          fs.copySync(sourceNodeDir, targetNodeDir);
+        }
+      } else {
+        // Use standard copy on non-Windows systems
+        fs.copySync(sourceNodeDir, targetNodeDir);
+      }
+    } else {
+      console.log(`Node.js not found at ${sourceNodeDir}, will be downloaded during installation`);
+      fs.mkdirSync(path.join(distDir, 'thirdparty', 'node'), { recursive: true });
+    }
+    
+    // Copy jq if it exists
+    const sourceJqDir = path.join(root, 'thirdparty', 'jq');
+    if (fs.existsSync(sourceJqDir)) {
+      console.log(`Copying jq from ${sourceJqDir}...`);
+      fs.copySync(sourceJqDir, path.join(distDir, 'thirdparty', 'jq'));
+    } else {
+      console.log(`jq not found at ${sourceJqDir}, will be downloaded during installation`);
+      fs.mkdirSync(path.join(distDir, 'thirdparty', 'jq'), { recursive: true });
+    }
+    
+    // Copy pm2 directory (create empty if not exists)
+    fs.mkdirSync(path.join(distDir, 'thirdparty', 'pm2'), { recursive: true });
+    
+    // Copy Ollama if it exists
+    const sourceOllamaDir = path.join(root, 'thirdparty', 'ollama');
+    if (fs.existsSync(sourceOllamaDir)) {
+      console.log(`Copying Ollama from ${sourceOllamaDir}...`);
+      fs.copySync(sourceOllamaDir, path.join(distDir, 'thirdparty', 'ollama'));
+    } else {
+      console.log(`Ollama not found at ${sourceOllamaDir}, will be downloaded during installation`);
+      fs.mkdirSync(path.join(distDir, 'thirdparty', 'ollama'), { recursive: true });
+    }
 
     // Step 5: Clean up existing dist package if force is true
     if (force) {
       console.log(`Step 5: Cleaning up existing distribution package...`);
       if (isSafeRelativePath(distDir) &&  fs.existsSync(distDir)) {
-        fs.removeSync(new URL(`file://${path.resolve(distDir)}`));
+        fs.removeSync(fileURLToPath(new URL(`file://${path.resolve(distDir)}`)));
       }
       if (isSafeRelativePath(zipFile) && fs.existsSync(zipFile)) {
-        fs.removeSync(new URL(`file://${path.resolve(zipFile)}`));
+        fs.removeSync(fileURLToPath(new URL(`file://${path.resolve(zipFile)}`)));
       }
     }
     
@@ -661,7 +1294,8 @@ export async function createDistPackage(persona, force = false) {
     // List of scripts to include in the dist package
     const scriptsToInclude = [
       'setup.sh', 'install.sh', 'run.sh', 'stop.sh', 'uninstall.sh',
-      'setup.cmd', 'install.cmd', 'run.cmd', 'stop.cmd', 'uninstall.cmd'
+      'setup_win.bat', 'install_win.bat', 'run_win.bat', 'stop_win.bat', 'uninstall_win.bat',
+      'setup.ps1', 'install.ps1', 'run.ps1', 'stop.ps1', 'uninstall.ps1'
     ];
     // Step 8: For faculty persona, populate the assets/deployment/personas directories
     if (safePersona.toLowerCase() === 'faculty') {
@@ -680,16 +1314,25 @@ export async function createDistPackage(persona, force = false) {
         // Step 8.2: Copy scripts for this persona
         console.log(`Step 8.2: Copying scripts for ${otherPersona} persona...`);
         for (const script of scriptsToInclude) {
-          if (fs.existsSync(path.join(root, script))) {
-            fs.copySync(path.join(root, script), path.join(personaDir, script));
-            
+          let sourcePath;
+          if (script.endsWith('.ps1')) {
+            continue;
+          } else if (script.endsWith('.sh') || script.endsWith('.bat')) {
+            // Bash and batch scripts: copy from project root
+            sourcePath = path.join(root, script);
+          } else {
+            // Fallback: project root
+            sourcePath = path.join(root, script);
+          }
+          if (fs.existsSync(sourcePath)) {
+            fs.copySync(sourcePath, path.join(personaDir, script));
             // Make shell scripts executable
             if (!isWindows && script.endsWith('.sh')) {
               fs.chmodSync(path.join(personaDir, script), '755');
             }
           }
         }
-      
+
         // Step 8.3: Create placeholder .version file for the persona
         console.log(`Step 8.3: Creating version file for ${otherPersona} persona...`);
         const date = new Date().toISOString().split('T')[0];
@@ -706,9 +1349,9 @@ export async function createDistPackage(persona, force = false) {
         fs.mkdirSync(path.join(personaDir, 'backend'), { recursive: true });
         const backendDest = path.join(personaDir, 'backend');
         if (isSafeRelativePath(backendDest)) {
-          const backendUrl = new URL(`file://${path.resolve(backend)}`);
-          const backendDestUrl = new URL(`file://${path.resolve(backendDest)}`);
-          fs.copySync(fileURLToPath(backendUrl), fileURLToPath(backendDestUrl));
+          const backendUrl = fileURLToPath(new URL(`file://${path.resolve(backend)}`));
+          const backendDestUrl = fileURLToPath(new URL(`file://${path.resolve(backendDest)}`));
+          fs.copySync(backendUrl, backendDestUrl);
         } else {
           console.warn(`Refused to copy backend to unsafe path: ${backendDest}`);
         }
@@ -841,7 +1484,8 @@ export async function createDistPackage(persona, force = false) {
         // Step 8.11: Update all scripts to use the correct persona by default
         console.log(`Step 8.11: Updating all scripts for ${otherPersona} persona...`);
         const scriptsToUpdate = ['setup.sh', 'install.sh', 'run.sh', 'stop.sh', 'uninstall.sh',
-             'setup.cmd', 'install.cmd', 'run.cmd', 'stop.cmd', 'uninstall.cmd'];
+             'setup_win.bat', 'install_win.bat', 'run_win.bat', 'stop_win.bat', 'uninstall_win.bat',
+             'setup.ps1', 'install.ps1', 'run.ps1', 'stop.ps1', 'uninstall.ps1'];
         
         for (const script of scriptsToUpdate) {
           const scriptPath = path.join(personaDir, script);
@@ -855,11 +1499,39 @@ export async function createDistPackage(persona, force = false) {
                   /PERSONA=\${1:-faculty}/g,
                   `PERSONA=\${1:-${otherPersona}}`
                 );
-              } else if (script.endsWith('.cmd')) {
-                // Update Windows batch script
+              } else if (script.endsWith('.bat')) {
+                // Update Windows batch script - handle multiple patterns
+                // Pattern 1: set "Persona=faculty" 
+                scriptContent = scriptContent.replace(
+                  /set "Persona=faculty"/g,
+                  `set "Persona=${otherPersona}"`
+                );
+                // Pattern 2: if "%Persona%"=="" set "Persona=faculty"
+                scriptContent = scriptContent.replace(
+                  /if "%Persona%"=="" set "Persona=faculty"/g,
+                  `if "%Persona%"=="" set "Persona=${otherPersona}"`
+                );
+                // Pattern 3: Legacy formats without quotes
                 scriptContent = scriptContent.replace(
                   /if "%PERSONA%"=="" set PERSONA=faculty/g,
                   `if "%PERSONA%"=="" set PERSONA=${otherPersona}`
+                );
+              } else if (script.endsWith('.ps1')) {
+                // Update PowerShell script - handle multiple patterns
+                // Pattern 1: Single line format (install.ps1, uninstall.ps1)
+                scriptContent = scriptContent.replace(
+                  /\$Persona = if \(\$args\[0\]\) \{ \$args\[0\] \} else \{ "faculty" \}/g,
+                  `$Persona = if ($args[0]) { $args[0] } else { "${otherPersona}" }`
+                );
+                // Pattern 2: Multi-line if/else format (run.ps1 final fallback)
+                scriptContent = scriptContent.replace(
+                  /Write-Host "No persona indicators found, defaulting to faculty"\s*"faculty"/g,
+                  `Write-Host "No persona indicators found, defaulting to ${otherPersona}"\n            "${otherPersona}"`
+                );
+                // Pattern 3: Default persona in multi-line auto-detection fallback
+                scriptContent = scriptContent.replace(
+                  /} else \{\s*Write-Host "No persona indicators found, defaulting to faculty"\s*"faculty"\s*\}/g,
+                  `} else {\n            Write-Host "No persona indicators found, defaulting to ${otherPersona}"\n            "${otherPersona}"\n        }`
                 );
               }
               
@@ -913,17 +1585,78 @@ export async function createDistPackage(persona, force = false) {
     console.log(`Step 10: Copying backend, scripts and configuration files...`);
     fs.copySync(backend, path.join(distDir, 'backend'));
     fs.copySync(__dirname, path.join(distDir, 'scripts'));
-    
-    // Copy shell and batch scripts to root of dist
+
+    // Copy shell and batch scripts to root of dist (but keep PowerShell scripts in powershell folder)
     for (const script of scriptsToInclude) {
-      if (fs.existsSync(path.join(root, script))) {
-        fs.copySync(path.join(root, script), path.join(distDir, script));
+      let sourcePath;
+      if (script.endsWith('.ps1')) {
+        // PowerShell scripts are now only in the powershell folder, not root
+        continue;
+      } else if (script.endsWith('.sh') || script.endsWith('.bat')) {
+        // Bash and batch scripts: copy from project root
+        sourcePath = path.join(root, script);
+      } else {
+        // Fallback: project root
+        sourcePath = path.join(root, script);
+      }
+      if (fs.existsSync(sourcePath)) {
+        fs.copySync(sourcePath, path.join(distDir, script));
       }
     }
     
     // Copy ecosystem config
     if (fs.existsSync(ecosystem)) {
       fs.copySync(ecosystem, path.join(distDir, 'ecosystem.config.cjs'));
+    }
+    
+    // Step 10.1: Update main distribution package scripts to use correct persona defaults
+    console.log(`Step 10.1: Updating main distribution package scripts for ${safePersona} persona...`);
+    const mainScriptsToUpdate = ['setup.sh', 'install.sh', 'run.sh', 'stop.sh', 'uninstall.sh',
+         'setup_win.bat', 'install_win.bat', 'run_win.bat', 'stop_win.bat', 'uninstall_win.bat',
+         'setup.ps1', 'install.ps1', 'run.ps1', 'stop.ps1', 'uninstall.ps1'];
+    
+    for (const script of mainScriptsToUpdate) {
+      const scriptPath = path.join(distDir, script);
+      if (fs.existsSync(scriptPath)) {
+        try {
+          let scriptContent = fs.readFileSync(scriptPath, 'utf8');
+          if (script.endsWith('.sh')) {
+            // Update Linux shell script
+            scriptContent = scriptContent.replace(
+              /PERSONA=\${1:-faculty}/g,
+              `PERSONA=\${1:-${safePersona}}`
+            );
+          } else if (script.endsWith('.bat')) {
+            // Update Windows batch script - handle multiple patterns
+            scriptContent = scriptContent.replace(
+              /set "Persona=faculty"/g,
+              `set "Persona=${safePersona}"`
+            );
+            scriptContent = scriptContent.replace(
+              /if "%Persona%"=="" set "Persona=faculty"/g,
+              `if "%Persona%"=="" set "Persona=${safePersona}"`
+            );
+            scriptContent = scriptContent.replace(
+              /if "%PERSONA%"=="" set PERSONA=faculty/g,
+              `if "%PERSONA%"=="" set PERSONA=${safePersona}`
+            );
+          } else if (script.endsWith('.ps1')) {
+            // Update PowerShell script - handle multiple patterns
+            scriptContent = scriptContent.replace(
+              /\$Persona = if \(\$args\[0\]\) \{ \$args\[0\] \} else \{ "faculty" \}/g,
+              `$Persona = if ($args[0]) { $args[0] } else { "${safePersona}" }`
+            );
+            scriptContent = scriptContent.replace(
+              /"faculty"/g,
+              `"${safePersona}"`
+            );
+          }
+          fs.writeFileSync(scriptPath, scriptContent);
+          console.log(`Updated main distribution ${script} to default to ${safePersona} persona`);
+        } catch (err) {
+          console.warn(`Failed to update main distribution ${script} for ${safePersona}: ${err.message}`);
+        }
+      }
     }
     
     // Step 11: Create version file
@@ -1030,9 +1763,34 @@ export async function setupBackend(force = false) {
     
     process.chdir(backendPath);
     
+    // Get the appropriate Python command dynamically
+    const pythonCmd = getDynamicPythonCommand();
+    console.log(`Using Python command: ${pythonCmd}`);
+    
+    // Verify Python is available
+    try {
+      console.log(`Verifying Python is available...`);
+      const result = spawnSync(pythonCmd, ['--version'], { 
+        stdio: 'pipe',
+        encoding: 'utf8',
+      });
+      if (result.status !== 0) {
+        throw new Error(`Python version check failed with exit code ${result.status}`);
+      }
+    } catch (error) {
+      console.error(`Python not found using command: ${pythonCmd}`);
+      console.error(`Error details: ${error.message}`);
+      console.error(`\nTo install Python on Windows:`);
+      console.error(`1. Download Python from https://python.org/downloads/`);
+      console.error(`2. Or install from Microsoft Store: run 'python' in PowerShell and follow prompts`);
+      console.error(`3. Ensure Python is added to your PATH during installation`);
+      console.error(`4. Or run setup.ps1 to install Python automatically`);
+      return { success: false, error: new Error(`Python not available.`) };
+    }
+    
     // Create virtual environment
     console.log('Creating Python virtual environment...');
-    await spawnCommand(pythonCommand, ['-m', 'venv', 'venv']);
+    await spawnCommand(pythonCmd, ['-m', 'venv', 'venv']);
     
     // Install requirements
     console.log('Installing Python dependencies...');
@@ -1085,7 +1843,7 @@ export async function startBackend() {
       ? path.join(venvPath, 'Scripts', 'python.exe')
       : path.join(venvPath, 'bin', 'python');
       
-    await spawnCommand(pm2Command, [
+    await executePM2Command([
       'start', 'main.py',
       '--name', 'backend',
       '--interpreter', venvPythonPath
@@ -1160,13 +1918,46 @@ export async function setupOllama(force = false) {
 
     // Download Ollama
     console.log(`Downloading Ollama from ${ollamaDownloadUrl}...`);
+    console.log(`This may take a few minutes depending on your internet connection...`);
 
+    /**
+     * File downloads are handled directly by system tools:
+     * - Windows: PowerShell Invoke-WebRequest
+     * - Linux: curl (native system command)
+     */
     if (isWindows) {
-      await spawnCommand('curl', ['-L', ollamaDownloadUrl, '-o', ollamaArchive]);
-      // Extract directly into the current directory (ollama)
-      await spawnCommand('powershell', ['-Command', `Expand-Archive -Path "${ollamaArchive}" -DestinationPath "." -Force`]);
+      // Get the proper PowerShell path
+      const powerShellPath = ALLOWED_COMMANDS_CONFIG.powershell.path;
+      console.log(`Using PowerShell at: ${powerShellPath}`);
+
+      await spawnCommand(powerShellPath, [
+        '-Command',
+        `Invoke-WebRequest -Uri "${ollamaDownloadUrl}" -OutFile "${ollamaArchive}" -UseBasicParsing -TimeoutSec 600`
+      ], { timeout: 650000 }); // 10+ minute timeout
+      console.log('PowerShell download completed successfully');
     } else {
-      await spawnCommand('curl', ['-L', ollamaDownloadUrl, '-o', ollamaArchive]);
+      // On Linux, use curl
+      await spawnCommand('curl', [
+        '--fail', '--location', '--retry', '5', '--retry-delay', '10',
+        '--connect-timeout', '60', '--max-time', '600', // 10 minute max time
+        '--progress-bar', '--output', ollamaArchive, ollamaDownloadUrl
+      ], { timeout: 650000 }); // 10+ minute timeout
+      console.log('Curl download completed successfully');
+    }
+
+    console.log('Extracting Ollama archive...');
+    
+    if (isWindows) {
+      // Extract directly into the current directory (ollama)
+      const powerShellPath = ALLOWED_COMMANDS_CONFIG.powershell.path;
+      await spawnCommand(powerShellPath, ['-Command', `Expand-Archive -Path "${ollamaArchive}" -DestinationPath "." -Force`]);
+      
+      // Clean up the downloaded archive file to save space
+      if (fs.existsSync(ollamaArchive)) {
+        console.log(`Cleaning up downloaded archive: ${ollamaArchive}`);
+        fs.unlinkSync(ollamaArchive);
+      }
+    } else {
       // Extract directly into the current directory (ollama)
       await spawnCommand('tar', ['-xzf', ollamaArchive, '--strip-components=1']);
       
@@ -1237,7 +2028,7 @@ export async function startOllama() {
       // Set environment variables for Ollama
       const envVars = getOllamaEnvironmentVariables(root);
       
-      await spawnCommand(pm2Command, [
+      await executePM2Command([
         'start', 'ollama.exe',
         '--name', 'ollama',
         '--env', JSON.stringify(envVars)
@@ -1256,7 +2047,7 @@ export async function startOllama() {
       const envVars = getOllamaEnvironmentVariables(root);
       
       console.log('Starting Ollama with PM2 on Linux using start-ollama.sh...');
-      await spawnCommand(pm2Command, [
+      await executePM2Command([
         'start', './start-ollama.sh',
         '--name', 'ollama',
         '--env', JSON.stringify(envVars)
@@ -1295,7 +2086,7 @@ export async function startFrontend(persona) {
     }
     
     if (isSafeRelativePath(standaloneDir)) {
-      process.chdir(new URL(`file://${path.resolve(standaloneDir)}`).pathname);
+      process.chdir(fileURLToPath(new URL(`file://${path.resolve(standaloneDir)}`)));
     } else {
       throw new Error(`Unsafe standalone directory detected: ${standaloneDir}`);
     }
@@ -1304,7 +2095,7 @@ export async function startFrontend(persona) {
     // Start frontend with PM2 using the standalone server.js
     console.log('Starting frontend with PM2 using standalone server.js...');
     
-    await spawnCommand(pm2Command, [
+    await executePM2Command([
       'start', 'server.js',
       '--name', 'frontend',
       '--env', JSON.stringify({
@@ -1333,7 +2124,7 @@ export async function startServices(persona) {
   // Kill PM2 daemon to avoid stale state or path issues
   try {
     console.log('Killing PM2 daemon to ensure a clean state...');
-    await spawnCommand(pm2Command, ['pm2', 'kill']);
+    await executePM2Command(['kill']);
     console.log('PM2 daemon killed successfully.');
   } catch (err) {
     console.warn('Failed to kill PM2 daemon (it may not be running):', err);
@@ -1455,14 +2246,14 @@ export async function startServices(persona) {
     if (useDistPackage) {
       console.log(`Changing directory to distribution package: ${distPackage}`);
       if (isSafeRelativePath(distPackage)) {
-        process.chdir(new URL(`file://${path.resolve(distPackage)}`).pathname);
+        process.chdir(fileURLToPath(new URL(`file://${path.resolve(distPackage)}`)));
         console.log(`New working directory: ${process.cwd()}`);
       } else {
         throw new Error(`Unsafe distribution package directory detected: ${distPackage}`);
       }
     }
     // Start PM2 services
-    await spawnCommand(pm2Command, ['pm2', 'start', configToUse, '--namespace', projectTag]); // !DEBUG
+    await executePM2Command(['start', configToUse, '--namespace', projectTag]); // !DEBUG
     console.log(`All services started successfully for persona: ${persona}`);
     
     // Check and display service status using checkServicesStatus instead of running pm2 list directly
@@ -1513,11 +2304,11 @@ export async function stopServices(force = false) {
     // Use the ecosystem config if it exists
     if (fs.existsSync(ecosystem)) {
       console.log(`${force ? 'Removing' : 'Stopping'} all services using PM2 ecosystem config...`);
-      await spawnCommand(pm2Command, ['pm2', force ? 'delete' : 'stop', 'all', '--namespace', namespace]);
+      await executePM2Command([force ? 'delete' : 'stop', 'all', '--namespace', namespace]);
     } else {
       // Fallback to stopping all services manually by namespace
       console.log(`${force ? 'Removing' : 'Stopping'} all services manually by namespace...`);
-      await spawnCommand(pm2Command, ['pm2', force ? 'delete' : 'stop', 'all', '--namespace', namespace]);
+      await executePM2Command([force ? 'delete' : 'stop', 'all', '--namespace', namespace]);
     }
     
     console.log(`All services ${force ? 'removed' : 'stopped'} successfully.`);
@@ -1539,17 +2330,24 @@ export function getServiceList() {
     const namespace = getPM2Namespace();
     console.log(`Filtering PM2 services by namespace: ${namespace}`);
 
-    // Check that 'pm2Command' is safe before calling execCommand
-    if (!lookupCommandInfo(pm2Command)) {
-      throw new Error(`Command not allowed: ${pm2Command}`);
+    // Fix PM2 command execution for Windows
+    let listResult;
+    if (isWindows) {
+      // On Windows, try to run PM2 directly using Node.js
+      const nodePath = fs.existsSync(path.join(NODE_DIR, 'node.exe')) ? path.join(NODE_DIR, 'node.exe') : 'node';
+      const pm2BinPath = path.join(WORKING_DIR, 'node_modules', 'pm2', 'bin', 'pm2');
+      
+      if (fs.existsSync(pm2BinPath)) {
+        // Use Node.js to run PM2 directly
+        listResult = execCommand([nodePath, pm2BinPath, 'jlist', '--silent']);
+      } else {
+        // Fallback to npx, but use cmd.exe as shell
+        listResult = execCommand(['cmd', '/c', 'npx', 'pm2', 'jlist', '--silent']);
+      }
+    } else {
+      // On Linux, use the original approach
+      listResult = execCommand([pm2Command, 'pm2', 'jlist', '--silent']);
     }
-
-    // Validate the arguments
-    const pm2Args = ['pm2', 'jlist', '--silent'];
-    for (const arg of pm2Args) {
-      if (!SAFE_ARG_REGEX.test(arg)) throw new Error(`Unsafe argument: ${arg}`);
-    }
-    const listResult = execCommand([pm2Command, ...pm2Args]);
     
     if (!listResult.success) {
       const exitCode = listResult.code || 'unknown';
@@ -1574,9 +2372,15 @@ export function getServiceList() {
       const allProcesses = JSON.parse(listResult.output);
       console.log(`Found ${allProcesses.length} total PM2 processes`);
 
-      // For debugging
-      fs.writeFileSync('/tmp/pm2_all_processes.json', JSON.stringify(allProcesses, null, 2));
-      console.log('Saved all PM2 processes to /tmp/pm2_all_processes.json for debugging');
+      // For debugging - save to a cross-platform temp location
+      const tempDir = isWindows ? process.env.TEMP || 'C:\\temp' : '/tmp';
+      const debugFile = path.join(tempDir, 'pm2_all_processes.json');
+      try {
+        fs.writeFileSync(debugFile, JSON.stringify(allProcesses, null, 2));
+        console.log(`Saved all PM2 processes to ${debugFile} for debugging`);
+      } catch (err) {
+        console.warn('Failed to save debug file:', err.message);
+      }
 
       // Filter processes by namespace
       const fullServices = allProcesses.filter(process => {
@@ -1691,15 +2495,17 @@ export function checkServicesStatus() {
     
     // Save service details to a file for debugging
     try {
-      fs.writeFileSync('/tmp/service_status.json', JSON.stringify({
+      const tempDir = isWindows ? process.env.TEMP || 'C:\\temp' : '/tmp';
+      const statusFile = path.join(tempDir, 'service_status.json');
+      fs.writeFileSync(statusFile, JSON.stringify({
         success, 
         serviceCount, 
         serviceNames, 
         namespace
       }, null, 2));
-      console.log('Saved service status to /tmp/service_status.json for debugging');
+      console.log(`Saved service status to ${statusFile} for debugging`);
     } catch (err) {
-      console.warn('Failed to save service status to file:', err);
+      console.warn('Failed to save service status to file:', err.message);
     }
     
     if (serviceCount === 0) {
@@ -1794,44 +2600,49 @@ function getPM2Namespace() {
 }
 
 // Command line interface
-if (import.meta.url === `file://${__filename}`) {
-  const command = process.argv[2];
-  const personaArg = process.argv[3];
-  const persona = allowedPersonaMap[personaArg] || 'faculty';
-  const safePersona = getPersonaFromKey(persona);
-  const force = process.argv.includes('--force');
-  
-  // Update paths whenever the CLI is invoked directly
-  const { root } = resolvePaths({ persona });
-  
-  switch (command) {
-    case 'build':
-      buildPersona(safePersona, force);
-      break;
-    case 'create-package':
-      createDistPackage(safePersona, force);
-      break;
-    case 'setup-backend':
-      setupBackend(force);
-      break;
-    case 'start-backend':
-      startBackend();
-      break;
-    case 'setup-ollama':
-      setupOllama(force);
-      break;
-    case 'start-ollama':
-      startOllama();
-      break;
-    case 'start':
-      startServices(safePersona);
-      break;
-    case 'stop':
-      // Check for force flag (either as --force or -f)
-      const forceStop = process.argv.includes('--force') || process.argv.includes('-f') || process.env.FORCE === 'true';
-      stopServices(forceStop);
-      break;
-    case 'status':
+const normalizedFilename = __filename.replace(/\\/g, '/');
+const linuxMetaUrl = `file://${normalizedFilename}`
+
+if (import.meta.url === linuxMetaUrl || import.meta.url === `file:///${normalizedFilename}` ) {
+  async function runCLI() {
+    try {
+      const command = process.argv[2];
+      const personaArg = process.argv[3];
+      const persona = allowedPersonaMap[personaArg] || 'faculty';
+      const safePersona = getPersonaFromKey(persona);
+      const force = process.argv.includes('--force');
+      
+      // Update paths whenever the CLI is invoked directly
+      const { root } = resolvePaths({ persona });
+      
+      switch (command) {
+        case 'build':
+          await buildPersona(safePersona, force);
+          break;
+        case 'create-package':
+          await createDistPackage(safePersona, force);
+          break;
+        case 'setup-backend':
+          await setupBackend(force);
+          break;
+        case 'start-backend':
+          await startBackend();
+          break;
+        case 'setup-ollama':
+          await setupOllama(force);
+          break;
+        case 'start-ollama':
+          await startOllama();
+          break;
+        case 'start':
+          await startServices(safePersona);
+          break;
+        case 'stop':
+          // Check for force flag (either as --force or -f)
+          const forceStop = process.argv.includes('--force') || process.argv.includes('-f') || process.env.FORCE === 'true';
+          await stopServices(forceStop);
+          break;
+        case 'status':
       try {
         // Check for output format options
         const jsonFormat = process.argv.includes('--json') || process.argv.includes('-j');
@@ -2007,11 +2818,15 @@ if (import.meta.url === `file://${__filename}`) {
         }
       }
       break;
-    case 'uninstall':
-      uninstallServices();
-      break;
-    default:
-      console.log(`
+        case 'test':
+          console.log('Test command working');
+          break;
+        case 'uninstall':
+          // uninstallServices() - this function doesn't exist, so just log for now
+          console.log('Uninstall functionality not yet implemented');
+          break;
+        default:
+          console.log(`
 Usage: node utils.mjs <command> [persona] [--force] [options]
 
 Commands:
@@ -2019,8 +2834,8 @@ Commands:
   create-package <persona> Create a distribution package for a specific persona
   setup-backend            Setup backend environment
   start-backend             Start backend server
-  setup-ollama]      Setup Ollama 
-  start-ollama      Start Ollama 
+  setup-ollama             Setup Ollama 
+  start-ollama             Start Ollama 
   start <persona>          Start all services for a specific persona
   stop                     Stop all services
   status                   Check status of all services with configured namespace
@@ -2035,5 +2850,17 @@ Options:
   --human, -h              For 'status' command: Display human-readable output
                            Can be combined with --quiet to get clean human-readable output
 `);
+      }
+    } catch (error) {
+      console.error(`Error executing command: ${error.message}`);
+      console.error(`Stack trace: ${error.stack}`);
+      process.exit(1);
+    }
   }
+  
+  // Run the CLI
+  runCLI().catch((error) => {
+    console.error('Unhandled error in CLI:', error);
+    process.exit(1);
+  });
 }
