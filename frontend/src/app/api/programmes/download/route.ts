@@ -6,6 +6,7 @@ import path from 'path'
 import archiver from 'archiver'
 import { NextResponse } from 'next/server'
 import os from 'os'
+import { fileURLToPath } from 'url'
 
 // Inline abbreviation function to avoid "unknown function" taint
 const createSafeAbbreviation = (name: string): string => {
@@ -76,8 +77,9 @@ export async function POST(req: Request) {
     // tempDir = path.join("/tmp", `export-${persona}-${Date.now()}`)
     // await fs.ensureDir(tempDir)
 
-    const tempDir = new URL(`file://${path.join(os.tmpdir(), `package-${persona}-${Date.now()}`)}`)
-    stagingDir = await fs.mkdtemp(tempDir.pathname)
+    // Create temp directory with proper Windows path handling
+    const tempDirTemplate = path.join(os.tmpdir(), `package-${persona}-${Date.now()}XXXXXX`)
+    stagingDir = await fs.mkdtemp(fileURLToPath(new URL(`file://${tempDirTemplate}`)))
     console.log(`DEBUG: Created temporary staging directory: ${stagingDir}`)
 
     // Listen for abort signal
@@ -85,7 +87,7 @@ export async function POST(req: Request) {
       console.log('Request aborted by the client.')
       if (stagingDir) {
         try {
-          await fs.remove(new URL(`file://${stagingDir}`).pathname) // Clean up temporary directory
+          await fs.remove(fileURLToPath(new URL(`file://${stagingDir}`))) // Clean up temporary directory
         } catch (cleanupError) {
           console.error('Error cleaning up temp dir:', cleanupError)
         }
@@ -157,13 +159,14 @@ export async function POST(req: Request) {
 
     console.log(`DEBUG: Secure persona asset path: ${cleanPersonaAssetPath}`)
 
-    const personaAssetUrl = new URL(`file://${cleanPersonaAssetPath}`)
-    if (await fs.pathExists(personaAssetUrl.pathname)) {
+    if (await fs.pathExists(fileURLToPath(new URL(`file://${cleanPersonaAssetPath}`)))) {
       console.log(`DEBUG: Found prebuilt assets for persona: ${persona}`)
 
       // Copy the prebuilt assets directly to the temp directory
-      const stagingDirUrl = new URL(`file://${stagingDir}`)
-      await fs.copy(personaAssetUrl.pathname, stagingDirUrl.pathname)
+      await fs.copy(
+        fileURLToPath(new URL(`file://${cleanPersonaAssetPath}`)),
+        fileURLToPath(new URL(`file://${stagingDir}`)),
+      )
       console.log(`DEBUG: Copied prebuilt assets for persona: ${persona}`)
     } else {
       console.error(`ERROR: Prebuilt assets not found for persona: ${persona}`)
@@ -196,13 +199,13 @@ export async function POST(req: Request) {
         `-${softwareNameAbbreviation}` +
         `-${softwareVersion}.json`,
     )
-    const programmeJsonUrl = new URL(`file://${programmeJsonPath}`)
-    await fs.outputJson(programmeJsonUrl.pathname, programme, { spaces: 2 })
+    await fs.outputJson(fileURLToPath(new URL(`file://${programmeJsonPath}`)), programme, {
+      spaces: 2,
+    })
     console.log(`DEBUG: Added programme.json for persona: ${persona}`)
 
     const modelsDir = path.join(stagingDir, 'models')
-    const modelsDirUrl = new URL(`file://${modelsDir}`)
-    await fs.ensureDir(modelsDirUrl.pathname) // Ensure models directory exists regardless
+    await fs.ensureDir(fileURLToPath(new URL(`file://${modelsDir}`))) // Ensure models directory exists regardless
 
     // Extract unique model names from programme courses
     const modelNames = new Set<string>()
@@ -232,8 +235,7 @@ export async function POST(req: Request) {
     }
 
     const modelsDestDir = path.join(stagingDir, 'models')
-    const modelsDestDirUrl = new URL(`file://${modelsDestDir}`)
-    await fs.ensureDir(modelsDestDirUrl.pathname)
+    await fs.ensureDir(fileURLToPath(new URL(`file://${modelsDestDir}`)))
 
     const platform = process.platform
 
@@ -386,8 +388,7 @@ export async function POST(req: Request) {
       const cleanVersion = version
 
       const modelDestDir = path.join(modelsDestDir, cleanFolderName)
-      const modelDestDirUrl = new URL(`file://${modelDestDir}`)
-      await fs.ensureDir(modelDestDirUrl.pathname)
+      await fs.ensureDir(fileURLToPath(new URL(`file://${modelDestDir}`)))
 
       try {
         // SANITIZE OLLAMA MODEL NAME WITH VALIDATION
@@ -416,7 +417,7 @@ export async function POST(req: Request) {
           continue
         }
 
-        if (await fs.pathExists(new URL(`file://${normalizedManifestDir}`).pathname)) {
+        if (await fs.pathExists(fileURLToPath(new URL(`file://${normalizedManifestDir}`)))) {
           const modelDestManifestDir = path.join(
             modelDestDir,
             'manifests',
@@ -424,8 +425,7 @@ export async function POST(req: Request) {
             'library',
             cleanFolderName,
           )
-          const modelDestManifestDirUrl = new URL(`file://${modelDestManifestDir}`)
-          await fs.ensureDir(modelDestManifestDirUrl.pathname)
+          await fs.ensureDir(fileURLToPath(new URL(`file://${modelDestManifestDir}`)))
 
           const manifestFilePath = path.join(normalizedManifestDir, cleanVersion)
 
@@ -436,10 +436,10 @@ export async function POST(req: Request) {
             continue
           }
 
-          if (await fs.pathExists(new URL(`file://${normalizedManifestFilePath}`).pathname)) {
+          if (await fs.pathExists(fileURLToPath(new URL(`file://${normalizedManifestFilePath}`)))) {
             await fs.copy(
-              new URL(`file://${normalizedManifestFilePath}`).pathname,
-              new URL(`file://${path.join(modelDestManifestDir, cleanVersion)}`).pathname,
+              fileURLToPath(new URL(`file://${normalizedManifestFilePath}`)),
+              fileURLToPath(new URL(`file://${path.join(modelDestManifestDir, cleanVersion)}`)),
             )
             console.log(`DEBUG: Copied manifest file for model version: ${cleanVersion}`)
           } else {
@@ -449,7 +449,7 @@ export async function POST(req: Request) {
           const shaRefs = new Set<string>()
           try {
             const content = await fs.readFile(
-              new URL(`file://${normalizedManifestFilePath}`).pathname,
+              fileURLToPath(new URL(`file://${normalizedManifestFilePath}`)),
               'utf-8',
             )
             const shaMatches = content.match(/sha256:[a-f0-9]+/g) || []
@@ -465,8 +465,7 @@ export async function POST(req: Request) {
           )
 
           const blobsDestDir = path.join(modelDestDir, 'blobs')
-          const blobsDestDirUrl = new URL(`file://${blobsDestDir}`)
-          await fs.ensureDir(blobsDestDirUrl.pathname)
+          await fs.ensureDir(fileURLToPath(new URL(`file://${blobsDestDir}`)))
 
           for (const shaWithPrefix of shaRefs) {
             // VALIDATE SHA FORMAT
@@ -486,14 +485,14 @@ export async function POST(req: Request) {
             }
 
             let sourceFile = path.join(cleanOllamaModelDir, shaWithPrefix)
-            if (!(await fs.pathExists(new URL(`file://${sourceFile}`).pathname))) {
+            if (!(await fs.pathExists(fileURLToPath(new URL(`file://${sourceFile}`))))) {
               sourceFile = path.join(cleanOllamaModelDir, `sha256-${sha}`)
-              if (!(await fs.pathExists(new URL(`file://${sourceFile}`).pathname))) {
+              if (!(await fs.pathExists(fileURLToPath(new URL(`file://${sourceFile}`))))) {
                 sourceFile = path.join(cleanOllamaModelDir, sha)
               }
             }
 
-            if (await fs.pathExists(new URL(`file://${sourceFile}`).pathname)) {
+            if (await fs.pathExists(fileURLToPath(new URL(`file://${sourceFile}`)))) {
               const relativePath = path.relative(cleanOllamaModelDir, sourceFile)
               const destFile = path.join(blobsDestDir, relativePath)
 
@@ -506,12 +505,14 @@ export async function POST(req: Request) {
                 continue
               }
 
-              await fs.ensureDir(new URL(`file://${path.dirname(normalizedDestFile)}`).pathname)
-              if (!(await fs.pathExists(new URL(`file://${normalizedDestFile}`).pathname))) {
+              await fs.ensureDir(
+                fileURLToPath(new URL(`file://${path.dirname(normalizedDestFile)}`)),
+              )
+              if (!(await fs.pathExists(fileURLToPath(new URL(`file://${normalizedDestFile}`))))) {
                 try {
                   await fs.copy(
-                    new URL(`file://${sourceFile}`).pathname,
-                    new URL(`file://${normalizedDestFile}`).pathname,
+                    fileURLToPath(new URL(`file://${sourceFile}`)),
+                    fileURLToPath(new URL(`file://${normalizedDestFile}`)),
                   )
                   console.log(`DEBUG: Copied blob file: ${relativePath}`)
                 } catch (copyErr) {
@@ -551,10 +552,11 @@ export async function POST(req: Request) {
 
     // Calculate total source file size with path validation
     const calculateDirectorySize = async (inputDir: string): Promise<number> => {
-      // VALIDATION LIST - Regex patterns for safe paths
+      // VALIDATION LIST - Regex patterns for safe paths (Windows and Unix)
       const PATH_VALIDATION_PATTERNS = [
-        '^/tmp/package-[a-zA-Z0-9_\\-]+-\\d+$', // Temp staging directories
-        '^[a-zA-Z0-9_\\-/]+$', // General safe path pattern
+        '^/tmp/package-[a-zA-Z0-9_\\-]+-\\d+[a-zA-Z0-9]+$', // Unix temp staging directories
+        '^C:\\\\Users\\\\[a-zA-Z0-9_\\-]+\\\\AppData\\\\Local\\\\Temp\\\\package-[a-zA-Z0-9_\\-]+-\\d+[a-zA-Z0-9]+$', // Windows temp staging directories
+        '^[a-zA-Z0-9_\\-/\\\\.:\\\\]+$', // General safe path pattern with Windows support
       ]
 
       // Validate input directory against patterns
@@ -584,8 +586,9 @@ export async function POST(req: Request) {
       // Safe recursive size calculation with validated path
       const calculateSizeRecursive = async (dir: string): Promise<number> => {
         const DIR_VALIDATION_PATTERNS = [
-          '^/tmp/package-[a-zA-Z0-9_\\-]+-\\d+', // Must start with temp staging directory
-          '^[a-zA-Z0-9_\\-/\\.]+$', // Safe characters only (including dots for file extensions)
+          '^/tmp/package-[a-zA-Z0-9_\\-]+-\\d+', // Unix temp staging directory
+          '^C:\\\\Users\\\\[a-zA-Z0-9_\\-]+\\\\AppData\\\\Local\\\\Temp\\\\package-[a-zA-Z0-9_\\-]+-\\d+', // Windows temp staging directory
+          '^[a-zA-Z0-9_\\-/\\\\.:\\\\]+$', // Safe characters (Windows and Unix)
         ]
 
         // Validate directory parameter in recursive function
@@ -617,7 +620,7 @@ export async function POST(req: Request) {
         // Create clean directory path for this recursive call
         const cleanRecursiveDir = normalizedRecursiveDir
 
-        const files = await fs.readdir(new URL(`file://${cleanRecursiveDir}`).pathname)
+        const files = await fs.readdir(fileURLToPath(new URL(`file://${cleanRecursiveDir}`)))
         let totalSize = 0
 
         for (const file of files) {
@@ -634,7 +637,7 @@ export async function POST(req: Request) {
             console.warn(`Skipping file outside staging directory`)
             continue
           }
-          const stats = await fs.stat(new URL(`file://${normalizedFilePath}`).pathname)
+          const stats = await fs.stat(fileURLToPath(new URL(`file://${normalizedFilePath}`)))
 
           if (stats.isDirectory()) {
             totalSize += await calculateSizeRecursive(normalizedFilePath)
@@ -695,7 +698,7 @@ export async function POST(req: Request) {
     // Clean up the temporary directory
     if (stagingDir) {
       try {
-        await fs.remove(new URL(`file://${stagingDir}`).pathname)
+        await fs.remove(fileURLToPath(new URL(`file://${stagingDir}`)))
         console.log(`DEBUG: Cleaned up temporary staging directory: ${stagingDir}`)
       } catch (cleanupError) {
         console.error('Error cleaning up temporary staging directory:', cleanupError)
