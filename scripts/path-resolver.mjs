@@ -21,8 +21,8 @@ export function resolvePaths(args = {}) {
   const isDevelopmentMode = process.env.DEV_MODE === 'true';
   
   // Detect if we're already in a distribution package by checking for .version file
-  const isDistPackage = process.env.IS_DIST_PACKAGE === 'true' || 
-    fs.existsSync(path.join(ROOT_DIR, '.version'));
+  const versionFileExists = fs.existsSync(path.join(ROOT_DIR, '.version'));
+  const isDistPackage = process.env.IS_DIST_PACKAGE === 'true' || versionFileExists;
     
   // Default to using current directory
   let workingDir = ROOT_DIR;
