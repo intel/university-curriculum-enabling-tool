@@ -28,12 +28,6 @@ interface SummaryObject {
   [key: string]: unknown
 }
 
-// Citation-related types
-interface SimilarityInfo {
-  idx: number
-  sim: number
-}
-
 interface ChunkReference {
   chunk: string
   chunkIndex: number
@@ -72,18 +66,20 @@ const useReranker = false
 const similarityThreshold = 0.8
 
 export async function POST(req: Request) {
-  const { selectedModel, selectedSources } = await req.json()
+  const { selectedModel, selectedSources, courseInfo } = await req.json()
 
-  // --- VALIDATION: Ensure selectedSources is valid ---
-  if (
-    !Array.isArray(selectedSources) ||
-    selectedSources.length === 0 ||
-    !selectedSources.every(
+  // Check if we have valid sources
+  const hasValidSources =
+    Array.isArray(selectedSources) &&
+    selectedSources.length > 0 &&
+    selectedSources.every(
       (source) => source && typeof source === 'object' && 'id' in source && 'name' in source,
     )
-  ) {
-    console.warn('DEBUG: Invalid or missing selectedSources in POST /api/summary', selectedSources)
-    return errorResponse('Invalid or missing selected sources.', null, 400)
+
+  // --- VALIDATION: Ensure either sources OR course info is provided ---
+  if (!hasValidSources && !courseInfo?.courseName && !courseInfo?.courseDescription) {
+    console.warn('DEBUG: No sources or course information provided in POST /api/summary')
+    return errorResponse('Either sources or course information must be provided.', null, 400)
   }
 
   const ollamaUrl = process.env.OLLAMA_URL
@@ -94,35 +90,43 @@ export async function POST(req: Request) {
   const ollama = createOllama({ baseURL: ollamaUrl + '/api' })
 
   try {
-    // Use hybrid search to get top chunks for summary generation
+    // Use hybrid search to get top chunks for summary generation (only if source is selected)
     let keyword = 'summary of '
-    if (Array.isArray(selectedSources) && selectedSources.length > 0) {
-      keyword += selectedSources.map((s: ClientSource) => s.name || s.id || 'source').join(', ')
+    let topChunks: ContextChunk[] = []
+
+    if (hasValidSources) {
+      if (Array.isArray(selectedSources) && selectedSources.length > 0) {
+        keyword += selectedSources.map((s: ClientSource) => s.name || s.id || 'source').join(', ')
+      } else {
+        keyword += 'selected sources'
+      }
+
+      topChunks = await hybridSearch(
+        keyword,
+        selectedSources,
+        semanticWeight,
+        keywordWeight,
+        topK,
+        useReranker,
+      )
+
+      // DEBUG: Top chunks from hybrid search used for summary generation
+      console.debug('DEBUG: Top chunks from hybrid search used for summary generation:')
+      topChunks.forEach((chunk, idx) => {
+        console.debug(
+          `DEBUG: Chunk #${idx + 1} (sourceId: ${chunk.sourceId}, order: ${chunk.order}):\n${chunk.chunk}\n`,
+        )
+      })
     } else {
-      keyword += 'selected sources'
+      console.log('No valid sources provided, will generate using course context')
     }
 
-    const topChunks = await hybridSearch(
-      keyword,
-      selectedSources,
-      semanticWeight,
-      keywordWeight,
-      topK,
-      useReranker,
-    )
-
-    // DEBUG: Top chunks from hybrid search used for summary generation
-    console.debug('DEBUG: Top chunks from hybrid search used for summary generation:')
-    topChunks.forEach((chunk, idx) => {
-      console.debug(
-        `DEBUG: Chunk #${idx + 1} (sourceId: ${chunk.sourceId}, order: ${chunk.order}):\n${chunk.chunk}\n`,
-      )
-    })
-
-    const topChunkContent = topChunks.map((chunk) => chunk.chunk).join('\n\n')
+    const topChunkContent = hasValidSources
+      ? topChunks.map((chunk) => chunk.chunk).join('\n\n')
+      : ''
 
     const SystemPrompt = `You are a world-class academic summarizer. Your job is to generate a highly detailed, 
-    well-structured, and interesting summary for students, based strictly on the provided context.
+    well-structured, and interesting summary for students, based ${hasValidSources ? 'strictly on the provided context' : `on general academic knowledge${courseInfo?.courseName ? ` for the course "${courseInfo.courseName}"` : ''}${courseInfo?.courseDescription ? `. Course context: ${courseInfo.courseDescription}` : ''}`}.
 
 INSTRUCTIONS:
 - The summary must be comprehensive, with clear hierarchy (multiple heading levels, sections, and subsections).
@@ -131,7 +135,7 @@ content-based section titles for each heading (e.g., "Architecture Overview", "P
 "Software Integration"). Do NOT use generic titles like "heading 1", "heading 2", etc.
 - Use paragraphs for explanations, and both ordered and unordered lists for key points.
 - Make the summary highly detailed, with technical depth, examples, and clear explanations. 
-Include all relevant facts, numbers, and comparisons from the context.
+Include all relevant facts, numbers, and comparisons from ${hasValidSources ? 'the context' : 'your knowledge'}.
 - Do NOT use any markdown or bold/italic formatting (such as **, __, *, _ or similar) in any field.
 - Do NOT use any special formatting for headings or titles; just provide plain text for all fields.
 - Make the summary engaging and easy to scan, with short sections and clear structure.
@@ -154,7 +158,8 @@ Return your response as a JSON object with this structure:
 }
 CRITICAL: Your response MUST be valid JSON only. Do not include any text, markdown, explanations, or other content outside the JSON object. Do not include backticks or code block markers.`
 
-    const UserPrompt = `Generate a highly detailed, structured, and interesting summary of the provided academic content. Use the format and instructions above. The summary should:
+    const UserPrompt = hasValidSources
+      ? `Generate a highly detailed, structured, and interesting summary of the provided academic content. Use the format and instructions above. The summary should:
 - Start with a clear, descriptive title (no markdown)
 - Use multiple heading levels (1, 2, 3) for sections and subsections
 - Include both paragraphs and lists (ordered and unordered)
@@ -163,13 +168,23 @@ CRITICAL: Your response MUST be valid JSON only. Do not include any text, markdo
 - Include as much technical detail, facts, and examples as possible from the context. Do not omit any important information.
 - End with a short, insightful conclusion
 If you do not use at least two heading levels and at least one list, your answer will be considered incomplete.`
+      : `Generate a highly detailed, structured, and interesting summary${courseInfo?.courseName ? ` for students in ${courseInfo.courseName}` : ''}. ${courseInfo?.courseDescription ? `Use this course context to guide your summary: ${courseInfo.courseDescription}. ` : ''}The summary should:
+- Start with a clear, descriptive title (no markdown)
+- Use multiple heading levels (1, 2, 3) for sections and subsections
+- Include both paragraphs and lists (ordered and unordered)
+- Do NOT use any markdown or bold/italic formatting (such as **, __, *, _ or similar) in any field.
+- Be comprehensive, but concise and easy to scan
+- Include as much technical detail, facts, and examples as possible from general academic knowledge. Do not omit any important information.
+- End with a short, insightful conclusion
+If you do not use at least two heading levels and at least one list, your answer will be considered incomplete.`
 
     const systemMessage: CoreMessage = { role: 'system', content: SystemPrompt }
     const userMessage: CoreMessage = { role: 'user', content: UserPrompt }
-    const assistantMessage: CoreMessage = { role: 'assistant', content: topChunkContent }
 
-    // Combine messages into a single array for the LLM
-    const fullMessages = [systemMessage, assistantMessage, userMessage]
+    // Combine messages - only include assistant message if source is selected
+    const fullMessages = hasValidSources
+      ? [systemMessage, { role: 'assistant', content: topChunkContent } as CoreMessage, userMessage]
+      : [systemMessage, userMessage]
 
     const startFinalSummarizeTime = Date.now()
     const { object: summaryObj, usage: finalUsage } = await generateObject({
@@ -310,9 +325,31 @@ If you do not use at least two heading levels and at least one list, your answer
         )
         flattenBlocks(filteredContent, 2)
       }
+      const conclusionCount = blocks.filter(
+        (block) =>
+          block.type === 'heading' && block.content.trim().toLowerCase().includes('conclusion'),
+      ).length
+
+      if (conclusionCount > 0) {
+        console.log(`DEBUG: Found ${conclusionCount} conclusion heading(s) in content blocks`)
+      }
+
       if (summaryObj.conclusion) {
+        console.log(`DEBUG: Also found conclusion in summaryObj.conclusion field`)
+      }
+      const hasExistingConclusion = blocks.some(
+        (block) =>
+          block.type === 'heading' && block.content.trim().toLowerCase().includes('conclusion'),
+      )
+
+      if (summaryObj.conclusion && !hasExistingConclusion) {
+        console.log(`DEBUG: Adding conclusion from summaryObj.conclusion`)
         blocks.push({ type: 'heading', content: 'Conclusion', level: 2 })
         blocks.push({ type: 'paragraph', content: summaryObj.conclusion })
+      } else if (summaryObj.conclusion && hasExistingConclusion) {
+        console.log(`DEBUG: Not adding conclusion - already exists in content blocks`)
+      } else if (!summaryObj.conclusion) {
+        console.log(`DEBUG: No conclusion in summaryObj.conclusion field`)
       }
     } else {
       // fallback: treat as plain text, even if summaryObj is null/undefined
@@ -339,52 +376,59 @@ If you do not use at least two heading levels and at least one list, your answer
       )
     }
 
-    // Prepare citation blocks (split paragraphs/lists into sentences/items)
+    // Prepare citation blocks (split paragraphs/lists into sentences/items) - only if source is selected
     type CitationBlock = { type: string; content: string; blockIdx: number; itemIdx?: number }
     const citationBlocks: CitationBlock[] = []
-    blocks.forEach((block, idx) => {
-      if (block.type === 'paragraph') {
-        const sentences = splitIntoSentences(block.content)
-        sentences.forEach((sentence) => {
-          citationBlocks.push({ type: 'sentence', content: sentence, blockIdx: idx })
-        })
-      } else if (block.type === 'list' && block.items) {
-        block.items.forEach((item, i) => {
-          citationBlocks.push({ type: 'list-item', content: item, blockIdx: idx, itemIdx: i })
-        })
-      }
-    })
 
-    // Generate embeddings for each citation block
-    const citationBlockEmbeddings = await Promise.all(
-      citationBlocks.map(async (citationBlock) => {
-        const emb = await generateEmbeddings(
-          citationBlock.content,
-          chunkSizeToken,
-          chunkOverlapToken,
-          process.env.RAG_EMBEDDING_MODEL,
-        )
-        return { ...citationBlock, embedding: emb[0]?.embedding || [] }
-      }),
-    )
-
-    // Only get/generate embeddings for topK chunks
-    const sourceChunkEmbeddings = await Promise.all(
-      topChunks.map(async (chunk) => {
-        // Always generate embedding for each topK chunk
-        const embArr = await generateEmbeddings(
-          chunk.chunk,
-          chunkSizeToken,
-          chunkOverlapToken,
-          process.env.RAG_EMBEDDING_MODEL,
-        )
-        const embedding = embArr[0]?.embedding || []
-        return {
-          ...chunk,
-          embedding,
+    if (hasValidSources) {
+      blocks.forEach((block, idx) => {
+        if (block.type === 'paragraph') {
+          const sentences = splitIntoSentences(block.content)
+          sentences.forEach((sentence) => {
+            citationBlocks.push({ type: 'sentence', content: sentence, blockIdx: idx })
+          })
+        } else if (block.type === 'list' && block.items) {
+          block.items.forEach((item, i) => {
+            citationBlocks.push({ type: 'list-item', content: item, blockIdx: idx, itemIdx: i })
+          })
         }
-      }),
-    )
+      })
+    }
+
+    // Generate embeddings for each citation block (only if source is selected)
+    const citationBlockEmbeddings = hasValidSources
+      ? await Promise.all(
+          citationBlocks.map(async (citationBlock) => {
+            const emb = await generateEmbeddings(
+              citationBlock.content,
+              chunkSizeToken,
+              chunkOverlapToken,
+              process.env.RAG_EMBEDDING_MODEL,
+            )
+            return { ...citationBlock, embedding: emb[0]?.embedding || [] }
+          }),
+        )
+      : []
+
+    // Only get/generate embeddings for topK chunks (only if source is selected)
+    const sourceChunkEmbeddings = hasValidSources
+      ? await Promise.all(
+          topChunks.map(async (chunk) => {
+            // Always generate embedding for each topK chunk
+            const embArr = await generateEmbeddings(
+              chunk.chunk,
+              chunkSizeToken,
+              chunkOverlapToken,
+              process.env.RAG_EMBEDDING_MODEL,
+            )
+            const embedding = embArr[0]?.embedding || []
+            return {
+              ...chunk,
+              embedding,
+            }
+          }),
+        )
+      : []
     // Warn if any chunk is missing embedding
     sourceChunkEmbeddings.forEach((c, i) => {
       if (!Array.isArray(c.embedding) || c.embedding.length === 0) {
@@ -398,80 +442,60 @@ If you do not use at least two heading levels and at least one list, your answer
       string,
       { sentences: string[]; embeddings: number[][] }
     > = {}
-    for (const chunk of topChunks) {
-      const sentences = splitIntoSentences(chunk.chunk)
-      const embeddings: number[][] = []
-      for (const sentence of sentences) {
-        const embArr = await generateEmbeddings(
-          sentence,
-          chunkSizeToken,
-          chunkOverlapToken,
-          process.env.RAG_EMBEDDING_MODEL,
-        )
-        embeddings.push(embArr[0]?.embedding || [])
+
+    // Only precompute if we have sources
+    if (hasValidSources) {
+      for (const chunk of topChunks) {
+        const sentences = splitIntoSentences(chunk.chunk)
+        const embeddings: number[][] = []
+        for (const sentence of sentences) {
+          const embArr = await generateEmbeddings(
+            sentence,
+            chunkSizeToken,
+            chunkOverlapToken,
+            process.env.RAG_EMBEDDING_MODEL,
+          )
+          embeddings.push(embArr[0]?.embedding || [])
+        }
+        const chunkKey = `${chunk.sourceId}-${chunk.order}`
+        chunkSentenceEmbeddingsMap[chunkKey] = { sentences, embeddings }
       }
-      const chunkKey = `${chunk.sourceId}-${chunk.order}`
-      chunkSentenceEmbeddingsMap[chunkKey] = { sentences, embeddings }
     }
 
     // For each citation block, compute similarity to each topChunk, pick top-N with a strict threshold
-    const blockCitations = citationBlockEmbeddings.map(
-      (citationBlock: CitationBlockWithEmbedding) => {
-        const scored = sourceChunkEmbeddings
-          .map((chunk: ContextChunkWithEmbedding) => {
-            let highlightedSentenceIndices: number[] = []
-            const chunkKey = `${chunk.sourceId}-${chunk.order}`
-            if (
-              chunk.chunk &&
-              citationBlock.type === 'sentence' &&
-              chunkSentenceEmbeddingsMap[chunkKey]
-            ) {
-              const { embeddings: chunkEmbeddings } = chunkSentenceEmbeddingsMap[chunkKey]
-              // Compute similarity for each chunk sentence to the citationBlock
-              const similarities = chunkEmbeddings.map((emb: number[], i: number) => {
-                if (
-                  Array.isArray(emb) &&
-                  emb.length > 0 &&
-                  Array.isArray(citationBlock.embedding) &&
-                  citationBlock.embedding.length > 0
-                ) {
-                  return { idx: i, sim: cosineSimilarity(citationBlock.embedding, emb) }
-                }
-                return { idx: i, sim: 0 }
-              })
-              // Find the max similarity
-              const maxSim = Math.max(...similarities.map((s: SimilarityInfo) => s.sim))
-              // Highlight all sentences with similarity within 0.05 of max, and above a threshold (e.g., 0.7)
-              highlightedSentenceIndices = similarities
-                .filter((s: SimilarityInfo) => s.sim >= 0.7 && maxSim - s.sim <= 0.05)
-                .map((s: SimilarityInfo) => s.idx)
-            }
-            return {
-              chunk: chunk.chunk,
-              chunkIndex: chunk.order,
-              sourceId: chunk.sourceId || 0,
-              order: chunk.order,
-              score:
+    // Only do citation processing if we have sources
+    const blockCitations = hasValidSources
+      ? citationBlockEmbeddings.map((citationBlock: CitationBlockWithEmbedding) => {
+          const scored = sourceChunkEmbeddings
+            .map((chunk: ContextChunkWithEmbedding) => {
+              const score =
                 Array.isArray(chunk.embedding) &&
                 chunk.embedding.length > 0 &&
                 Array.isArray(citationBlock.embedding) &&
                 citationBlock.embedding.length > 0
                   ? cosineSimilarity(citationBlock.embedding, chunk.embedding)
-                  : 0,
-              highlightedSentenceIndices,
-            }
-          })
-          .filter((ref: ChunkReference) => !isNaN(ref.score))
-          .sort((a: ChunkReference, b: ChunkReference) => b.score - a.score)
-        // Only keep those above threshold, then slice to top-N
-        const filtered = scored
-          .filter((ref: ChunkReference) => ref.score >= similarityThreshold)
-          .slice(0, topN)
-        // Fallback: if none meet threshold but scored exists, include top-1
-        const finalRefs = filtered.length > 0 ? filtered : scored.length > 0 ? [scored[0]] : []
-        return { ...citationBlock, references: finalRefs }
-      },
-    )
+                  : 0
+              return {
+                chunk: chunk.chunk,
+                chunkIndex: chunk.order,
+                sourceId: chunk.sourceId || 0,
+                order: chunk.order,
+                score,
+                highlightedSentenceIndices: [],
+              }
+            })
+            .filter((ref: ChunkReference) => !isNaN(ref.score))
+            .sort((a: ChunkReference, b: ChunkReference) => b.score - a.score)
+
+          // Only keep those above threshold, then slice to top-N
+          const filtered = scored
+            .filter((ref: ChunkReference) => ref.score >= similarityThreshold)
+            .slice(0, topN)
+          // Fallback: if none meet threshold but scored exists, include top-1
+          const finalRefs = filtered.length > 0 ? filtered : scored.length > 0 ? [scored[0]] : []
+          return { ...citationBlock, references: finalRefs }
+        })
+      : []
 
     // Aggregate citations back to blocks
     const citations = blocks.map((block, idx) => {
@@ -483,7 +507,10 @@ If you do not use at least two heading levels and at least one list, your answer
         return { ...block, references: [] }
       }
       if (block.type === 'paragraph') {
-        // For each sentence, attach top-N citations, but aggregate for the whole paragraph
+        // For each sentence, attach top-N citations, but aggregate for the whole paragraph (only if source is selected)
+        if (!hasValidSources) {
+          return { ...block, references: [] }
+        }
         const paraSentences = splitIntoSentences(block.content)
         const sentRefs = paraSentences.map((sentence) => {
           const found = blockCitations.find(
