@@ -6,7 +6,7 @@ import { EmbeddingChunk } from '../types/embedding-chunk'
 import { embed } from 'ai'
 import { verifyModel } from '../model/model-manager'
 import { detokenize, effectiveTokenCount, tokenize } from '../utils'
-
+import { randomInt } from 'crypto'
 /**
  * Generates embeddings for a given text using a specified model.
  *
@@ -17,6 +17,22 @@ import { detokenize, effectiveTokenCount, tokenize } from '../utils'
  * @returns A promise that resolves to an array of embedding chunks.
  * @throws An error if the model verification or embedding generation fails.
  */
+
+function sanitizeChunk(text: string): string {
+  return (
+    text
+      // Collapse long runs of periods (..... -> .)
+      .replace(/([.])\1{2,}/g, '$1')
+      // Collapse long runs of dashes, underscores, etc. (optional)
+      .replace(/([-_*])\1{2,}/g, '$1')
+      // Remove zero-width and control characters
+      .replace(/[\u0000-\u001F\u007F-\u009F\u200B]/g, '')
+      // Collapse extra whitespace
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+  )
+}
+
 export async function generateEmbeddings(
   text: string,
   chunkSizeToken: number,
@@ -73,46 +89,90 @@ export async function generateEmbeddings(
   let completedCount = 0
   const totalChunks = chunks.length
   console.log('DEBUG: generateEmbeddings totalChunks:', totalChunks)
-  const embeddingPromises = chunks.map(async (chunk, index) => {
-    try {
-      const { embedding } = await embed({
-        model: ollama.embedding(modelName),
-        value: chunk,
-      })
-      // console.log(
-      //   `Embedding generated for chunk ${index + 1}/${chunks.length}`
-      // );
-      completedCount++
-      const completionPercentage = ((completedCount / totalChunks) * 100).toFixed(2)
-      // console.log(
-      //   `Embedding generation: ${completionPercentage}% (${completedCount}/${totalChunks})`
-      // );
-      const tokens = tokenize(chunk)
-      console.log(
-        `DEBUG: generateEmbeddings: ${completionPercentage}% (${completedCount}/${totalChunks}) | ` +
-          `[${index}]: ${chunk.length} chars | ` +
-          `Adjusted token (${chunkSizeToken}): ${tokens.length}`,
-      )
-
-      return {
-        order: index + 1, // 1-based order
-        chunk: chunk,
-        embedding: embedding, // assumed to be a number[]
-        sourceType: 'user' as const, // Specify sourceType for user-generated embeddings
-      }
-    } catch (error) {
-      throw new Error(
-        `Failed to generate embedding for chunk ${index + 1}/${totalChunks}: ${error}`,
-      )
+  async function embedChunk(chunk: string, index: number): Promise<EmbeddingChunk | null> {
+    const sanitized = sanitizeChunk(chunk)
+    // Log full chunk if sanitization changed it
+    if (sanitized !== chunk) {
+      const sanitizeLog = `
+Sanitized chunk ${index + 1}:
+Before: ${chunk}
+After : ${sanitized}
+Length: ${chunk.length} -> ${sanitized.length}
+-------`
+      console.log(sanitizeLog)
     }
-  })
+    const maxRetries = 5
+    const tokens = tokenize(chunk)
+    const preview = chunk.slice(0, 500)
 
-  const results = await Promise.all(embeddingPromises)
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const { embedding } = await embed({
+          model: ollama.embedding(modelName),
+          value: sanitized,
+        })
+        completedCount++
+        const completionPercentage = ((completedCount / totalChunks) * 100).toFixed(2)
+
+        const successLog = `
+Successful embedding for chunk ${index + 1}/${totalChunks}
+Length: ${chunk.length}, Tokens: ${tokens.length}
+Preview: ${preview}
+Completion: ${completionPercentage}% (${completedCount}/${totalChunks})
+-------`
+        console.log(successLog)
+        return {
+          order: index + 1,
+          chunk: sanitized,
+          embedding,
+          sourceType: 'user' as const,
+        }
+      } catch (err: unknown) {
+        let message: string
+        if (err instanceof Error) {
+          message = err.message
+        } else if (typeof err === 'string') {
+          message = err
+        } else {
+          message = JSON.stringify(err)
+        }
+
+        const errorLog = `
+Attempt ${attempt}/${maxRetries} failed for chunk ${index + 1}/${totalChunks}
+Length: ${chunk.length}, Tokens: ${tokens.length}
+Preview: ${preview}
+Error: ${message}
+-------`
+        console.error(errorLog)
+        if (attempt < maxRetries) {
+          const jitter = randomInt(0, 100)
+          const delay = 500 * 2 ** (attempt - 1) + jitter
+          await new Promise<void>((resolve) => {
+            setTimeout(() => resolve(), delay)
+          })
+        }
+      }
+    }
+
+    const finalErrorLog = `
+Failed permanently for chunk ${index + 1}/${totalChunks}
+Length: ${chunk.length}, Tokens: ${tokens.length}
+Preview: ${preview}
+-------`
+    console.error(finalErrorLog)
+    return null
+  }
+
+  const embeddingPromises = chunks.map((chunk, index) => embedChunk(chunk, index))
+  const settled = await Promise.all(embeddingPromises)
+
+  const results = settled.filter((r): r is EmbeddingChunk => r !== null)
+
   const endTime = Date.now()
   const totalTimeTakenMs = endTime - startTime
   const totalTimeTakenSec = (totalTimeTakenMs / 1000).toFixed(2)
   console.log(
-    `Generated ${chunks.length} embeddings in ${totalTimeTakenMs}ms (${totalTimeTakenSec}s)`,
+    `Generated ${results.length}/${chunks.length} embeddings in ${totalTimeTakenMs}ms (${totalTimeTakenSec}s)`,
   )
 
   return results
