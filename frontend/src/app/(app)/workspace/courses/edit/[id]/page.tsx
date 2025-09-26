@@ -46,7 +46,9 @@ const courseFormSchema = z.object({
   version: z.string().min(1, {
     message: 'Version is required.',
   }),
-  description: z.string().optional(),
+  description: z.string().min(10, {
+    message: 'Course description must be at least 10 characters.',
+  }),
   model: z.object({
     name: z.string(),
     modified_at: z.string(),
@@ -639,7 +641,7 @@ export default function EditCoursePage({ params }: { params: Promise<{ id: strin
                         name="description"
                         render={({ field }) => (
                           <FormItem>
-                            <FormLabel>Course Description (Optional)</FormLabel>
+                            <FormLabel>Course Description</FormLabel>
                             <FormControl>
                               <Textarea
                                 placeholder="A comprehensive introduction to the fundamental concepts of computer science..."
