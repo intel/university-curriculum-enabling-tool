@@ -68,7 +68,9 @@ const courseFormSchema = z.object({
     .refine((val) => /^\d{4}\.\d{1,2}\.\d{1,3}$/.test(val), {
       message: 'Version must be in YYYY.MM.MICRO format (e.g., 2025.01.0)',
     }),
-  description: z.string().optional(),
+  description: z.string().min(10, {
+    message: 'Course description must be at least 10 characters.',
+  }),
   model: z.object({
     name: z.string(),
     modified_at: z.string(),
@@ -640,7 +642,7 @@ export default function CreateCoursePage() {
                               name="description"
                               render={({ field }) => (
                                 <FormItem>
-                                  <FormLabel>Course Description (Optional)</FormLabel>
+                                  <FormLabel>Course Description</FormLabel>
                                   <FormControl>
                                     <Textarea
                                       placeholder="A comprehensive introduction to the fundamental concepts of computer science..."

@@ -25,6 +25,7 @@ import { usePersonaStore } from '@/lib/store/persona-store'
 import { useContextAvailability } from '@/lib/hooks/use-context-availability'
 import { getSelectContextDescription } from '@/lib/utils/context-messages'
 import { ContextRequirementMessage } from '@/components/context-requirement-message'
+import { useCourses } from '@/lib/hooks/use-courses'
 import type { CitationReference, Citation } from '@/lib/types/citation-types'
 import React from 'react'
 
@@ -71,9 +72,10 @@ export default function SummaryPage() {
     setError,
     setSelectedModel,
   } = useSummaryStore()
-  const { activePersona } = usePersonaStore()
+  const { activePersona, selectedCourseId } = usePersonaStore()
   const { selectedSources } = useSourcesStore()
   const { getActiveContextModelName, getContextTypeLabel } = useContextAvailability()
+  const { data: coursesData } = useCourses()
   const summary = summaries[id]?.summary || ''
   const [, setIsMobile] = useState(false)
   const [citations, setCitations] = useState<Citation[]>([])
@@ -94,8 +96,11 @@ export default function SummaryPage() {
       return false
     }
     const selectedSourcesCount = selectedSources.filter((source) => source.selected).length
-    if (selectedSourcesCount !== 1) {
-      toast.error('Please select exactly one source.')
+    // Allow generation with no sources or exactly one source, but not multiple sources
+    if (selectedSourcesCount > 1) {
+      toast.error(
+        'Multiple sources selected. Please select only one source or none to use course context.',
+      )
       return false
     }
     return true
@@ -103,18 +108,43 @@ export default function SummaryPage() {
 
   const generateSummary = async () => {
     startGenerating()
+
     if (!validateInputs()) {
       stopGenerating()
       return
     }
+
     try {
       const modelName = getActiveContextModelName()
+
+      // Get course information from context
+      const selectedCourse = coursesData?.docs.find((course) => course.id === selectedCourseId)
+      const courseInfo = selectedCourse
+        ? {
+            courseName: selectedCourse.name,
+            courseDescription: selectedCourse.description,
+          }
+        : undefined
+
+      // Fallback: if no sources selected, use course description as a pseudo-source
+      const sourcesToUse = selectedSources?.length
+        ? selectedSources
+        : courseInfo?.courseDescription
+          ? [{ content: courseInfo.courseDescription, name: 'Course Description' }]
+          : []
+
       const response = await fetch('/api/summary', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ selectedModel: modelName, selectedSources }),
+        body: JSON.stringify({
+          selectedModel: modelName,
+          selectedSources: sourcesToUse,
+          courseInfo,
+        }),
       })
+
       if (!response.ok) throw new Error('Failed to generate summary')
+
       const data = await response.json()
       setSummary(id, data.summary)
       setSelectedModel(modelName)
@@ -124,6 +154,7 @@ export default function SummaryPage() {
       console.error('Error generating summary:', error)
       setError('An error occurred while generating the summary.')
     }
+
     stopGenerating()
   }
 

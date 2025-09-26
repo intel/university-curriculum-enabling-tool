@@ -16,9 +16,10 @@ Powered by Intel CPUs and GPUs, the tool ensures accurate, contextually relevant
 
 - **Operating System**: 
 
-  | Type        | Version                   |
-  |-------------|---------------------------|
-  | Linux       | Ubuntu 24.04 Desktop LTS  |
+  | Type    | Version                  |
+  | ------- | ------------------------ |
+  | Linux   | Ubuntu 24.04 Desktop LTS |
+  | Windows | Windows 11               |
 
 ### Hardware Requirements
 
@@ -45,13 +46,13 @@ Powered by Intel CPUs and GPUs, the tool ensures accurate, contextually relevant
 
 > **Important Notice:** This software is currently in pre-production status, designed to run locally on a single system only. For more stable version, please refer to our latest tagged pre-release.
 
-## Quick Start
+## Quick Start Linux
 
 > **Pre-requisite:** Follow the [Edge Developer Kit Reference Scripts](https://github.com/intel/edge-developer-kit-reference-scripts) to install the necessary drivers and compute-related packages for Intel® GPUs 
 
 1. **Setup** - Install system dependencies:
 
-   > **Note:** Setup requires administrator privileges as it installs system-level dependencies.
+   > **Note**: Setup requires administrator privileges as it installs system-level dependencies.
 
    ```bash
    sudo ./setup.sh
@@ -80,6 +81,63 @@ Powered by Intel CPUs and GPUs, the tool ensures accurate, contextually relevant
    ```bash
    ./uninstall.sh
    ```
+
+## Quick Start Windows
+
+1. System-level setup (Adminstrator required)
+
+   ```powershell
+   # Double click on setup_win.bat and select "Yes"
+   .\setup_win.bat
+   ```
+   This script will perform or install the following if not present and may take a while to complete:
+   - Winget
+   - Python 3.12 (if not not installed or lower version)
+   - Enable PowerShell script execution if needed
+
+2. Install application and its dependencies
+
+   ```powershell
+   # Double click on install_win.bat
+   .\install_win.bat
+   ```
+   This will automatically proceed to installation of application (without administrator privilege) which does the following:
+     - Download and install Node.js locally (22.16.0)
+     - Download and install jq locally
+     - Install npm dependencies
+     - Set up Python virtual environment
+     - Download and configure Ollama
+     - Create environment configuration files
+
+3. Start the application
+   ```powershell
+   # Double-click to run
+   .\run_win.bat
+   ```
+   Running this command will automatically open a web-browser with `http://localhost:8080`
+
+4. Stop the application
+   ```powershell
+   # Double click to stop all services
+   .\stop_win.bat
+   ```
+   >**IMPORTANT**: Please make sure to close all command or terminal prompts that are open after running `stop_win.bat`
+
+5. Uninstall the application
+   ```powershell
+   # Double click to run uninstall script
+   .\uninstall_win.bat
+   ```
+
+## Limitations
+
+On Windows, when running `run_win.bat`, PM2 launches several command prompt windows during operation. These windows can be minimized, but they will remain open. To stop the application, run `stop_win.bat` and manually close the command prompt windows to properly shut down all services.
+
+## Troubleshooting
+
+1. Unable to unzip file from Github for Windows
+
+   If you have trouble unzipping the downloaded zip file from GitHub on Windows, try extracting it to a folder with a shorter name or path. This issue is caused by Windows' maximum file path length limitation.
 
 ## Disclaimer
 Intel is committed to respecting human rights and avoiding causing or contributing to adverse impacts on human rights. See [Intel’s Global Human Rights Principles](https://www.intel.com/content/dam/www/central-libraries/us/en/documents/policy-human-rights.pdf). Intel’s products and software are intended only to be used in applications that do not cause or contribute to adverse impacts on human rights. Users should comply with all requirements to notify relevant parties that AI was used in the production of materials, as mandated by their employers or professional standards.
