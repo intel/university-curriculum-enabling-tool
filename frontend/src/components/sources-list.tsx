@@ -229,7 +229,7 @@ export function SourcesList() {
                 filteredSources.map((source) => (
                   <div
                     key={source.id}
-                    className="group flex items-center space-x-2 rounded-md pb-2 pl-2 pr-2 pt-2 hover:bg-accent"
+                    className="group flex items-center space-x-2 rounded-md px-2 py-2 hover:bg-accent"
                   >
                     <Checkbox
                       className="border-sidebar-border text-sidebar-primary-foreground shadow-none data-[state=checked]:border-sidebar-foreground data-[state=checked]:bg-sidebar-foreground"
@@ -250,12 +250,12 @@ export function SourcesList() {
                         ? source.name.substring(0, 13) + '...' + source.name.slice(-3)
                         : source.name}
                     </span>
-                    {selectedSources.length <= 1 && (
+                    {selectedSources.length <= 1 ? (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button
                             variant="ghost"
-                            className="size-5 h-12 px-3 opacity-0 hover:bg-accent-foreground/10 group-hover:opacity-100"
+                            className="size-6 opacity-0 hover:bg-accent-foreground/10 group-hover:opacity-100"
                           >
                             <MoreHorizontal className="h-3 w-3" />
                           </Button>
@@ -325,6 +325,8 @@ export function SourcesList() {
                           </AlertDialog>
                         </DropdownMenuContent>
                       </DropdownMenu>
+                    ) : (
+                      <div className="size-6" />
                     )}
                   </div>
                 ))
