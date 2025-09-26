@@ -96,7 +96,7 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         HOSTNAME: readEnvVariable('FRONTEND_HOST', '127.0.0.1'),
-        PORT: readEnvVariable('FRONTEND_PORT', 8080)
+        PORT: readEnvVariable('FRONTEND_PORT', 8080),
       },
       watch: false,
       autorestart: true,
