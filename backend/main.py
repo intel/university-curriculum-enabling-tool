@@ -1,7 +1,6 @@
 # Copyright (C) 2025 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
-
-from fastapi import FastAPI, HTTPException, File, UploadFile
+from fastapi import BackgroundTasks, FastAPI, HTTPException, File, UploadFile
 from pydantic import BaseModel
 import fitz  # PyMuPDF
 from pathlib import Path
@@ -12,11 +11,15 @@ from generate_caption import generate_dynamic_caption
 from generate_image_embedding import generate_image_embedding
 from fastapi.responses import FileResponse, JSONResponse
 from generate_pptx import create_pptx
+from generate_pptx import create_pptx
 from starlette.background import BackgroundTask
 import tempfile
 import imagehash
 from PIL import Image
 import io
+import uuid
+from typing import Dict
+import json
 
 app = FastAPI()
 
@@ -26,22 +29,10 @@ OUTPUT_DIR = BASE_DIR / "images"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-@app.post("/parse")
-async def parse_pdf(file: UploadFile = File(...)):
-    """
-    Endpoint to parse a PDF file uploaded via multipart/form-data.
-    Extracts images, generates captions and embeddings, and returns the data.
-    """
-    temp_file_path = None
+def process_pdf_to_file(job_id: str, pdf_path: str, filename: str):
     try:
-        # Create temp file with delete=False to avoid Windows file locking issues
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
-            temp_file.write(await file.read())
-            temp_file_path = temp_file.name
-
-        print(f"DEBUG : Temporary PDF file created at: {temp_file_path}")
-        # Open the PDF file using PyMuPDF (now works on Windows since file is closed)
-        pdf_file = fitz.open(str(temp_file_path))
+        print(f"Processing job {job_id}")
+        pdf_file = fitz.open(str(pdf_path))
         image_data = []
         image_order = 1
         seen_hashes = set()
@@ -88,29 +79,62 @@ async def parse_pdf(file: UploadFile = File(...)):
 
         # Prepare the response data
         response_data = {
-            "name": file.filename,
+            "name": filename,
             "details": f"Extracted {len(image_data)} images from the PDF.",
             "images": image_data,
             "text": extracted_text,
         }
 
-        return JSONResponse(content=response_data)
+        temp_dir = tempfile.gettempdir()
+        result_path = os.path.join(temp_dir, f"{job_id}.json")
+        with open(result_path, "w") as f:
+            json.dump(response_data, f)
 
     except Exception as e:
-        print(f"Error processing PDF: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"An error occurred while processing the PDF: {e}"
-        )
+        print(f"Error in processing pdf job_id: {job_id}: {e}")
+
     finally:
-        # Clean up temporary file on Windows
-        if temp_file_path and os.path.exists(temp_file_path):
-            try:
-                os.unlink(temp_file_path)
-                print(f"DEBUG: Cleaned up temporary file: {temp_file_path}")
-            except Exception as cleanup_error:
-                print(
-                    f"Warning: Failed to clean up temporary file {temp_file_path}: {cleanup_error}"
-                )
+        try:
+            if os.path.exists(pdf_path):
+                os.remove(pdf_path)
+        except Exception as cleanup_err:
+            print(f"Warning: Failed to remove temporary PDF {pdf_path}: {cleanup_err}")
+
+
+@app.post("/upload")
+async def upload_file(
+    file: UploadFile = File(...), background_tasks: BackgroundTasks = None
+):
+    try:
+        # Generate job ID
+        job_id = str(uuid.uuid4())
+        tmp_dir = tempfile.gettempdir()
+        tmp_path = os.path.join(tmp_dir, f"{job_id}_{file.filename}")
+
+        # Save uploaded file to /tmp
+        with open(tmp_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        # Schedule background PDF processing
+        background_tasks.add_task(process_pdf_to_file, job_id, tmp_path, file.filename)
+
+        return {"jobID": job_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error uploading file: {e}")
+
+
+@app.get("/result/{job_id}")
+def get_result(job_id: str):
+    temp_dir = tempfile.gettempdir()
+    result_path = os.path.join(temp_dir, f"{job_id}.json")
+    if not os.path.exists(result_path):
+        return JSONResponse(
+            status_code=202, content={"message": "PDF processing not complete yet."}
+        )
+
+    with open(result_path, "r") as f:
+        result = json.load(f)
+        return result
 
 
 class PPTXRequest(BaseModel):
