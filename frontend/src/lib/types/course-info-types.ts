@@ -4,6 +4,7 @@
 export interface CourseInfo {
   courseCode?: string
   courseName?: string
+  courseDescription?: string
   semester?: string
   academicYear?: string
   deadline?: string

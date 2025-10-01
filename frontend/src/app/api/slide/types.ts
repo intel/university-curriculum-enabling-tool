@@ -4,6 +4,7 @@
 // Type definitions for course content generation
 
 import { ClientSource } from '@/lib/types/client-source'
+import type { CourseInfo } from '@/lib/types/course-info-types'
 
 export interface LectureSlide {
   title: string
@@ -120,6 +121,7 @@ export interface CourseContentRequest {
   sessionLength: number
   difficultyLevel: string
   topicName: string
+  courseInfo?: CourseInfo
   action?: string
   content?: LectureContent
 }

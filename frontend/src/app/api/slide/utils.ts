@@ -3,6 +3,7 @@
 
 import type { ContextChunk } from '@/lib/types/context-chunk'
 import type { ClientSource } from '@/lib/types/client-source'
+import type { CourseInfo } from '@/lib/types/course-info-types'
 import { getStoredChunks } from '@/lib/chunk/get-stored-chunks'
 import type { AssessmentQuestion } from './types'
 import { fallbackDiscussionIdeas } from './fallback-content'
@@ -95,14 +96,66 @@ export function extractAndParseJSON(text: string) {
 }
 
 // Prepare source content for the AI model
-export async function prepareSourceContent(selectedSources: ClientSource[]) {
+export async function prepareSourceContent(
+  selectedSources: ClientSource[],
+  topicName?: string,
+  courseInfo?: CourseInfo,
+) {
   try {
+    // Check if we have any selected sources
+    const selectedSourcesFiltered = selectedSources?.filter((source) => source.selected) || []
+    // If no sources are selected, create course-based content
+    if (selectedSourcesFiltered.length === 0) {
+      console.log('No sources selected, using course context for content generation')
+      const courseContent = `COURSE CONTEXT:\n\n`
+      let structuredContent = courseContent
+      if (courseInfo) {
+        structuredContent += `Course: ${courseInfo.courseCode || ''} ${courseInfo.courseName || 'Academic Course'}\n`
+        structuredContent += `Semester: ${courseInfo.semester || 'Current Semester'}\n`
+        structuredContent += `Academic Year: ${courseInfo.academicYear || 'Current Academic Year'}\n\n`
+      }
+      structuredContent += `Topic: ${topicName || 'Course Topic'}\n\n`
+      structuredContent += `GENERAL KNOWLEDGE CONTEXT:\n`
+      structuredContent += `Since no specific source materials were provided, this content should be generated based on:\n`
+      structuredContent += `1. Standard academic knowledge for the topic "${topicName}"\n`
+      structuredContent += `2. Common educational practices and pedagogical approaches\n`
+      structuredContent += `3. Typical curriculum content for this subject area\n`
+      structuredContent += `4. Best practices in educational content development\n\n`
+      const sourceMetadata = {
+        sourceCount: 0,
+        chunkCount: 0,
+        tokenEstimate: countTokens(structuredContent),
+        sourceNames: [],
+        usingCourseContext: true,
+      }
+      return { content: structuredContent, metadata: sourceMetadata }
+    }
+
     // Use the getStoredChunks function to retrieve chunks from Payload CMS
-    const retrievedChunks = await getStoredChunks(selectedSources)
+    const retrievedChunks = await getStoredChunks(selectedSourcesFiltered)
     console.log('Retrieved chunks:', retrievedChunks.length)
 
     if (retrievedChunks.length === 0) {
-      throw new Error('No content found in the selected sources.')
+      // If we have selected sources but no chunks found, fallback to course context
+      console.log('No content found in selected sources, falling back to course context')
+      const courseContent = `COURSE CONTEXT (Source Fallback):\n\n`
+      let structuredContent = courseContent
+      if (courseInfo) {
+        structuredContent += `Course: ${courseInfo.courseCode || ''} ${courseInfo.courseName || 'Academic Course'}\n`
+        structuredContent += `Semester: ${courseInfo.semester || 'Current Semester'}\n`
+        structuredContent += `Academic Year: ${courseInfo.academicYear || 'Current Academic Year'}\n\n`
+      }
+      structuredContent += `Topic: ${topicName || 'Course Topic'}\n\n`
+      structuredContent += `GENERAL KNOWLEDGE CONTEXT:\n`
+      structuredContent += `Content should be generated based on standard academic knowledge for "${topicName}"\n\n`
+      const sourceMetadata = {
+        sourceCount: 0,
+        chunkCount: 0,
+        tokenEstimate: countTokens(structuredContent),
+        sourceNames: [],
+        usingCourseContext: true,
+      }
+      return { content: structuredContent, metadata: sourceMetadata }
     }
 
     // Process chunks to create a more structured context
@@ -184,6 +237,7 @@ export async function prepareSourceContent(selectedSources: ClientSource[]) {
       chunkCount: retrievedChunks.length,
       tokenEstimate: countTokens(structuredContent),
       sourceNames: Array.from(sourceGroups.keys()),
+      usingCourseContext: false,
     }
 
     return { content: structuredContent, metadata: sourceMetadata }
@@ -196,6 +250,7 @@ export async function prepareSourceContent(selectedSources: ClientSource[]) {
         chunkCount: 0,
         tokenEstimate: 0,
         sourceNames: [],
+        usingCourseContext: false,
       },
     }
   }
