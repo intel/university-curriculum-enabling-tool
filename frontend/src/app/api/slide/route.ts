@@ -4,8 +4,16 @@
 import { NextResponse } from 'next/server'
 import type { CourseContentRequest } from './types'
 import { generateCourseContent } from './content-generator'
+import { normalizeLanguage } from '@/lib/utils/lang'
 
 export const dynamic = 'force-dynamic'
+
+// Timeout for backend requests (ms), configurable via FASTAPI_TIMEOUT env var (default: 15000ms)
+const REQUEST_TIMEOUT_MS = (() => {
+  const val = process.env.FASTAPI_TIMEOUT
+  const parsed = val ? parseInt(val, 10) : NaN
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 15000
+})()
 
 export async function POST(req: Request) {
   try {
@@ -23,16 +31,52 @@ export async function POST(req: Request) {
       }
 
       try {
-        // Call the backend's generate-pptx endpoint
-        const backendGeneratePptxUrl = new URL('/generate-pptx', process.env.FASTAPI_SERVER_URL)
-          .href
-        const response = await fetch(backendGeneratePptxUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ content: requestData.content }),
-        })
+        // Resolve backend URL with safe fallback and explicit timeout
+        const baseBackendUrl =
+          process.env.FASTAPI_SERVER_URL ||
+          process.env.BACKEND_SERVER_URL ||
+          'http://127.0.0.1:8016'
+
+        let backendGeneratePptxUrl: string
+        try {
+          backendGeneratePptxUrl = new URL('/generate-pptx', baseBackendUrl).href
+        } catch (e) {
+          console.error('Invalid FASTAPI server URL:', baseBackendUrl, e)
+          throw new Error(
+            `Invalid FASTAPI_SERVER_URL configuration: ${baseBackendUrl}. Please set FASTAPI_SERVER_URL (e.g., http://127.0.0.1:8016).`,
+          )
+        }
+
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+        let response: Response
+        try {
+          response = await fetch(backendGeneratePptxUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ content: requestData.content, language: requestData.language }),
+            signal: controller.signal,
+          })
+        } catch (err: unknown) {
+          const isAbortError =
+            typeof err === 'object' &&
+            err !== null &&
+            'name' in err &&
+            (err as { name?: string }).name === 'AbortError'
+          if (isAbortError) {
+            throw new Error(
+              `Timed out connecting to backend at ${baseBackendUrl}. Ensure the FastAPI server is running.`,
+            )
+          }
+          // Node fetch ECONNREFUSED or other network errors
+          throw new Error(
+            `Failed to connect to backend at ${baseBackendUrl}. Ensure the FastAPI server is running and accessible. (Original error: ${(err as Error).message})`,
+          )
+        } finally {
+          clearTimeout(timeout)
+        }
 
         if (!response.ok) {
           const errorText = await response.text()
@@ -47,7 +91,6 @@ export async function POST(req: Request) {
 
           throw new Error(errorMessage)
         }
-
         // Get the response as a blob
         const blob = await response.blob()
 
@@ -91,7 +134,7 @@ export async function POST(req: Request) {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ content: requestData.content }),
+          body: JSON.stringify({ content: requestData.content, language: requestData.language }),
         })
 
         if (!response.ok) {
@@ -139,6 +182,8 @@ export async function POST(req: Request) {
       sessionLength,
       difficultyLevel,
       topicName,
+      language,
+      courseInfo,
     } = requestData
 
     console.log('Data from request:', {
@@ -149,7 +194,24 @@ export async function POST(req: Request) {
       sessionLength,
       difficultyLevel,
       topicName,
+      language,
     })
+
+    // Basic validation: ensure either sources or course info is provided
+    const hasValidSources =
+      Array.isArray(selectedSources) &&
+      selectedSources.length > 0 &&
+      selectedSources.every(
+        (source) => source && typeof source === 'object' && 'id' in source && 'name' in source,
+      )
+
+    if (!hasValidSources && !courseInfo?.courseName && !courseInfo?.courseDescription) {
+      console.warn('DEBUG: No sources or course information provided in POST /api/slide')
+      return NextResponse.json(
+        { error: 'Either sources or course information must be provided.' },
+        { status: 400 },
+      )
+    }
 
     // Generate course content
     const generatedContent = await generateCourseContent(
@@ -160,6 +222,8 @@ export async function POST(req: Request) {
       sessionLength,
       difficultyLevel,
       topicName,
+      normalizeLanguage(language),
+      courseInfo,
     )
 
     return NextResponse.json(generatedContent)

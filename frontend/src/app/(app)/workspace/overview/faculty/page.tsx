@@ -154,6 +154,7 @@ export default function FacultyOverviewPage() {
             </Button>
           </div>
 
+          {/* Overview content */}
           {/* Stats Cards */}
           <div className="mb-8 grid grid-cols-1 gap-6 md:grid-cols-3">
             <Card>
@@ -196,7 +197,6 @@ export default function FacultyOverviewPage() {
               </CardContent>
             </Card>
           </div>
-
           {/* Courses List */}
           <h2 className="mb-4 text-lg font-bold">Courses</h2>
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">

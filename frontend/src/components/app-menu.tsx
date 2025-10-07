@@ -120,6 +120,13 @@ export function AppMenu({ activeItem }: { activeItem?: string }) {
         personas: ['lecturer'],
       },
       {
+        id: 'settings',
+        label: 'Settings',
+        href: `/workspace/settings${activePersona ? `?persona=${activePersona}` : ''}`,
+        icon: <Cog className="h-4 w-4" />,
+        personas: ['faculty', 'lecturer', 'student'],
+      },
+      {
         id: 'study-plan',
         label: 'Study Plan',
         href: '/workspace/study-plan',
@@ -133,13 +140,6 @@ export function AppMenu({ activeItem }: { activeItem?: string }) {
       //   icon: <FileSpreadsheet className="h-4 w-4" />,
       //   personas: ["lecturer"],
       // },
-      {
-        id: 'settings',
-        label: 'Settings',
-        href: '/workspace/settings',
-        icon: <Cog className="h-4 w-4" />,
-        personas: ['faculty'],
-      },
     ]
 
     // Filter menu items based on active persona

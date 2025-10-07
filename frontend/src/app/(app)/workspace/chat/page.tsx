@@ -20,7 +20,7 @@ export default function ChatPage() {
   const [, setIsMobile] = useState(false)
   const router = useRouter()
   const { getActiveContextModelName } = useContextAvailability()
-  const { activePersona, personas } = usePersonaStore()
+  const { activePersona, personas, getPersonaLanguage } = usePersonaStore()
 
   // get model name based on selected model or course
   const modelName = getActiveContextModelName()
@@ -43,11 +43,23 @@ export default function ChatPage() {
     ? personas.find((persona) => persona.id === activePersona)?.name
     : 'Academic Assistant'
 
+  // Localize welcome message based on selected response language (per persona)
+  const lang = getPersonaLanguage()
+  const greeting =
+    lang === 'id'
+      ? `Halo! Saya ${activePersonaName} bertenaga AI Anda. `
+      : `Hello! I'm your AI ${activePersonaName}. `
+  const prompts: Record<'en' | 'id', string> = {
+    id: 'Bagaimana saya dapat membantu Anda hari ini? ',
+    en: 'How can I help you today? ',
+  }
+  const prompt = prompts[lang] ?? prompts.en
+
   const welcomeMessage: Message[] = [
     {
       id: 'welcome-1',
       role: 'assistant',
-      content: `Hello! I'm your AI ${activePersonaName}. ` + `How can I help you today? `,
+      content: greeting + prompt,
       createdAt: new Date(),
     },
   ]

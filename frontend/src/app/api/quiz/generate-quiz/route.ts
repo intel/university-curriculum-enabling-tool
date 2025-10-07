@@ -18,7 +18,7 @@ const TOKEN_CONTEXT_BUDGET = 1024
 
 export async function POST(req: Request) {
   try {
-    const { selectedModel, selectedSources, difficulty, numQuestions, questionType } =
+    const { selectedModel, selectedSources, difficulty, numQuestions, questionType, language } =
       await req.json()
 
     console.log('Data from request:', {
@@ -35,8 +35,8 @@ export async function POST(req: Request) {
     }
     const ollama = createOllama({ baseURL: ollamaUrl + '/api' })
 
-    const getQuestionTypePrompt = (type: string, difficulty: string) => {
-      const basePrompts = {
+    const getQuestionTypePrompt = (type: string, difficulty: string, lang: 'en' | 'id') => {
+      const basePromptsEN = {
         mcq: `Create multiple choice questions with:
         - Clear question text
         - Exactly 4 options per question
@@ -101,10 +101,103 @@ export async function POST(req: Request) {
         - Include both true and false statements in a balanced way`,
       }
 
-      return basePrompts[type as keyof typeof basePrompts] || ''
+      const basePromptsID = {
+        mcq: `Buat soal pilihan ganda dengan:
+        - Teks pertanyaan yang jelas
+        - Tepat 4 opsi per pertanyaan
+        - Satu jawaban benar
+        - Opsi lain harus masuk akal namun jelas salah
+        - ${
+          difficulty === 'easy'
+            ? 'Opsi sederhana dan berbeda jelas'
+            : difficulty === 'medium'
+              ? 'Pengecoh dengan tingkat kesulitan sedang'
+              : 'Pengecoh canggih yang membutuhkan analisis cermat'
+        }
+        - Penjelasan rinci mengapa jawaban benar tepat`,
+
+        fillInTheBlank: `Buat soal isian dengan:
+        - Kalimat atau paragraf yang utuh
+        - Tepat satu [BLANK] per pertanyaan untuk mengisi istilah kunci
+        - ${
+          difficulty === 'easy'
+            ? 'Kosakata dasar dan konsep sederhana'
+            : difficulty === 'medium'
+              ? 'Terminologi dan relasi yang lebih kompleks'
+              : 'Konsep lanjutan dan terminologi teknis'
+        }
+        - Bagian kosong harus menguji konsep penting
+        - Sertakan kata atau frasa tepat yang mengisi bagian kosong
+        - Sertakan petunjuk konteks dalam kalimat`,
+
+        shortAnswer: `Buat soal jawaban singkat dengan:
+        - Pertanyaan terbuka yang menuntut pemahaman
+        - Pertanyaan jelas dan fokus yang dapat dijawab dalam ${
+          difficulty === 'easy'
+            ? '1–2 kalimat sederhana'
+            : difficulty === 'medium'
+              ? '2–3 kalimat rinci'
+              : '3–4 kalimat komprehensif'
+        }
+        - Jawaban contoh yang memuat poin kunci
+        - Daftar variasi jawaban yang dapat diterima atau konsep kunci
+        - ${
+          difficulty === 'easy'
+            ? 'Konsep dasar dan jawaban lugas'
+            : difficulty === 'medium'
+              ? 'Beberapa konsep dan hubungan'
+              : 'Analisis kompleks dan penjelasan menyeluruh'
+        }
+        - Kriteria penilaian pada penjelasan`,
+
+        trueFalse: `Buat soal benar/salah dengan:
+        - Pernyataan yang jelas dan tidak ambigu (benar atau salah)
+        - ${
+          difficulty === 'easy'
+            ? 'Fakta dasar dan konsep sederhana'
+            : difficulty === 'medium'
+              ? 'Hubungan antar beberapa konsep'
+              : 'Relasi kompleks dan pemahaman yang bernuansa'
+        }
+        - Hindari kalimat berlapis negatif atau menjebak
+        - Penjelasan rinci mengapa pernyataan benar atau salah
+        - Fokus pada konsep penting dari konteks
+        - Seimbangkan jumlah pernyataan benar dan salah`,
+      }
+
+      const dict = lang === 'id' ? basePromptsID : basePromptsEN
+      return dict[type as keyof typeof dict] || ''
     }
 
-    const getDifficultyPrompt = (difficulty: string) => {
+    const getDifficultyPrompt = (difficulty: string, lang: 'en' | 'id') => {
+      if (lang === 'id') {
+        switch (difficulty) {
+          case 'easy':
+            return `Buat soal ramah pemula yang:
+      - Menggunakan bahasa sederhana dan jelas
+      - Berfokus pada konsep dasar dan definisi
+      - Memberikan jawaban yang langsung
+      - Menyertakan petunjuk konteks yang membantu
+      - Menghindari terminologi yang rumit`
+          case 'medium':
+            return `Buat soal tingkat menengah yang:
+      - Menggabungkan beberapa konsep
+      - Membutuhkan pemikiran analitis
+      - Menguji pemahaman hubungan antar konsep
+      - Menyertakan sebagian terminologi teknis
+      - Menantang peserta untuk menerapkan pengetahuannya`
+          case 'hard':
+            return `Buat soal tingkat lanjut yang:
+      - Menguji pemahaman mendalam terhadap konsep kompleks
+      - Membutuhkan pemikiran kritis dan analisis
+      - Menyertakan terminologi dan konsep tingkat lanjut
+      - Menantang peserta mensintesis informasi
+      - Menguji kasus tepi dan pemahaman yang bernuansa`
+          default:
+            return ''
+        }
+      }
+      // English default
       switch (difficulty) {
         case 'easy':
           return `Create beginner-friendly questions that:
@@ -132,13 +225,54 @@ export async function POST(req: Request) {
       }
     }
 
-    const quizSystemPrompt = `You are a quiz generator. Create a ${difficulty} difficulty quiz with EXACTLY ${numQuestions} questions of type "${questionType}" based on the provided context.
+    const quizLanguageDirective =
+      language === 'id'
+        ? 'PENTING: Anda harus menghasilkan seluruh keluaran kuis dalam Bahasa Indonesia.'
+        : 'IMPORTANT: You must produce the entire quiz output in English.'
 
-${getDifficultyPrompt(difficulty)}
+    const quizSystemPrompt =
+      language === 'id'
+        ? `${quizLanguageDirective}\n\nAnda adalah generator kuis. Buat kuis tingkat kesulitan ${difficulty} dengan TEPAT ${numQuestions} pertanyaan bertipe "${questionType}" berdasarkan konteks yang diberikan.
 
-${getQuestionTypePrompt(questionType, difficulty)}
+${getDifficultyPrompt(difficulty, language)}
 
-Format ALL questions as a JSON object with this structure:
+${getQuestionTypePrompt(questionType, difficulty, language)}
+
+Format SEMUA pertanyaan sebagai objek JSON dengan struktur berikut (JANGAN terjemahkan kunci JSON — gunakan tepat: questions, question, options, statement, correctAnswer, explanation, type, difficulty):
+{
+  "questions": [
+    ${
+      questionType === 'trueFalse'
+        ? `{
+              "statement": "Pernyataan yang dievaluasi sebagai benar atau salah",
+              "correctAnswer": "true",
+              "explanation": "Penjelasan rinci mengapa pernyataan benar atau salah. HARUS berupa string (bukan objek/array) dan tersusun baik untuk dibaca manusia. Dalam 1 atau 2 kalimat.",
+              "type": "trueFalse",
+              "difficulty": "${difficulty}"
+            }`
+        : `{
+              "question": "Teks pertanyaan ${questionType === 'fillInTheBlank' ? 'dengan [BLANK]' : ''}",
+              ${questionType === 'mcq' ? '"options": ["Option 1", "Option 2", "Option 3", "Option 4"],' : ''}
+              "correctAnswer": "Jawaban benar atau kata untuk mengisi blank",
+              "explanation": "Penjelasan rinci beserta kriteria penilaian. HARUS berupa string (bukan objek/array) dan terstruktur baik untuk dibaca manusia.",
+              "type": "${questionType}",
+              "difficulty": "${difficulty}"
+            }`
+    }
+  ]
+}
+
+PENTING:
+- SEMUA pertanyaan HARUS bertipe "${questionType}"
+- SEMUA pertanyaan HARUS mempertahankan tingkat kesulitan ${difficulty}
+- Penjelasan harus sesuai dengan tingkat kesulitan`
+        : `${quizLanguageDirective}\n\nYou are a quiz generator. Create a ${difficulty} difficulty quiz with EXACTLY ${numQuestions} questions of type "${questionType}" based on the provided context.
+
+${getDifficultyPrompt(difficulty, language)}
+
+${getQuestionTypePrompt(questionType, difficulty, language)}
+
+Format ALL questions as a JSON object with this structure (Do NOT translate JSON keys — use exactly: questions, question, options, statement, correctAnswer, explanation, type, difficulty):
 {
   "questions": [
     ${
@@ -174,7 +308,10 @@ IMPORTANT:
 
     const userMessage: CoreMessage = {
       role: 'user',
-      content: `Generate ${numQuestions} ${questionType} questions based on the provided context.`,
+      content:
+        language === 'id'
+          ? `Hasilkan ${numQuestions} pertanyaan bertipe ${questionType} berdasarkan konteks yang diberikan.`
+          : `Generate ${numQuestions} ${questionType} questions based on the provided context.`,
     }
 
     let usedTokens =
@@ -251,6 +388,115 @@ IMPORTANT:
         `Duration: ${timeTakenSeconds.toFixed(2)} s`,
     )
     console.log('Generated Quiz:', JSON.stringify(quiz, null, 2))
+
+    // Normalize the quiz shape to always be { questions: [...] } and fix true/false specifics
+    type NormalizedQuestion = {
+      type: string
+      difficulty: string
+      question: string
+      statement?: string
+      options?: string[]
+      correctAnswer: string
+      explanation: string
+      // allow passthrough unknown extra fields without typing here
+      [key: string]: unknown
+    }
+
+    const isRecord = (val: unknown): val is Record<string, unknown> =>
+      typeof val === 'object' && val !== null
+
+    const normalizeQuiz = (
+      raw: unknown,
+      expectedType: string,
+      expectedDifficulty: string,
+    ): { questions: NormalizedQuestion[] } => {
+      const extractQuestionsArray = (input: unknown): unknown[] => {
+        if (!input) return []
+        if (Array.isArray(input)) return input
+        if (isRecord(input)) {
+          const qVal = input.questions
+          if (Array.isArray(qVal)) return qVal as unknown[]
+          // try to find array value in object values
+          const arrVal = Object.values(input).find((v) => Array.isArray(v))
+          if (Array.isArray(arrVal)) return arrVal as unknown[]
+        }
+        return []
+      }
+
+      const toStringSafe = (v: unknown): string => {
+        if (v === undefined || v === null) return ''
+        if (typeof v === 'string') return v
+        if (typeof v === 'boolean') {
+          // Language-independent normalization for boolean-like fields
+          return v ? 'True' : 'False'
+        }
+        try {
+          return JSON.stringify(v)
+        } catch {
+          return String(v)
+        }
+      }
+
+      const normType = (val: unknown): string => {
+        const s = toStringSafe(val).toLowerCase()
+        return s
+      }
+
+      const isTrueFalseType = (t: string): boolean => {
+        const cleaned = t.replace(/[^a-z]/gi, '').toLowerCase()
+        return cleaned === 'truefalse'
+      }
+
+      const normalized = extractQuestionsArray(raw).map((item): NormalizedQuestion => {
+        const q = isRecord(item) ? (item as Record<string, unknown>) : {}
+        const rawType = q.type ?? expectedType
+        const typeStr = toStringSafe(rawType)
+        const isTF = isTrueFalseType(normType(typeStr)) || expectedType === 'trueFalse'
+        const statementVal = q.statement ?? q.Question ?? q.text
+        const statement = statementVal !== undefined ? toStringSafe(statementVal) : undefined
+        const questionTextVal = q.question ?? statementVal ?? ''
+        const questionText = toStringSafe(questionTextVal)
+        const correctAnsRaw = q.correctAnswer ?? q.answer
+        const correctAnswer = isTF
+          ? toStringSafe(
+              typeof correctAnsRaw === 'boolean'
+                ? correctAnsRaw
+                : typeof correctAnsRaw === 'string'
+                  ? /^(true|false)$/i.test(correctAnsRaw)
+                    ? correctAnsRaw.toLowerCase() === 'true'
+                      ? 'True'
+                      : 'False'
+                    : correctAnsRaw
+                  : correctAnsRaw,
+            )
+          : toStringSafe(correctAnsRaw)
+
+        // ensure options for true/false
+        let options: string[] | undefined
+        if (isTF) {
+          options = ['True', 'False']
+        } else if (Array.isArray(q.options)) {
+          options = (q.options as unknown[]).map((o) => toStringSafe(o))
+        }
+
+        const explanation = toStringSafe(q.explanation)
+
+        return {
+          ...q,
+          type: isTF ? 'trueFalse' : typeStr || expectedType,
+          difficulty: toStringSafe(q.difficulty || expectedDifficulty) || expectedDifficulty,
+          question: questionText,
+          ...(statement ? { statement } : {}),
+          correctAnswer,
+          ...(options ? { options } : {}),
+          explanation,
+        }
+      })
+
+      return { questions: normalized }
+    }
+
+    const normalizedQuiz = normalizeQuiz(quiz, questionType, difficulty)
     // // Validate question types
     // interface QuizQuestion {
     //     type: string
@@ -290,7 +536,7 @@ IMPORTANT:
     //     )
     //   }
 
-    return NextResponse.json(quiz)
+    return NextResponse.json(normalizedQuiz)
   } catch (error) {
     console.error('Error in summary generation:', error)
     return errorResponse('An unexpected error occurred', null, 500)
