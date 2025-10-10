@@ -57,7 +57,8 @@ export default function AssessmentEditor({
   metadata,
   onUpdateMetadata,
 }: AssessmentEditorProps) {
-  const isProjectType = assessment.type.toLowerCase().includes('project')
+  // Treat both English and Indonesian labels as project type (e.g., "Project" or "Proyek")
+  const isProjectType = /\b(project|proyek)\b/i.test(assessment.type)
   const [previewMode, setPreviewMode] = useState<boolean>(false)
 
   // Function to clean Markdown formatting from text
@@ -579,6 +580,21 @@ function RubricsEditor({ question, isEditing, previewMode, onUpdate }: RubricsEd
         }) as ExplanationObject,
   )
 
+  // Helpers to support both English and Indonesian rubric category labels
+  const rubricPrefixes = {
+    report: ['Report - ', 'Laporan - '],
+    demo: ['Demo - ', 'Presentasi Demo - '],
+    individual: ['Individual Contribution - ', 'Kontribusi Individu - '],
+  }
+
+  const startsWithAny = (name: string, prefixes: string[]) =>
+    prefixes.some((p) => name.startsWith(p))
+
+  const removeAnyPrefix = (name: string, prefixes: string[]) => {
+    for (const p of prefixes) if (name.startsWith(p)) return name.slice(p.length)
+    return name
+  }
+
   // Function to update the explanation object and propagate changes
   const updateExplanation = (newExplanation: ExplanationObject) => {
     setExplanation(newExplanation)
@@ -696,16 +712,32 @@ function RubricsEditor({ question, isEditing, previewMode, onUpdate }: RubricsEd
     )
   }
 
-  // Group criteria by category
-  const reportCriteria = explanation.criteria?.filter((c) => c.name.includes('Report')) || []
-  const demoCriteria = explanation.criteria?.filter((c) => c.name.includes('Demo')) || []
+  // Group criteria by category (supports EN + ID prefixes)
+  const reportCriteria =
+    explanation.criteria?.filter((c) => startsWithAny(c.name, rubricPrefixes.report)) || []
+  const demoCriteria =
+    explanation.criteria?.filter((c) => startsWithAny(c.name, rubricPrefixes.demo)) || []
   const individualCriteria =
-    explanation.criteria?.filter((c) => c.name.includes('Individual')) || []
+    explanation.criteria?.filter((c) => startsWithAny(c.name, rubricPrefixes.individual)) || []
   const otherCriteria =
     explanation.criteria?.filter(
       (c) =>
-        !c.name.includes('Report') && !c.name.includes('Demo') && !c.name.includes('Individual'),
+        !startsWithAny(c.name, rubricPrefixes.report) &&
+        !startsWithAny(c.name, rubricPrefixes.demo) &&
+        !startsWithAny(c.name, rubricPrefixes.individual),
     ) || []
+
+  // Prefer provided marking scale (could be Indonesian) with English fallback
+  const explanationObj: ExplanationObject | null =
+    typeof question.explanation === 'object' ? (question.explanation as ExplanationObject) : null
+  let markingScaleText =
+    'Marking Scale: 1 - Poor, 2 - Acceptable, 3 - Average, 4 - Good, 5- Excellent.'
+  if (explanationObj) {
+    const maybeScale = (explanationObj as Record<string, unknown>)['markingScale']
+    if (typeof maybeScale === 'string') {
+      markingScaleText = maybeScale
+    }
+  }
 
   return (
     <Card>
@@ -1274,9 +1306,7 @@ function RubricsEditor({ question, isEditing, previewMode, onUpdate }: RubricsEd
             ) : (
               <div>
                 <h4 className="mb-4 font-medium">Grading Rubrics</h4>
-                <p className="mb-4">
-                  Marking Scale: 1 - Poor, 2 - Acceptable, 3 - Average, 4 - Good, 5- Excellent.
-                </p>
+                <p className="mb-4">{markingScaleText}</p>
 
                 {/* Report Criteria */}
                 {reportCriteria.length > 0 && (
@@ -1309,7 +1339,7 @@ function RubricsEditor({ question, isEditing, previewMode, onUpdate }: RubricsEd
                               className={index % 2 === 0 ? 'bg-gray-80' : 'bg-gray-60'}
                             >
                               <td className="border border-gray-300 px-4 py-2 font-medium">
-                                {criterion.name.replace('Report - ', '')}
+                                {removeAnyPrefix(criterion.name, rubricPrefixes.report)}
                               </td>
                               <td className="border border-gray-300 px-4 py-2">A, A-</td>
                               <td className="border border-gray-300 px-4 py-2">B+, B, B-</td>
@@ -1355,7 +1385,7 @@ function RubricsEditor({ question, isEditing, previewMode, onUpdate }: RubricsEd
                               className={index % 2 === 0 ? 'bg-gray-80' : 'bg-gray-60'}
                             >
                               <td className="border border-gray-300 px-4 py-2 font-medium">
-                                {criterion.name.replace('Demo - ', '')}
+                                {removeAnyPrefix(criterion.name, rubricPrefixes.demo)}
                               </td>
                               <td className="border border-gray-300 px-4 py-2">A, A-</td>
                               <td className="border border-gray-300 px-4 py-2">B+, B, B-</td>
@@ -1401,7 +1431,7 @@ function RubricsEditor({ question, isEditing, previewMode, onUpdate }: RubricsEd
                               className={index % 2 === 0 ? 'bg-gray-80' : 'bg-gray-60'}
                             >
                               <td className="border border-gray-300 px-4 py-2 font-medium">
-                                {criterion.name.replace('Individual Contribution - ', '')}
+                                {removeAnyPrefix(criterion.name, rubricPrefixes.individual)}
                               </td>
                               <td className="border border-gray-300 px-4 py-2">A, A-</td>
                               <td className="border border-gray-300 px-4 py-2">B+, B, B-</td>

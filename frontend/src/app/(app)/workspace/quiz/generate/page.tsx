@@ -47,6 +47,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Document, Paragraph, TextRun, Packer, AlignmentType } from 'docx'
 import { useRouter } from 'next/navigation'
+import { usePersonaStore } from '@/lib/store/persona-store'
 
 interface Question {
   id: string
@@ -93,6 +94,7 @@ export default function QuizGeneratorLecturer() {
   const selectedSources = useSourcesStore((state) => state.selectedSources)
   const { getActiveContextModelName, getContextTypeLabel } = useContextAvailability()
   const modelName = getActiveContextModelName()
+  const { activePersona, getPersonaLanguage } = usePersonaStore()
 
   const generateQuiz = async () => {
     if (!getActiveContextModelName()) {
@@ -124,6 +126,7 @@ export default function QuizGeneratorLecturer() {
           difficulty,
           questionType,
           searchKeywords, // Add searchKeywords to the request body
+          language: getPersonaLanguage(activePersona),
         }),
       })
       const data = await response.json()
@@ -303,6 +306,33 @@ export default function QuizGeneratorLecturer() {
   const exportQuizAsWordDoc = () => {
     if (!currentQuiz) return
 
+    // Determine language from persona
+    const lang = getPersonaLanguage(activePersona)
+    const labels =
+      lang === 'id'
+        ? {
+            studentName: 'Nama Mahasiswa:',
+            date: 'Tanggal:',
+            quizPrefix: 'Kuis: ',
+            description: 'Deskripsi: ',
+            instructionLabel: 'Instruksi: ',
+            instructionText:
+              'Kuis ini terdiri dari beberapa pertanyaan. Bacalah setiap pertanyaan dengan cermat dan berikan jawaban yang benar.',
+            trueLabel: 'Benar',
+            falseLabel: 'Salah',
+          }
+        : {
+            studentName: 'Student Name:',
+            date: 'Date:',
+            quizPrefix: 'Quiz: ',
+            description: 'Description: ',
+            instructionLabel: 'Instruction: ',
+            instructionText:
+              'This quiz contains multiple questions. Read each question carefully and provide the correct answers.',
+            trueLabel: 'True',
+            falseLabel: 'False',
+          }
+
     // Create document content
     const doc = new Document({
       sections: [
@@ -312,9 +342,9 @@ export default function QuizGeneratorLecturer() {
             // Student info
             new Paragraph({
               children: [
-                new TextRun('Student Name:'),
+                new TextRun(labels.studentName),
                 new TextRun('\t'.repeat(10)),
-                new TextRun('Date:'),
+                new TextRun(labels.date),
               ],
               spacing: { after: 100 },
             }),
@@ -322,7 +352,7 @@ export default function QuizGeneratorLecturer() {
             new Paragraph({
               children: [
                 new TextRun({
-                  text: `Quiz: ${currentQuiz.title}`,
+                  text: `${labels.quizPrefix}${currentQuiz.title}`,
                   size: 24,
                   bold: true,
                 }),
@@ -336,7 +366,7 @@ export default function QuizGeneratorLecturer() {
               ? [
                   new Paragraph({
                     children: [
-                      new TextRun({ text: 'Description: ' }),
+                      new TextRun({ text: labels.description }),
                       new TextRun({ text: currentQuiz.description }),
                     ],
                     spacing: { after: 100 },
@@ -347,10 +377,8 @@ export default function QuizGeneratorLecturer() {
             // Quiz instructions
             new Paragraph({
               children: [
-                new TextRun({ text: 'Instruction: ', bold: true }),
-                new TextRun({
-                  text: 'This quiz contains multiple questions. Read each question carefully and provide the correct answers. ',
-                }),
+                new TextRun({ text: labels.instructionLabel, bold: true }),
+                new TextRun({ text: ` ${labels.instructionText} ` }),
               ],
               spacing: { after: 300 },
             }),
@@ -375,7 +403,7 @@ export default function QuizGeneratorLecturer() {
 
               // For True/False questions
               ...(question.type === 'trueFalse'
-                ? ['True', 'False'].map(
+                ? [labels.trueLabel, labels.falseLabel].map(
                     (option, idx) =>
                       new Paragraph({
                         text: `${String.fromCharCode(65 + idx)}.  ${option}`, // A. True, B. False

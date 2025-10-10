@@ -1877,7 +1877,7 @@ export async function setupOllama(force = false) {
     const version = readEnvVariable('OLLAMA_VERSION', "2.2.0");
     const archiveExtension = isWindows ? "zip" : "tgz";
     const ollamaArchive = `ollama-ipex-llm-${version}-${isWindows ? "win" : "ubuntu"}.${archiveExtension}`;
-    const ollamaDownloadUrl = `https://github.com/ipex-llm/ipex-llm/releases/download/v${version}/${ollamaArchive}`;
+    const ollamaDownloadUrl = `https://github.com/ipex-llm/ipex-llm/releases/download/v${version}/ollama-ipex-llm-${version}-${isWindows ? "win" : "ubuntu"}.${archiveExtension}`;
     
     // Ensure parent directory exists
     const ollamaParentDir = path.dirname(ollamaPath);

@@ -139,6 +139,7 @@ def get_result(job_id: str):
 
 class PPTXRequest(BaseModel):
     content: dict
+    language: str | None = "en"
 
 
 def validate_and_transform_content(content: dict) -> dict:
@@ -154,7 +155,7 @@ def validate_and_transform_content(content: dict) -> dict:
     """
     # Ensure required keys exist with default values if missing
     transformed_content = {
-        "title": content.get("title", "Untitled Presentation"),
+        "title": content.get("title", ""),
         "contentType": content.get("contentType", "lecture"),
         "difficultyLevel": content.get("difficultyLevel", "intermediate"),
         "slides": content.get("slides", []),
@@ -167,13 +168,13 @@ def validate_and_transform_content(content: dict) -> dict:
 
     # Validate slides structure
     for slide in transformed_content["slides"]:
-        slide.setdefault("title", "Untitled Slide")
+        slide.setdefault("title", "")
         slide.setdefault("content", [])
         slide.setdefault("notes", "")
 
     # Validate activities structure
     for activity in transformed_content["activities"]:
-        activity.setdefault("title", "Untitled Activity")
+        activity.setdefault("title", "")
         activity.setdefault("description", "")
         activity.setdefault("type", "Exercise")
         activity.setdefault("duration", "20 minutes")
@@ -192,13 +193,13 @@ def validate_and_transform_content(content: dict) -> dict:
 
     # Validate key terms structure
     for term in transformed_content["keyTerms"]:
-        term.setdefault("term", "Untitled Term")
-        term.setdefault("definition", "No definition provided.")
+        term.setdefault("term", "")
+        term.setdefault("definition", "")
 
     # Validate further readings structure
     for reading in transformed_content["furtherReadings"]:
-        reading.setdefault("title", "Untitled Reading")
-        reading.setdefault("author", "Unknown Author")
+        reading.setdefault("title", "")
+        reading.setdefault("author", "")
         reading.setdefault("readingDescription", "")
 
     return transformed_content
@@ -222,7 +223,10 @@ async def generate_pptx(request: PPTXRequest):
         print(temp_pptx_path)
 
         # Generate the PPTX file
-        create_pptx(transformed_content, temp_pptx_path)
+        lang = (request.language or "en").lower()
+        if lang not in ["en", "id"]:
+            lang = "en"
+        create_pptx(transformed_content, temp_pptx_path, lang)
         print(f"Temporary PPTX file created at: {temp_pptx_path}")
 
         if not os.path.exists(temp_pptx_path):

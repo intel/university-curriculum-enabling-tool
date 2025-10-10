@@ -33,7 +33,7 @@ const TOKEN_CONTEXT_BUDGET = TOKEN_MAX - TOKEN_RESPONSE_BUDGET
  * @returns A promise that resolves to a response object.
  */
 export async function POST(req: Request) {
-  const { messages, selectedModel, selectedSources } = await req.json()
+  const { messages, selectedModel, selectedSources, language } = await req.json()
   console.log('DEBUG: CHAT API selectedModel:', selectedModel)
 
   // Prepare: Ollama provider
@@ -108,9 +108,42 @@ export async function POST(req: Request) {
     }
   }
 
-  const systemPrompt = `
+  const languageDirective =
+    language === 'id' ? 'Selalu balas dalam Bahasa Indonesia.' : 'Always reply in English.'
+
+  const systemPrompt =
+    language === 'id'
+      ? `
+Anda adalah asisten AI percakapan yang andal dan berpengetahuan.
+${languageDirective}
+Pedoman Umum:
+Gunakan HANYA informasi yang disediakan di bawah ini untuk jawaban Anda.
+Jika diperlukan daftar, tampilkan jumlah item alih-alih bullet.
+JANGAN menyimpulkan atau menghasilkan informasi di luar data yang diberikan.
+Jika konteks relevan tersedia, jelaskan bahwa jawaban Anda didasarkan pada informasi tersebut.
+Jika tidak ada konteks yang tersedia, balas dengan:
+"Saya tidak memiliki cukup informasi untuk menjawab pertanyaan tersebut."
+Namun, bila memungkinkan, berikan juga sesuatu yang terkait dengan pertanyaan untuk tetap membantu dan natural.
+Jika pengguna ingin detail lebih lanjut, tanyakan apakah mereka ingin mengeksplorasi topik tersebut lebih jauh.
+Pastikan jawaban Anda selalu berbasis pada pengetahuan yang disediakan dan, bila tepat, rujuk bagian spesifik darinya.
+${
+  mostRelevantImageMarkdown
+    ? `Selalu sertakan markdown gambar relevan ini: ${mostRelevantImageMarkdown} dalam jawaban Anda.
+Posisikan markdown gambar: ${mostRelevantImageMarkdown} secara tepat dalam jawaban untuk meningkatkan kejelasan dan relevansi.
+Hindari penggunaan tag gambar HTML seperti <img> dalam jawaban.
+Jika pertanyaan secara khusus meminta representasi visual, prioritaskan menyertakan markdown gambar di awal jawaban.`
+    : ''
+}
+
+Tambahkan di akhir jawaban bagian singkat berlabel "Ringkasan penalaran:" yang:
+- Merangkum pendekatan Anda secara tingkat tinggi (tanpa langkah-langkah rinci).
+- Menyebutkan sumber/bagian yang dirujuk (judul atau ID jika ada).
+- Menyebutkan asumsi/keterbatasan yang relevan.
+Batasi hingga 2–3 butir. Jangan mengungkap rantai penalaran internal atau langkah-langkah tersembunyi.
+`
+      : `
 You are a knowledgeable and reliable AI chat assistant.
-Always reply in English.
+${languageDirective}
 General Guidelines:
 Use ONLY the information provided below for your responses.
 If a list of items is required, show the number of items instead of bullets.
@@ -129,6 +162,12 @@ Avoid using HTML image tags such as <img> in your response.
 If the query specifically asks for a visual representation, prioritize including the image markdown early in your response.`
     : ''
 }
+
+At the end of the answer, add a short section labeled "Reasoning summary:" that:
+- Summarizes your high-level approach (no detailed steps).
+- Mentions the sources/sections referenced (titles or IDs if available).
+- Notes any relevant assumptions/limitations.
+Keep it to 2–3 bullets. Do not reveal internal chain-of-thought or hidden step-by-step reasoning.
 `
 
   const systemMessage: CoreMessage = {

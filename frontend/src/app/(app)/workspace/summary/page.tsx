@@ -72,7 +72,12 @@ export default function SummaryPage() {
     setError,
     setSelectedModel,
   } = useSummaryStore()
-  const { activePersona, selectedCourseId } = usePersonaStore()
+  const { activePersona, selectedCourseId, getPersonaLanguage } = usePersonaStore()
+  const lang = getPersonaLanguage(activePersona)
+  const labels =
+    lang === 'id'
+      ? { sourceChunk: 'Potongan Sumber', sourceId: 'ID Sumber', order: 'Urutan' }
+      : { sourceChunk: 'Source Chunk', sourceId: 'Source ID', order: 'Order' }
   const { selectedSources } = useSourcesStore()
   const { getActiveContextModelName, getContextTypeLabel } = useContextAvailability()
   const { data: coursesData } = useCourses()
@@ -140,6 +145,7 @@ export default function SummaryPage() {
           selectedModel: modelName,
           selectedSources: sourcesToUse,
           courseInfo,
+          language: getPersonaLanguage(activePersona),
         }),
       })
 
@@ -686,11 +692,14 @@ export default function SummaryPage() {
                                                   }}
                                                 >
                                                   <div className="mb-6 text-xs opacity-80">
-                                                    Source Chunk #{ref.chunkIndex + 1}
+                                                    {labels.sourceChunk} #{ref.chunkIndex + 1}
                                                     {ref.sourceId && (
                                                       <span className="ml-2 opacity-80">
-                                                        (Source ID: {ref.sourceId}, Order:{' '}
-                                                        {ref.order})
+                                                        {'('}
+                                                        {labels.sourceId}: {ref.sourceId}
+                                                        {', '}
+                                                        {labels.order}: {ref.order}
+                                                        {')'}
                                                       </span>
                                                     )}
                                                   </div>
@@ -834,10 +843,14 @@ export default function SummaryPage() {
                                               }}
                                             >
                                               <div className="mb-6 text-xs opacity-80">
-                                                Source Chunk #{ref.chunkIndex + 1}
+                                                {labels.sourceChunk} #{ref.chunkIndex + 1}
                                                 {ref.sourceId && (
                                                   <span className="ml-2 opacity-80">
-                                                    (Source ID: {ref.sourceId}, Order: {ref.order})
+                                                    {'('}
+                                                    {labels.sourceId}: {ref.sourceId}
+                                                    {', '}
+                                                    {labels.order}: {ref.order}
+                                                    {')'}
                                                   </span>
                                                 )}
                                               </div>

@@ -7,6 +7,7 @@ import type { CourseInfo } from '@/lib/types/course-info-types'
 import { getStoredChunks } from '@/lib/chunk/get-stored-chunks'
 import type { AssessmentQuestion } from './types'
 import { fallbackDiscussionIdeas } from './fallback-content'
+import { jsonrepair } from 'jsonrepair'
 
 // Configuration constants
 export const TEMPERATURE = Number.parseFloat(process.env.RAG_TEMPERATURE || '0.1')
@@ -44,6 +45,16 @@ export function truncateToTokenLimit(text: string, maxTokens: number): string {
   return result.trim() + '...'
 }
 
+// Safe wrapper around jsonrepair to guard against exceptions and return original text on failure
+export function safeJsonRepair(text: string): string {
+  try {
+    return jsonrepair(text)
+  } catch (err) {
+    console.warn('jsonrepair failed, using original text:', err)
+    return text
+  }
+}
+
 // Utility function to safely parse JSON with fallbacks
 export function safeJsonParse(jsonString: string, fallback: unknown = {}) {
   try {
@@ -54,31 +65,136 @@ export function safeJsonParse(jsonString: string, fallback: unknown = {}) {
   }
 }
 
+// Lightweight cleanup that fixes common JSON issues without external libraries
+export function basicJsonCleanup(json: string): string {
+  try {
+    let s = json
+    // Remove non-printable characters
+    s = s.replace(/[\x00-\x1F\x7F-\x9F]/g, '')
+    // Remove trailing commas in objects/arrays
+    s = s.replace(/,(\s*[}\]])/g, '$1')
+    // Quote unquoted object keys
+    s = s.replace(/([{,]\s*)([a-zA-Z0-9_]+)(\s*:)/g, '$1"$2"$3')
+    // Quote simple bareword values (conservative)
+    s = s.replace(/:\s*([^"{}\[\],\s][^{}\[\],]*?)(\s*[,}])/g, ':"$1"$2')
+    return s
+  } catch (e) {
+    console.warn('basicJsonCleanup failed; returning original string:', e)
+    return json
+  }
+}
+
+/**
+ * Extracts JSON content from code-fenced blocks (e.g., ```json ... ```) within the input text.
+ * Employs multiple fallback strategies to maximize the chance of retrieving valid JSON:
+ * 1. Returns the first code-fenced block that parses as JSON.
+ * 2. Attempts to repair and parse each block using `jsonrepair` if direct parsing fails.
+ * 3. If multiple blocks are present, tries to combine all parseable blocks into a JSON array.
+ * 4. If all else fails, returns the first code-fenced block or the trimmed original text.
+ *
+ * @param {string} text - The input string potentially containing code-fenced JSON blocks.
+ * @returns {string} The extracted or repaired JSON string, or the original text if extraction fails.
+ */
+
+// Utility function to extract JSON from code-fenced blocks in text.
+function stripCodeFences(text: string): string {
+  // Remove ```json ... ``` or ``` ... ``` fences if present.
+  // If multiple code fences are present, prefer returning the first valid JSON block.
+  // If none are individually valid, attempt to return a JSON array of all parseable blocks.
+  const fenceRegex = /```(?:json)?\s*([\s\S]*?)\s*```/gi
+  const contents: string[] = []
+  let match: RegExpExecArray | null
+  while ((match = fenceRegex.exec(text)) !== null) {
+    contents.push(match[1].trim())
+  }
+  if (contents.length > 0) {
+    // 1) Try to return the first block that parses as JSON
+    for (const block of contents) {
+      try {
+        JSON.parse(block)
+        return block
+      } catch {
+        // Try lightweight cleanup before falling back to jsonrepair
+        try {
+          const cleaned = basicJsonCleanup(block)
+          JSON.parse(cleaned)
+          return cleaned
+        } catch {
+          // continue
+        }
+        try {
+          const repaired = safeJsonRepair(block)
+          JSON.parse(repaired)
+          return repaired
+        } catch {
+          // continue checking next block
+        }
+      }
+    }
+
+    // 2) Try to combine all parseable blocks into a JSON array
+    const parsedItems: unknown[] = []
+    let allParsed = true
+    for (const block of contents) {
+      try {
+        parsedItems.push(JSON.parse(block))
+      } catch {
+        try {
+          parsedItems.push(JSON.parse(basicJsonCleanup(block)))
+        } catch {
+          try {
+            parsedItems.push(JSON.parse(safeJsonRepair(block)))
+          } catch {
+            allParsed = false
+            break
+          }
+        }
+      }
+    }
+    if (allParsed) {
+      return JSON.stringify(parsedItems)
+    }
+
+    // 3) Fallback: return the first block (better than concatenation which may be invalid JSON)
+    return contents[0]
+  }
+  return text.trim()
+}
+
 // More robust JSON extraction function
 export function extractAndParseJSON(text: string) {
+  const input = stripCodeFences(text)
   try {
-    // First try to parse the entire text as JSON
-    return JSON.parse(text)
+    return JSON.parse(input)
   } catch {
-    console.log('Failed to parse entire response as JSON, attempting to extract JSON...')
+    // Try jsonrepair on the whole response first
+    try {
+      return JSON.parse(safeJsonRepair(input))
+    } catch {
+      console.log('Failed to parse entire response as JSON, attempting to extract JSON...')
+    }
 
     // Try to extract JSON object or array from the text using regex
     const jsonRegex = /(\{[\s\S]*\}|\[[\s\S]*\])/
-    const match = text.match(jsonRegex)
+    const match = input.match(jsonRegex)
 
     if (match && match[0]) {
+      const candidate = stripCodeFences(match[0])
+      // Try direct parse
       try {
-        return JSON.parse(match[0])
+        return JSON.parse(candidate)
       } catch {
-        console.log('Failed to parse extracted JSON, attempting cleanup...')
+        console.log('Failed to parse extracted JSON, attempting cleanup/repair...')
+      }
 
-        // Try to clean up common issues and parse again
-        const cleanedJSON = match[0]
-          // Fix trailing commas
+      // Try jsonrepair on the extracted candidate
+      try {
+        return JSON.parse(safeJsonRepair(candidate))
+      } catch {
+        // Fallback minimal cleanup
+        const cleanedJSON = candidate
           .replace(/,(\s*[}\]])/g, '$1')
-          // Fix missing quotes around property names
           .replace(/([{,]\s*)([a-zA-Z0-9_]+)(\s*:)/g, '$1"$2"$3')
-          // Fix unquoted string values
           .replace(/:\s*([^"{}[\],\s][^{}[\],]*?)(\s*[,}])/g, ':"$1"$2')
 
         try {
@@ -434,39 +550,39 @@ export function parseQuestionsText(text: string, assessmentType: string): Assess
 // Get content type prompt
 export function getContentTypePrompt(type: string) {
   const contentPrompts = {
-    lecture: `Create a comprehensive lecture including:
-- Clear, measurable learning outcomes
-- At least 5-10 key terms with detailed definitions
-- Engaging introduction that establishes relevance and context
-- At least 5-10 detailed slides with substantial teaching material on each slide
-- Comprehensive speaker notes for each slide with additional examples and explanations
-- Relevant in-class activities with clear instructions and purpose
-- Specific assessment ideas that align with learning outcomes
-- Annotated further reading suggestions with brief descriptions`,
+    lecture: `Create a comprehensive lecture that includes:
+  - Clear, measurable learning outcomes
+  - At least 5-10 key terms with detailed definitions
+  - An engaging introduction that sets relevance and context
+  - At least 5-10 detailed slides with substantial teaching material on each slide
+  - Comprehensive speaker notes for each slide with examples and additional explanations
+  - In-class activities with clear instructions and objectives
+  - Specific assessment ideas aligned to the learning outcomes
+  - Suggested further readings with brief annotations`,
 
-    tutorial: `Create a detailed tutorial including:
-- Specific learning outcomes that build practical skills
-- At least 5-10 key terms with detailed definitions
-- Clear step-by-step instructions with examples and explanations
-- Scaffolded practice exercises with increasing difficulty
-- Sample solutions with detailed explanations of the process
-- Common misconceptions and how to address them
-- Formative assessment opportunities throughout
-- Reflection points to consolidate learning
-- Practical applications that demonstrate real-world relevance
-- Differentiated activities for various skill levels`,
+    tutorial: `Create a detailed tutorial that includes:
+  - Specific learning outcomes that build practical skills
+  - At least 5-10 key terms with detailed definitions
+  - Clear step-by-step instructions with examples and explanations
+  - Scaffolded exercises with increasing difficulty
+  - Sample solutions with detailed reasoning
+  - Common misconceptions and how to address them
+  - Formative assessment opportunities throughout the tutorial
+  - Reflection points to consolidate learning
+  - Practical applications that show real-world relevance
+  - Differentiated activities for varying skill levels`,
 
-    workshop: `Create an interactive workshop including:
-- Clear learning outcomes focused on skills development
-- At least 5-10 key terms with detailed definitions
-- Hands-on collaborative activities with detailed instructions
-- Comprehensive facilitator notes for each activity
-- Required materials with specific quantities and preparation notes
-- Timing guidelines for each section of the workshop
-- Discussion prompts that connect activities to learning objectives
-- Reflection questions for participants
-- Formative assessment methods that measure skill acquisition
-- Guidance for managing group dynamics and participation`,
+    workshop: `Create an interactive workshop that includes:
+  - Clear learning outcomes focused on skill development
+  - At least 5-10 key terms with detailed definitions
+  - Hands-on collaborative activities with detailed instructions
+  - Comprehensive facilitator notes for each activity
+  - Required materials list with specific quantities and preparation notes
+  - Timing guide for each section of the workshop
+  - Discussion prompts that connect activities to learning objectives
+  - Reflection questions for participants
+  - Formative assessment methods to measure skill achievement
+  - Guidance for managing group dynamics and participation`,
   }
   return contentPrompts[type as keyof typeof contentPrompts] || contentPrompts.lecture
 }
@@ -474,14 +590,14 @@ export function getContentTypePrompt(type: string) {
 // Get content style prompt
 export function getContentStylePrompt(style: string) {
   const stylePrompts = {
-    interactive: `Make the content highly interactive with:
+    interactive: `Create highly interactive content with:
   - Discussion questions throughout
   - Think-pair-share activities
   - Student-led components
   - Opportunities for reflection
   - Real-time feedback mechanisms`,
 
-    caseStudy: `Structure content around case studies with:
+    caseStudy: `Structure case-study-based content with:
   - Detailed real-world examples
   - Analysis questions
   - Application exercises
@@ -489,10 +605,10 @@ export function getContentStylePrompt(style: string) {
   - Critical thinking prompts`,
 
     problemBased: `Focus on problem-based learning with:
-  - Central problem statements
+  - A central problem statement
   - Guided inquiry activities
   - Research components
-  - Collaborative problem-solving
+  - Collaborative problem solving
   - Solution development and presentation`,
 
     traditional: `Use a traditional lecture format with:
@@ -509,24 +625,24 @@ export function getContentStylePrompt(style: string) {
 export function getDifficultyLevelPrompt(level: string) {
   const difficultyPrompts = {
     introductory: `Target first-year undergraduate level:
-  - Define all specialized terms
+  - Define all domain-specific terms
   - Include more background context
-  - Provide numerous examples
+  - Provide many examples
   - Avoid complex theoretical models
   - Focus on foundational concepts`,
 
-    intermediate: `Target mid-program undergraduate level:
+    intermediate: `Target mid-level undergraduate:
   - Build on foundational knowledge
   - Introduce more specialized terminology
   - Include some theoretical frameworks
   - Expect basic prior knowledge
   - Balance theory and application`,
 
-    advanced: `Target final-year undergraduate or graduate level:
-  - Assume strong background knowledge
-  - Engage with complex theories
+    advanced: `Target advanced level (final-year undergraduate or postgraduate):
+  - Assume a strong knowledge background
+  - Discuss complex theories
   - Include current research
-  - Address nuances and exceptions
+  - Cover nuances and exceptions
   - Emphasize critical analysis`,
   }
   return (

@@ -50,6 +50,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { useCourses } from '@/lib/hooks/use-courses'
+import { usePersonaStore } from '@/lib/store/persona-store'
 import type { Course } from '@/payload-types'
 
 // Add these helper functions at the top of the file, after the imports
@@ -159,6 +160,8 @@ const formatSemester = (input: string): string => {
 export default function AssessmentPage() {
   const router = useRouter()
   const { data: coursesData } = useCourses()
+  const getPersonaLanguage = usePersonaStore((s) => s.getPersonaLanguage)
+  const activePersona = usePersonaStore((s) => s.activePersona)
 
   const [assessmentType, setAssessmentType] = useState<string>('')
   const [difficultyLevel, setDifficultyLevel] = useState<string>('')
@@ -495,7 +498,14 @@ export default function AssessmentPage() {
 
       console.log('Sending request with metadata:', courseInfo)
 
-      const response = await fetch('/api/assessment', {
+      const endpoint =
+        assessmentType === 'project'
+          ? '/api/assessment/project'
+          : assessmentType === 'exam'
+            ? '/api/assessment/exam'
+            : '/api/assessment'
+
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -507,6 +517,7 @@ export default function AssessmentPage() {
           difficultyLevel,
           numQuestions,
           courseInfo,
+          language: getPersonaLanguage(),
         }),
       })
 
@@ -629,6 +640,7 @@ export default function AssessmentPage() {
             format,
             metadata,
           },
+          language: getPersonaLanguage(activePersona),
         }),
       })
 
@@ -686,6 +698,7 @@ export default function AssessmentPage() {
             format,
             metadata,
           },
+          language: getPersonaLanguage(activePersona),
         }),
       })
 
@@ -1067,7 +1080,7 @@ export default function AssessmentPage() {
                 <Slider
                   id="num-questions"
                   min={1}
-                  max={10}
+                  max={6}
                   step={1}
                   value={[numQuestions]}
                   onValueChange={(value) => setNumQuestions(value[0])}

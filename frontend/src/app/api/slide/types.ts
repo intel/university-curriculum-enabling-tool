@@ -121,6 +121,7 @@ export interface CourseContentRequest {
   sessionLength: number
   difficultyLevel: string
   topicName: string
+  language?: 'en' | 'id'
   courseInfo?: CourseInfo
   action?: string
   content?: LectureContent

@@ -30,12 +30,14 @@ import { useModelStore } from '@/lib/store/model-store'
 import { useCourses } from '@/lib/hooks/use-courses'
 import { usePersonaStore } from '@/lib/store/persona-store'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 export default function LecturerOverviewPage() {
   const router = useRouter()
   const { data: coursesData, isLoading: isCourseLoading } = useCourses()
   const { selectedCourseId, setSelectedCourseId } = usePersonaStore()
   const { models } = useModelStore()
+  const defaultTab = 'overview'
 
   // Select first course if none selected
   useEffect(() => {
@@ -161,227 +163,197 @@ export default function LecturerOverviewPage() {
       {/* Scrollable Content Area */}
       <div className="hide-scrollbar flex-1 overflow-auto">
         <div className="w-full px-2 py-6">
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-            {/* Active Course */}
-            <div className="space-y-6 md:col-span-2">
-              {activeCourse ? (
-                <>
-                  <Card className="border-primary/20 shadow-sm">
-                    <CardHeader className="pb-2">
-                      <div className="flex items-start justify-between truncate">
-                        <div>
-                          <CardTitle className="max-w-[700px] truncate text-2xl">
-                            {activeCourse.name}
-                          </CardTitle>
-                          <CardDescription className="mt-1 flex items-center">
-                            <Badge variant="outline" className="mr-2">
-                              {activeCourse.code}
-                            </Badge>
-                            <span>{activeCourse.facultyName}</span>
-                          </CardDescription>
-                        </div>
-                        <Badge className="bg-primary">Active</Badge>
-                      </div>
-                    </CardHeader>
-                    <CardContent>
-                      <p className="mb-4 text-muted-foreground">{activeCourse.description}</p>
+          <Tabs defaultValue={defaultTab} className="w-full">
+            <TabsList className="mb-4">
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+            </TabsList>
 
-                      <div className="mt-6 grid grid-cols-2 gap-4 md:grid-cols-3">
-                        <div className="flex items-center">
-                          <div className="mr-3 rounded-full bg-primary/10 p-2">
-                            <HardDriveDownload className="h-5 w-5 text-primary" />
-                          </div>
-                          <div>
-                            <div className="text-xs text-muted-foreground">Status</div>
-                            <div className="font-medium">
-                              {activeCourse.model &&
-                              typeof activeCourse.model === 'object' &&
-                              'name' in (activeCourse.model as { name: string }) &&
-                              models.some(
-                                (model) =>
-                                  model.name === (activeCourse.model as { name: string }).name,
-                              ) ? (
-                                <Badge className="bg-primary">Available</Badge>
-                              ) : (
-                                <Badge variant="outline" className="border-primary text-primary">
-                                  Unavailable
+            <TabsContent value="overview">
+              <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+                {/* Active Course */}
+                <div className="space-y-6 md:col-span-2">
+                  {activeCourse ? (
+                    <>
+                      <Card className="border-primary/20 shadow-sm">
+                        <CardHeader className="pb-2">
+                          <div className="flex items-start justify-between truncate">
+                            <div>
+                              <CardTitle className="max-w-[700px] truncate text-2xl">
+                                {activeCourse.name}
+                              </CardTitle>
+                              <CardDescription className="mt-1 flex items-center">
+                                <Badge variant="outline" className="mr-2">
+                                  {activeCourse.code}
                                 </Badge>
-                              )}
+                                <span>{activeCourse.facultyName}</span>
+                              </CardDescription>
+                            </div>
+                            <Badge className="bg-primary">Active</Badge>
+                          </div>
+                        </CardHeader>
+                        <CardContent>
+                          <p className="mb-4 text-muted-foreground">{activeCourse.description}</p>
+
+                          <div className="mt-6 grid grid-cols-2 gap-4 md:grid-cols-3">
+                            <div className="flex items-center">
+                              <div className="mr-3 rounded-full bg-primary/10 p-2">
+                                <HardDriveDownload className="h-5 w-5 text-primary" />
+                              </div>
+                              <div>
+                                <div className="text-xs text-muted-foreground">Status</div>
+                                <div className="font-medium">
+                                  {activeCourse.model &&
+                                  typeof activeCourse.model === 'object' &&
+                                  'name' in (activeCourse.model as { name: string }) &&
+                                  models.some(
+                                    (model) =>
+                                      model.name === (activeCourse.model as { name: string }).name,
+                                  ) ? (
+                                    <Badge className="bg-primary">Available</Badge>
+                                  ) : (
+                                    <Badge
+                                      variant="outline"
+                                      className="border-primary text-primary"
+                                    >
+                                      Unavailable
+                                    </Badge>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center">
+                              <div className="mr-3 rounded-full bg-primary/10 p-2">
+                                <Tags className="h-5 w-5 text-primary" />
+                              </div>
+                              <div>
+                                <div className="text-xs text-muted-foreground">Total Version</div>
+                                <div className="font-medium">{totalCoursesWithSameCode}</div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center">
+                              <div className="mr-3 rounded-full bg-primary/10 p-2">
+                                <Tag className="h-5 w-5 text-primary" />
+                              </div>
+                              <div>
+                                <div className="text-xs text-muted-foreground">Version</div>
+                                <div className="font-medium">{activeCourse.version}</div>
+                              </div>
                             </div>
                           </div>
-                        </div>
+                        </CardContent>
+                        <CardFooter className="flex justify-between border-t pt-4">
+                          <Button variant="outline" onClick={() => router.push('/workspace/chat')}>
+                            Course Chat
+                          </Button>
+                          <Button onClick={() => router.push('/workspace/quiz/generate')}>
+                            Generate Quiz
+                          </Button>
+                        </CardFooter>
+                      </Card>
 
-                        <div className="flex items-center">
-                          <div className="mr-3 rounded-full bg-primary/10 p-2">
-                            <Tags className="h-5 w-5 text-primary" />
-                          </div>
-                          <div>
-                            <div className="text-xs text-muted-foreground">Total Version</div>
-                            <div className="font-medium">{totalCoursesWithSameCode}</div>
-                          </div>
-                        </div>
+                      <div>
+                        <h2 className="mb-4 text-lg font-bold">Teaching Materials</h2>
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <Card
+                            onClick={() => router.push('/workspace/slide')}
+                            className="cursor-pointer transition-colors hover:bg-muted/50"
+                          >
+                            <CardHeader className="p-4 pb-2">
+                              <div className="flex items-center justify-between">
+                                <CardTitle className="text-base">Slide</CardTitle>
+                                <Presentation className="h-4 w-4 text-muted-foreground" />
+                              </div>
+                            </CardHeader>
+                            <CardContent className="p-4 pt-0">
+                              <p className="text-sm text-muted-foreground">
+                                Generate and manage lecture slides
+                              </p>
+                            </CardContent>
+                          </Card>
 
-                        <div className="flex items-center">
-                          <div className="mr-3 rounded-full bg-primary/10 p-2">
-                            <Tag className="h-5 w-5 text-primary" />
-                          </div>
-                          <div>
-                            <div className="text-xs text-muted-foreground">Version</div>
-                            <div className="font-medium">{activeCourse.version}</div>
-                          </div>
+                          <Card
+                            onClick={() => router.push('/workspace/assessment')}
+                            className="cursor-pointer transition-colors hover:bg-muted/50"
+                          >
+                            <CardHeader className="p-4 pb-2">
+                              <div className="flex items-center justify-between">
+                                <CardTitle className="text-base">Assessment</CardTitle>
+                                <FilePen className="h-4 w-4 text-muted-foreground" />
+                              </div>
+                            </CardHeader>
+                            <CardContent className="p-4 pt-0">
+                              <p className="text-sm text-muted-foreground">
+                                Create and generate assessment questions
+                              </p>
+                            </CardContent>
+                          </Card>
+
+                          <Card
+                            onClick={() => router.push('/workspace/quiz/generate')}
+                            className="cursor-pointer transition-colors hover:bg-muted/50"
+                          >
+                            <CardHeader className="p-4 pb-2">
+                              <div className="flex items-center justify-between">
+                                <CardTitle className="text-base">Quiz</CardTitle>
+                                <FileCheck className="h-4 w-4 text-muted-foreground" />
+                              </div>
+                            </CardHeader>
+                            <CardContent className="p-4 pt-0">
+                              <p className="text-sm text-muted-foreground">Generate quizzes</p>
+                            </CardContent>
+                          </Card>
+
+                          <Card
+                            onClick={() => router.push('/workspace/faq')}
+                            className="cursor-pointer transition-colors hover:bg-muted/50"
+                          >
+                            <CardHeader className="p-4 pb-2">
+                              <div className="flex items-center justify-between">
+                                <CardTitle className="text-base">FAQ</CardTitle>
+                                <FileQuestion className="h-4 w-4 text-muted-foreground" />
+                              </div>
+                            </CardHeader>
+                            <CardContent className="p-4 pt-0">
+                              <p className="text-sm text-muted-foreground">
+                                Generate Frequently Ask Questions
+                              </p>
+                            </CardContent>
+                          </Card>
                         </div>
                       </div>
-                    </CardContent>
-                    <CardFooter className="flex justify-between border-t pt-4">
-                      <Button variant="outline" onClick={() => router.push('/workspace/chat')}>
-                        Course Chat
-                      </Button>
-                      <Button onClick={() => router.push('/workspace/quiz/generate')}>
-                        Generate Quiz
-                      </Button>
-                    </CardFooter>
-                  </Card>
-
-                  <div>
-                    <h2 className="mb-4 text-lg font-bold">Teaching Materials</h2>
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                      <Card
-                        onClick={() => router.push('/workspace/slide')}
-                        className="cursor-pointer transition-colors hover:bg-muted/50"
-                      >
-                        <CardHeader className="p-4 pb-2">
-                          <div className="flex items-center justify-between">
-                            <CardTitle className="text-base">Slide</CardTitle>
-                            <Presentation className="h-4 w-4 text-muted-foreground" />
-                          </div>
-                        </CardHeader>
-                        <CardContent className="p-4 pt-0">
-                          <p className="text-sm text-muted-foreground">
-                            Generate and manage lecture slides
-                          </p>
-                        </CardContent>
-                      </Card>
-
-                      <Card
-                        onClick={() => router.push('/workspace/assessment')}
-                        className="cursor-pointer transition-colors hover:bg-muted/50"
-                      >
-                        <CardHeader className="p-4 pb-2">
-                          <div className="flex items-center justify-between">
-                            <CardTitle className="text-base">Assessment</CardTitle>
-                            <FilePen className="h-4 w-4 text-muted-foreground" />
-                          </div>
-                        </CardHeader>
-                        <CardContent className="p-4 pt-0">
-                          <p className="text-sm text-muted-foreground">
-                            Create and generate assessment questions
-                          </p>
-                        </CardContent>
-                      </Card>
-
-                      <Card
-                        onClick={() => router.push('/workspace/quiz/generate')}
-                        className="cursor-pointer transition-colors hover:bg-muted/50"
-                      >
-                        <CardHeader className="p-4 pb-2">
-                          <div className="flex items-center justify-between">
-                            <CardTitle className="text-base">Quiz</CardTitle>
-                            <FileCheck className="h-4 w-4 text-muted-foreground" />
-                          </div>
-                        </CardHeader>
-                        <CardContent className="p-4 pt-0">
-                          <p className="text-sm text-muted-foreground">Generate quizzes</p>
-                        </CardContent>
-                      </Card>
-
-                      <Card
-                        onClick={() => router.push('/workspace/faq')}
-                        className="cursor-pointer transition-colors hover:bg-muted/50"
-                      >
-                        <CardHeader className="p-4 pb-2">
-                          <div className="flex items-center justify-between">
-                            <CardTitle className="text-base">FAQ</CardTitle>
-                            <FileQuestion className="h-4 w-4 text-muted-foreground" />
-                          </div>
-                        </CardHeader>
-                        <CardContent className="p-4 pt-0">
-                          <p className="text-sm text-muted-foreground">
-                            Generate Frequently Ask Questions
-                          </p>
-                        </CardContent>
-                      </Card>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <Card>
-                  <CardHeader>
-                    <CardTitle>No Course Selected</CardTitle>
-                    <CardDescription>Select a course from the list to view details</CardDescription>
-                  </CardHeader>
-                </Card>
-              )}
-            </div>
-
-            {/* Sidebar */}
-            <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <h2 className="mr-2 text-lg font-bold">Your Courses</h2>
-                <Button
-                  variant="outline"
-                  onClick={() => router.push('/workspace/courses/add')}
-                  className="flex items-center"
-                >
-                  <Plus className="h-4 w-4" />
-                  Add Courses
-                </Button>
-              </div>
-
-              <div className="space-y-3">
-                {coursesData?.docs?.map((course) => {
-                  const isAvailable = models.some(
-                    (model) =>
-                      typeof course.model === 'object' &&
-                      course.model !== null &&
-                      'name' in course.model &&
-                      model.name === (course.model as { name: string }).name,
-                  )
-                  return (
-                    <Card
-                      key={course.id}
-                      className={`transition-colors ${
-                        selectedCourseId === course.id ? 'border-primary bg-primary/5' : ''
-                      } ${isAvailable ? 'cursor-pointer hover:bg-muted/50' : 'cursor-default opacity-70'}`}
-                      onClick={() => isAvailable && setSelectedCourseId(course.id)}
-                    >
-                      <CardHeader className="p-4 pb-2">
-                        <CardTitle className="text-base">{course.name}</CardTitle>
-                        <CardDescription className="flex items-center">
-                          <Badge variant="outline" className="mr-2">
-                            {course.code}
-                          </Badge>
-                          {!isAvailable && (
-                            <Badge variant="outline" className="border-primary text-primary">
-                              Not Installed
-                            </Badge>
-                          )}
+                    </>
+                  ) : (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>No Course Selected</CardTitle>
+                        <CardDescription>
+                          Select a course from the list to view details
                         </CardDescription>
                       </CardHeader>
-                      <CardContent className="p-4 pt-0">
-                        <p className="truncate text-xs text-muted-foreground">
-                          {course.facultyName}
-                        </p>
-                      </CardContent>
                     </Card>
-                  )
-                })}
-              </div>
+                  )}
+                </div>
 
-              {relatedCourses && relatedCourses.length > 0 && (
-                <>
-                  <h2 className="mt-8 text-xl font-bold">Related Courses</h2>
+                {/* Sidebar */}
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between">
+                    <h2 className="mr-2 text-lg font-bold">Your Courses</h2>
+                    <div className="flex items-center gap-3">
+                      <Button
+                        variant="outline"
+                        onClick={() => router.push('/workspace/courses/add')}
+                        className="flex items-center"
+                      >
+                        <Plus className="h-4 w-4" />
+                        Add Courses
+                      </Button>
+                    </div>
+                  </div>
+
                   <div className="space-y-3">
-                    {relatedCourses.map((course) => {
+                    {coursesData?.docs?.map((course) => {
                       const isAvailable = models.some(
                         (model) =>
                           typeof course.model === 'object' &&
@@ -392,7 +364,9 @@ export default function LecturerOverviewPage() {
                       return (
                         <Card
                           key={course.id}
-                          className={`transition-colors ${isAvailable ? 'cursor-pointer hover:bg-muted/50' : 'cursor-default opacity-70'}`}
+                          className={`transition-colors ${
+                            selectedCourseId === course.id ? 'border-primary bg-primary/5' : ''
+                          } ${isAvailable ? 'cursor-pointer hover:bg-muted/50' : 'cursor-default opacity-70'}`}
                           onClick={() => isAvailable && setSelectedCourseId(course.id)}
                         >
                           <CardHeader className="p-4 pb-2">
@@ -417,10 +391,60 @@ export default function LecturerOverviewPage() {
                       )
                     })}
                   </div>
-                </>
-              )}
-            </div>
-          </div>
+
+                  {relatedCourses && relatedCourses.length > 0 && (
+                    <>
+                      <h2 className="mt-8 text-xl font-bold">Related Courses</h2>
+                      <div className="space-y-3">
+                        {relatedCourses.map((course) => {
+                          const isAvailable = models.some(
+                            (model) =>
+                              typeof course.model === 'object' &&
+                              course.model !== null &&
+                              'name' in course.model &&
+                              model.name === (course.model as { name: string }).name,
+                          )
+                          return (
+                            <Card
+                              key={course.id}
+                              className={`transition-colors ${
+                                isAvailable
+                                  ? 'cursor-pointer hover:bg-muted/50'
+                                  : 'cursor-default opacity-70'
+                              }`}
+                              onClick={() => isAvailable && setSelectedCourseId(course.id)}
+                            >
+                              <CardHeader className="p-4 pb-2">
+                                <CardTitle className="text-base">{course.name}</CardTitle>
+                                <CardDescription className="flex items-center">
+                                  <Badge variant="outline" className="mr-2">
+                                    {course.code}
+                                  </Badge>
+                                  {!isAvailable && (
+                                    <Badge
+                                      variant="outline"
+                                      className="border-primary text-primary"
+                                    >
+                                      Not Installed
+                                    </Badge>
+                                  )}
+                                </CardDescription>
+                              </CardHeader>
+                              <CardContent className="p-4 pt-0">
+                                <p className="truncate text-xs text-muted-foreground">
+                                  {course.facultyName}
+                                </p>
+                              </CardContent>
+                            </Card>
+                          )
+                        })}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </TabsContent>
+          </Tabs>
         </div>
       </div>
     </div>

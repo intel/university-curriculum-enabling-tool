@@ -60,7 +60,7 @@ export default function Chat({ initialMessages, id, selectedModel }: ChatProps) 
   const { data: coursesData } = useCourses()
   const [contentHeight, setContentHeight] = useState('calc(100vh - 64px)') // Assuming 64px for header
   const selectedSources = useSourcesStore((state) => state.selectedSources)
-  const { activePersona, selectedCourseId } = usePersonaStore()
+  const { activePersona, selectedCourseId, getPersonaLanguage } = usePersonaStore()
   const selectedCourse = coursesData?.docs.find((course) => course.id === selectedCourseId)
 
   const onSubmit = (e: React.FormEvent<HTMLFormElement>) => {
@@ -92,6 +92,7 @@ export default function Chat({ initialMessages, id, selectedModel }: ChatProps) 
         selectedModel: selectedModel,
         selectedSources,
         conversationHistory: 'yes',
+        language: getPersonaLanguage(activePersona),
       },
       ...(base64Images && {
         data: {
@@ -147,6 +148,7 @@ export default function Chat({ initialMessages, id, selectedModel }: ChatProps) 
           const requestOptions: ChatRequestOptions = {
             body: {
               selectedModel: selectedModel,
+              language: getPersonaLanguage(activePersona),
             },
           }
 

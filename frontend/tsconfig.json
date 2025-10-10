@@ -44,6 +44,10 @@
     "test/data/05-versions-space.pdf"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    // Exclude Next.js standalone build outputs to avoid typechecking generated TS stubs
+    "next-lecturer/standalone",
+    "next-student/standalone",
+    "next-faculty/standalone"
   ]
 }

@@ -22,26 +22,47 @@ interface PersonaStore {
   activePersona: PersonaType | ''
   isFirstTime: boolean
   selectedCourseId: number | null
+  // Language preferences per persona (en = English, id = Bahasa Indonesia)
+  languageByPersona: Partial<Record<PersonaType, 'en' | 'id'>>
+  getPersonaLanguage: (persona?: PersonaType | '') => 'en' | 'id'
+  setPersonaLanguage: (persona: PersonaType, lang: 'en' | 'id') => void
   setActivePersona: (persona: PersonaType) => void
   completeFirstTimeSetup: () => void
   setSelectedCourseId: (course: number) => void
 }
 export const usePersonaStore = create<PersonaStore>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       personas: [],
       personaView: (process.env.NEXT_PUBLIC_PERSONA_VIEW as PersonaViewType) || 'default',
       appPersona: (process.env.NEXT_PUBLIC_PERSONA as PersonaType) || 'faculty',
       activePersona: '',
       isFirstTime: true,
       selectedCourseId: null,
-      setActivePersona: (persona) => {
+      languageByPersona: {
+        faculty: 'en',
+        lecturer: 'en',
+        student: 'en',
+      },
+      getPersonaLanguage: (persona?: PersonaType | ''): 'en' | 'id' => {
+        const key = (persona || get().activePersona) as PersonaType
+        return (get().languageByPersona[key] ?? 'en') as 'en' | 'id'
+      },
+      setPersonaLanguage: (persona: PersonaType, lang: 'en' | 'id') => {
+        set((state) => ({
+          languageByPersona: {
+            ...state.languageByPersona,
+            [persona]: lang,
+          },
+        }))
+      },
+      setActivePersona: (persona: PersonaType) => {
         set({ activePersona: persona })
       },
       completeFirstTimeSetup: () => {
         set({ isFirstTime: false })
       },
-      setSelectedCourseId: (course) => {
+      setSelectedCourseId: (course: number) => {
         set({ selectedCourseId: course })
       },
     }),
@@ -51,6 +72,7 @@ export const usePersonaStore = create<PersonaStore>()(
         activePersona: state.activePersona,
         isFirstTime: state.isFirstTime,
         selectedCourseId: state.selectedCourseId,
+        languageByPersona: state.languageByPersona,
       }),
     },
   ),
