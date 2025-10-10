@@ -1,8 +1,8 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { createOllama } from 'ollama-ai-provider'
-import { type CoreMessage, generateObject } from 'ai'
+import { createOllama } from 'ollama-ai-provider-v2'
+import { type ModelMessage, generateObject } from 'ai'
 import { NextResponse } from 'next/server'
 import { getStoredChunks } from '@/lib/chunk/get-stored-chunks'
 import { effectiveTokenCountForText } from '@/lib/utils'
@@ -301,12 +301,12 @@ IMPORTANT:
 - ALL questions MUST maintain the specified ${difficulty} difficulty level
 - Explanations should be appropriate for the difficulty level`
 
-    const systemMessage: CoreMessage = {
+    const systemMessage: ModelMessage = {
       role: 'system',
       content: quizSystemPrompt,
     }
 
-    const userMessage: CoreMessage = {
+    const userMessage: ModelMessage = {
       role: 'user',
       content:
         language === 'id'
@@ -353,7 +353,7 @@ IMPORTANT:
       assistantContent = 'An error occurred while retrieving knowledge.'
     }
 
-    const assistantMessage: CoreMessage = {
+    const assistantMessage: ModelMessage = {
       role: 'assistant',
       content: assistantContent,
     }
@@ -363,11 +363,19 @@ IMPORTANT:
     console.log('Generating quiz with Ollama...')
     const startTime = Date.now()
     const { object: quiz, usage } = await generateObject({
-      model: ollama(selectedModel, { numCtx: TOKEN_RESPONSE_BUDGET }),
+      model: ollama(selectedModel),
       output: 'no-schema',
       messages: fullMessages,
       temperature: TEMPERATURE,
-      maxTokens: TOKEN_RESPONSE_BUDGET,
+      maxOutputTokens: TOKEN_RESPONSE_BUDGET,
+      providerOptions: {
+        ollama: {
+          mode: 'json',
+          options: {
+            numCtx: TOKEN_RESPONSE_BUDGET,
+          },
+        },
+      },
     })
 
     // End timing and calculate the time taken.
@@ -375,17 +383,15 @@ IMPORTANT:
     const timeTakenMs = endTime - startTime
     const timeTakenSeconds = timeTakenMs / 1000
 
-    // Calculate token generation speed.
-    const totalTokens = usage.completionTokens
-    const tokenGenerationSpeed = totalTokens / timeTakenSeconds
+    // Calculate token generation speed (prefer totalTokens, fallback to input+output).
+    const totalTokens =
+      typeof usage?.totalTokens === 'number'
+        ? usage.totalTokens
+        : (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0)
+    const tokenGenerationSpeed = timeTakenSeconds > 0 ? totalTokens / timeTakenSeconds : 0
 
     console.log(
-      `Usage tokens: ` +
-        `promptEst(${usedTokens}) ` +
-        `prompt(${usage.promptTokens}) ` +
-        `completion(${usage.completionTokens}) | ` +
-        `${tokenGenerationSpeed.toFixed(2)} t/s | ` +
-        `Duration: ${timeTakenSeconds.toFixed(2)} s`,
+      `Usage tokens: promptEst(${usedTokens}) prompt(${usage?.inputTokens ?? 0}) completion(${usage?.outputTokens ?? 0}) | ${tokenGenerationSpeed.toFixed(2)} t/s | Duration: ${timeTakenSeconds.toFixed(2)} s`,
     )
     console.log('Generated Quiz:', JSON.stringify(quiz, null, 2))
 

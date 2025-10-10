@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { zodResolver } from '@hookform/resolvers/zod'
+import { standardSchemaResolver } from '@hookform/resolvers/standard-schema'
 import { useForm, FieldErrors } from 'react-hook-form'
 import { z } from 'zod'
 import { Button } from '@/components/ui/button'
@@ -91,7 +91,7 @@ export default function EditProgrammePage({ params }: { params: Promise<{ id: st
   }, [programme, programmes, router])
 
   const form = useForm<ProgrammeFormValues>({
-    resolver: zodResolver(programmeFormSchema),
+    resolver: standardSchemaResolver(programmeFormSchema),
     mode: 'onChange',
   })
 

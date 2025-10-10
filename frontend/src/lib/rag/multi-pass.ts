@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { ContextChunk } from '../types/context-chunk'
-import { CoreMessage } from 'ai'
+import { ModelMessage } from 'ai'
 import { effectiveTokenCountForText } from '@/lib/utils'
 import {
   SystemPromptGenerator,
@@ -150,25 +150,25 @@ export async function processChunksMultiPass<TContent = Record<string, unknown>>
   const willBeComplete = newIndex >= state.chunks.length
 
   // Prepare messages
-  const systemMessage: CoreMessage = {
+  const systemMessage: ModelMessage = {
     role: 'system',
     content: systemPrompt,
   }
 
-  const userMessage: CoreMessage = {
+  const userMessage: ModelMessage = {
     role: 'user',
     content: userPrompt,
   }
 
   // The assistant message contains the chunks as context
   const assistantContent = chunkContent || 'No relevant knowledge found.'
-  const assistantMessage: CoreMessage = {
+  const assistantMessage: ModelMessage = {
     role: 'assistant',
     content: assistantContent,
   }
 
   // If not the first pass, include previous content for context
-  const messages: CoreMessage[] = [systemMessage]
+  const messages: ModelMessage[] = [systemMessage]
 
   if (!isFirstPass && config.overlapChunks && state.lastGenerated) {
     // Add previous content for context
@@ -202,7 +202,7 @@ export async function processChunksMultiPass<TContent = Record<string, unknown>>
       output: 'no-schema',
       messages: messages,
       temperature: config.temperature,
-      maxTokens: config.responseBudget,
+      maxOutputTokens: config.responseBudget,
     })
 
     // Process the result using the provided processor
@@ -243,7 +243,7 @@ export async function processChunksMultiPass<TContent = Record<string, unknown>>
         remainingChunks: state.chunks.length - newIndex,
         tokenUsage: {
           prompt: usedTokens,
-          completion: usage?.completionTokens,
+          completion: usage?.outputTokens,
           total: usage?.totalTokens,
         },
         timeTaken,

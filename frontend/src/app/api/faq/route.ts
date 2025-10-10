@@ -1,8 +1,8 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { createOllama } from 'ollama-ai-provider'
-import { generateObject } from 'ai'
+import { createOllama } from 'ollama-ai-provider-v2'
+import { generateObject, convertToModelMessages, type UIMessage } from 'ai'
 import { NextResponse } from 'next/server'
 import { hybridSearch } from '@/lib/chunk/hybrid-search'
 import { getStoredChunks } from '@/lib/chunk/get-stored-chunks'
@@ -28,6 +28,11 @@ type FaqResult = {
   _needNextPass?: boolean
   _sentToFrontend?: boolean
 }
+
+type Usage = { inputTokens?: number; outputTokens?: number; totalTokens?: number }
+const getInputTokens = (u?: Usage | undefined) => u?.inputTokens ?? 0
+const getOutputTokens = (u?: Usage | undefined) => u?.outputTokens ?? 0
+const getTotalTokens = (u?: Usage | undefined) => u?.totalTokens ?? 0
 
 export const dynamic = 'force-dynamic'
 
@@ -134,12 +139,16 @@ const createFaqContentProcessor = (faqCount: number): ContentProcessor<FaqResult
   const sentToFrontendQuestions = new Set<string>()
 
   return (result, previousResults) => {
-    // Extract FAQs from the current result
-    const faqs = result.FAQs || []
+    // Extract FAQs from the current result - with better error handling
+    if (!result) {
+      console.error('FAQ Content Processor: result is undefined or null')
+      result = { FAQs: [] }
+    }
+    const faqs = Array.isArray(result.FAQs) ? result.FAQs : []
 
     // Process previous FAQs
     let previousFaqs: FaqItem[] = []
-    if (previousResults && previousResults.length > 0) {
+    if (previousResults && Array.isArray(previousResults) && previousResults.length > 0) {
       const prevResult = previousResults[previousResults.length - 1]
       if (prevResult && 'FAQs' in prevResult && Array.isArray(prevResult.FAQs)) {
         previousFaqs = prevResult.FAQs
@@ -154,12 +163,25 @@ const createFaqContentProcessor = (faqCount: number): ContentProcessor<FaqResult
       }
     }
 
+    // Ensure previousFaqs is always an array
+    if (!Array.isArray(previousFaqs)) {
+      previousFaqs = []
+    }
+
     // Normalize previous questions for comparison
     const normalizedPrevQuestions = previousFaqs.map((faq) =>
       faq.question.toLowerCase().trim().replace(/\s+/g, ' '),
     )
 
     // Filter out duplicates from current generation
+    console.log(
+      'DEBUG FAQ Processor: faqs type:',
+      typeof faqs,
+      'isArray:',
+      Array.isArray(faqs),
+      'length:',
+      faqs?.length,
+    )
     const uniqueNewFaqsList = faqs.filter((newFaq: { question: string }) => {
       const normalizedNewQuestion = newFaq.question.toLowerCase().trim().replace(/\s+/g, ' ')
       const questionKey = normalizedNewQuestion.substring(0, 40)
@@ -228,30 +250,80 @@ const createFaqContentProcessor = (faqCount: number): ContentProcessor<FaqResult
  */
 const createFaqGenerationFunction = (): GenerationFunction<FaqResult> => {
   return async (options: Record<string, unknown>) => {
-    const { model, messages, temperature, maxTokens } = options as {
+    const { model, messages, temperature, maxOutputTokens } = options as {
       model: unknown
       messages: unknown
       temperature: number
-      maxTokens: number
+      maxOutputTokens: number
+    }
+
+    if (!messages) {
+      throw new Error('createFaqGenerationFunction: messages is required')
+    }
+
+    if (!Array.isArray(messages)) {
+      throw new Error('createFaqGenerationFunction: messages must be an array')
+    }
+
+    // Handle both UIMessage format (with parts) and ModelMessage format (with content)
+    let modelMessages: Parameters<typeof generateObject>[0]['messages']
+
+    if (messages.length > 0 && 'parts' in messages[0]) {
+      // UIMessage format from direct generation - convert using AI SDK utility
+      modelMessages = convertToModelMessages(messages as UIMessage[])
+    } else {
+      // ModelMessage format from multi-pass system - use directly
+      modelMessages = messages as Parameters<typeof generateObject>[0]['messages']
+    }
+
+    // Ensure modelMessages is never undefined
+    if (!modelMessages || !Array.isArray(modelMessages)) {
+      throw new Error('createFaqGenerationFunction: Failed to process messages into valid format')
     }
 
     const result = await generateObject({
       model: model as Parameters<typeof generateObject>[0]['model'],
       output: 'no-schema' as const,
-      messages: messages as Parameters<typeof generateObject>[0]['messages'],
+      messages: modelMessages,
       temperature,
-      maxTokens,
+      maxOutputTokens,
+      providerOptions: {
+        ollama: {
+          mode: 'json',
+          options: {
+            numCtx: TOKEN_RESPONSE_BUDGET,
+          },
+        },
+      },
     })
 
     // Transform the raw AI response to FaqResult format
+    if (!result || !result.object) {
+      console.error('FAQ Generation: generateObject returned null or undefined result')
+      return {
+        object: { FAQs: [], _needNextPass: false, _sentToFrontend: false },
+        usage: undefined,
+      }
+    }
+
     const rawResponse = result.object as Record<string, unknown>
     let faqs: FaqItem[] = []
 
-    // Extract FAQs from the response
-    if (rawResponse.FAQs && Array.isArray(rawResponse.FAQs)) {
+    // Extract FAQs from the response with better error handling
+    console.log(
+      'DEBUG FAQ Generation: rawResponse type:',
+      typeof rawResponse,
+      'rawResponse:',
+      JSON.stringify(rawResponse, null, 2),
+    )
+
+    if (rawResponse && rawResponse.FAQs && Array.isArray(rawResponse.FAQs)) {
       faqs = rawResponse.FAQs
     } else if (Array.isArray(rawResponse)) {
       faqs = rawResponse
+    } else {
+      console.warn('FAQ Generation: Unexpected response format, using empty array')
+      faqs = []
     }
 
     const faqResult: FaqResult = {
@@ -260,15 +332,17 @@ const createFaqGenerationFunction = (): GenerationFunction<FaqResult> => {
       _sentToFrontend: false,
     }
 
+    const usageObj = result.usage
+      ? ({
+          inputTokens: (result.usage as Usage).inputTokens ?? undefined,
+          outputTokens: (result.usage as Usage).outputTokens ?? undefined,
+          totalTokens: (result.usage as Usage).totalTokens ?? undefined,
+        } as Usage)
+      : undefined
+
     return {
       object: faqResult,
-      usage: result.usage
-        ? {
-            promptTokens: result.usage.promptTokens,
-            completionTokens: result.usage.completionTokens,
-            totalTokens: result.usage.totalTokens,
-          }
-        : undefined,
+      usage: usageObj,
     }
   }
 }
@@ -392,17 +466,25 @@ export async function POST(req: Request) {
       }
 
       const messages = [
-        { role: 'system' as const, content: systemPrompt },
-        { role: 'user' as const, content: userPrompt },
+        { role: 'system' as const, parts: [{ type: 'text', text: systemPrompt }] },
+        { role: 'user' as const, parts: [{ type: 'text', text: userPrompt }] },
       ]
 
       try {
         const { object: rawResult, usage } = await faqGenerationFunction({
-          model: ollama(selectedModel, { numCtx: TOKEN_RESPONSE_BUDGET }),
+          model: ollama(selectedModel),
           output: 'no-schema',
           messages: messages,
           temperature: TEMPERATURE + 0.1,
-          maxTokens: TOKEN_RESPONSE_BUDGET,
+          maxOutputTokens: TOKEN_RESPONSE_BUDGET,
+          providerOptions: {
+            ollama: {
+              mode: 'json',
+              options: {
+                numCtx: TOKEN_RESPONSE_BUDGET,
+              },
+            },
+          },
         })
 
         const processedResult = faqContentProcessor(rawResult, [])
@@ -424,9 +506,9 @@ export async function POST(req: Request) {
             totalChunks: 0,
             remainingChunks: 0,
             tokenUsage: {
-              prompt: usage?.promptTokens || 0,
-              completion: usage?.completionTokens || 0,
-              total: usage?.totalTokens || 0,
+              prompt: getInputTokens(usage as Usage | undefined),
+              completion: getOutputTokens(usage as Usage | undefined),
+              total: getTotalTokens(usage as Usage | undefined),
             },
             timeTaken: Date.now() - startTime,
           },
@@ -441,7 +523,7 @@ export async function POST(req: Request) {
         userQuery,
         continueFaqs ? [] : retrievedChunks,
         faqGenerationFunction,
-        ollama(selectedModel, { numCtx: TOKEN_RESPONSE_BUDGET }),
+        ollama(selectedModel),
         options,
         CONTENT_TYPE_FAQ,
         faqSystemPromptGenerator,

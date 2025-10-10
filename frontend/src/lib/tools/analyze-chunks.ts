@@ -8,7 +8,7 @@ import { getStoredEmbeddings } from '../embedding/get-stored-embeddings'
 export const analyzeChunks = tool({
   description:
     'Analyzes stored chunk parameters and returns metrics such as average chunk size, total number of chunks, and the order range.',
-  parameters: z.object({
+  inputSchema: z.object({
     selectedSources: z.string().describe('An array of selected sources.'),
   }),
   execute: async ({ selectedSources }) => {

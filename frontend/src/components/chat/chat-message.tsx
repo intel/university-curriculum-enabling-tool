@@ -1,7 +1,7 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import React, { memo, useMemo, useState } from 'react'
+import React, { memo, useMemo, useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -13,11 +13,12 @@ import { ChatBubble, ChatBubbleMessage } from '../ui/chat/chat-bubble'
 import ButtonWithTooltip from '../button-with-tooltip'
 import { Button } from '../ui/button'
 import CodeDisplayBlock from '../code-display-block'
-import { Message } from '@ai-sdk/react'
+import { UIMessage } from '@ai-sdk/react'
 import { toast } from 'sonner'
+import { extractTextFromMessage } from '@/lib/utils/message'
 
 export type ChatMessageProps = {
-  message: Message
+  message: UIMessage
   isLast: boolean
   isLoading: boolean | undefined
   reload: (chatRequestOptions?: ChatRequestOptions) => Promise<string | null | undefined>
@@ -45,44 +46,55 @@ function ChatMessage({
   reload,
   canRegenerate = true,
 }: ChatMessageProps) {
-  const [isCopied] = useState<boolean>(false)
+  const [isCopied, setIsCopied] = useState<boolean>(false)
+
+  // messageRecord for typed access
+  const messageRecord = message as unknown as Record<string, unknown>
 
   // Extract "think" content from Deepseek R1 models and clean message (rest) content
-  const { thinkContent, cleanContent } = useMemo(() => {
-    const getThinkContent = (content: string) => {
+  const { thinkContent, cleanContent, rawText } = useMemo(() => {
+    const getThinkContent = (content: string): string | null => {
       const match = content.match(/<think>([\s\S]*?)(?:<\/think>|$)/)
       return match ? match[1].trim() : null
     }
 
+    // Prefer v5 parts extraction, fall back to legacy message.content
+    const raw = extractTextFromMessage(message) || (messageRecord.content as string) || ''
+
     return {
-      thinkContent: message.role === 'assistant' ? getThinkContent(message.content) : null,
-      cleanContent: message.content.replace(/<think>[\s\S]*?(?:<\/think>|$)/g, '').trim(),
+      thinkContent: message.role === 'assistant' ? getThinkContent(raw) : null,
+      cleanContent: raw.replace(/<think>[\s\S]*?(?:<\/think>|$)/g, '').trim(),
+      rawText: raw,
     }
-  }, [message.content, message.role])
+  }, [message, messageRecord.content])
 
   const contentParts = useMemo(() => cleanContent.split('```'), [cleanContent])
 
-  const handleCopy = async () => {
+  const handleCopy = async (): Promise<void> => {
     if (navigator.clipboard && navigator.clipboard.writeText) {
       try {
-        await navigator.clipboard.writeText(message.content)
+        await navigator.clipboard.writeText(rawText || '')
+        setIsCopied(true)
         toast.success('Chat message copied to clipboard', {
           description: 'Use ctrl + v to paste it',
         })
+        setTimeout(() => setIsCopied(false), 2000)
       } catch (err) {
         console.error('Failed to copy text: ', err)
       }
     } else {
       // Fallback method
       const textarea = document.createElement('textarea')
-      textarea.value = message.content
+      textarea.value = rawText || ''
       document.body.appendChild(textarea)
       textarea.select()
       try {
         document.execCommand('copy')
+        setIsCopied(true)
         toast.success('Chat message copied to clipboard', {
           description: 'Use ctrl + v to paste it',
         })
+        setTimeout(() => setIsCopied(false), 2000)
       } catch (err) {
         console.error('Failed to copy text: ', err)
       }
@@ -90,22 +102,116 @@ function ChatMessage({
     }
   }
 
-  const renderAttachments = () => (
-    <div className="flex gap-2">
-      {message.experimental_attachments
-        ?.filter((attachment) => attachment.contentType?.startsWith('image/'))
-        .map((attachment, index) => (
-          <Image
-            key={`${message.id}-${index}`}
-            src={attachment.url}
-            width={200}
-            height={200}
-            alt="attached image"
-            className="rounded-md object-contain"
-          />
-        ))}
-    </div>
-  )
+  /* Normalize attachments from v5 message.parts or legacy experimental_attachments.
+     - SSR-safe: avoid creating blob URLs during server render.
+     - Creates blob URLs for inline/base64 data and revokes them on cleanup. */
+  type NormalizedAttachment = {
+    url?: string
+    contentType?: string
+    name?: string
+    blobUrl?: string
+  }
+
+  type Part = {
+    type?: string
+    mime?: string
+    contentType?: string
+    url?: string
+    name?: string
+    filename?: string
+    data?: string
+    body?: string
+  }
+
+  // Helper: convert data URL to Blob (browser only)
+  function dataURLToBlob(dataUrl: string): Blob {
+    const [meta, data] = dataUrl.split(',')
+    const mimeMatch = meta?.match(/:(.*?);/)
+    const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream'
+    const binary = atob(data)
+    const len = binary.length
+    const u8 = new Uint8Array(len)
+    for (let i = 0; i < len; i++) u8[i] = binary.charCodeAt(i)
+    return new Blob([u8], { type: mime })
+  }
+
+  const attachments = useMemo<NormalizedAttachment[]>(() => {
+    // Avoid blob creation on server
+    if (typeof window === 'undefined') return []
+
+    const out: NormalizedAttachment[] = []
+    const parts = (message as unknown as { parts?: Part[] }).parts
+
+    if (Array.isArray(parts)) {
+      for (const part of parts) {
+        // common part shapes: { type: 'file', mime, url, name, filename, data }
+        const mime = part.mime || part.contentType || undefined
+        const url = part.url
+        const name = part.name || part.filename
+        const data = part.data || part.body
+
+        const isFilePart = part.type === 'file' || !!url || !!data
+        if (!isFilePart) continue
+
+        const att: NormalizedAttachment = { url, contentType: mime, name }
+
+        // Inline/base64 data -> create blob URL
+        if (!att.url && typeof data === 'string') {
+          try {
+            const dataUrl = data.startsWith('data:')
+              ? data
+              : `data:${mime || 'application/octet-stream'};base64,${data}`
+            const blob = dataURLToBlob(dataUrl)
+            att.blobUrl = URL.createObjectURL(blob)
+          } catch {
+            // ignore invalid data
+          }
+        }
+
+        out.push(att)
+      }
+    }
+
+    return out
+  }, [message])
+
+  // Cleanup any created blob URLs when the message changes/unmount
+  useEffect(() => {
+    return () => {
+      for (const a of attachments) {
+        if (a.blobUrl) {
+          try {
+            URL.revokeObjectURL(a.blobUrl)
+          } catch {
+            // ignore
+          }
+        }
+      }
+    }
+  }, [attachments])
+
+  const renderAttachments = (): React.ReactNode => {
+    if (!attachments || attachments.length === 0) return null
+
+    return (
+      <div className="flex gap-2">
+        {attachments
+          .filter((attachment: NormalizedAttachment) =>
+            attachment.contentType?.startsWith?.('image/'),
+          )
+          .map((attachment: NormalizedAttachment, index: number) => (
+            <Image
+              key={`${message.id}-${index}`}
+              src={attachment.url ?? attachment.blobUrl ?? ''}
+              width={200}
+              height={200}
+              alt={attachment.name ?? 'attached image'}
+              className="rounded-md object-contain"
+            />
+          ))}
+      </div>
+    )
+  }
 
   const renderThinkingProcess = () =>
     thinkContent &&
@@ -120,8 +226,8 @@ function ChatMessage({
       </details>
     )
 
-  const renderContent = () =>
-    contentParts.map((part, index) =>
+  const renderContent = (): React.ReactNode =>
+    contentParts.map((part: string, index: number) =>
       index % 2 === 0 ? (
         <div className="text-sm" key={index}>
           <Markdown className="markdown-content" key={index} remarkPlugins={[remarkGfm]}>
@@ -177,7 +283,7 @@ function ChatMessage({
   )
 }
 
-export default memo(ChatMessage, (prevProps, nextProps) => {
+export default memo(ChatMessage, (prevProps: ChatMessageProps, nextProps: ChatMessageProps) => {
   if (nextProps.isLast) return false
   return prevProps.isLast === nextProps.isLast && prevProps.message === nextProps.message
 })

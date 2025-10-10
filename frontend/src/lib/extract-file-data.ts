@@ -62,21 +62,47 @@ export async function extractFileData(file: {
 
     const { jobID } = await uploadResponse.json()
 
-    // Poll /result/{jobID} until done
-    const pollResult = async (): Promise<ExtractedData> => {
+    // Poll /result/{jobID} until done with timeout and retry handling
+    const pollResult = async (retryCount: number = 0): Promise<ExtractedData> => {
       const url = new URL(`/result/${encodeURIComponent(jobID)}`, process.env.FASTAPI_SERVER_URL)
-      const pollRes = await fetch(url)
-      if (pollRes.status === 202) {
-        // Not ready yet, wait and retry
-        await new Promise<void>((resolve) => {
-          setTimeout(() => resolve(), 3000)
-        })
-        return pollResult()
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 60000) // 60s per poll request
+
+      try {
+        const pollRes = await fetch(url, { signal: controller.signal })
+        clearTimeout(timeoutId)
+
+        if (pollRes.status === 202) {
+          // Not ready yet, wait and retry
+          await new Promise<void>((resolve) => {
+            setTimeout(() => resolve(), 3000)
+          })
+          return pollResult(0) // Reset retry count on successful poll
+        }
+        if (!pollRes.ok) {
+          throw new Error('Failed to retrieve processed PDF result')
+        }
+        return pollRes.json()
+      } catch (error: unknown) {
+        clearTimeout(timeoutId)
+        const err = error as Error & { code?: string; cause?: { code?: string }; name?: string }
+
+        // Handle both ECONNRESET and AbortError (timeout)
+        const shouldRetry =
+          err.code === 'ECONNRESET' ||
+          err.cause?.code === 'ECONNRESET' ||
+          err.name === 'AbortError' ||
+          err.message.includes('ECONNRESET')
+
+        if (shouldRetry && retryCount < 3) {
+          const delay = 1000 * (retryCount + 1) // 1s, 2s, 3s
+          console.log(`Connection issue, retrying in ${delay}ms... (${retryCount + 1}/3)`)
+          await new Promise<void>((resolve) => setTimeout(() => resolve(), delay))
+          return pollResult(retryCount + 1)
+        }
+
+        throw error
       }
-      if (!pollRes.ok) {
-        throw new Error('Failed to retrieve processed PDF result')
-      }
-      return pollRes.json()
     }
 
     const parsedData = await pollResult()

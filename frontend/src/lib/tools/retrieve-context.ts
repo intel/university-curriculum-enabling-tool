@@ -10,7 +10,7 @@ import { getStoredEmbeddings } from '../embedding/get-stored-embeddings'
 export const retrieveContext = tool({
   description:
     'Retrieves the most relevant context using a high similarity threshold (default 0.8, topK 3) from the selected sources.',
-  parameters: z.object({
+  inputSchema: z.object({
     query: z.string().describe('Latest user query for context retrieval.'),
     conversationHistory: z
       .string()

@@ -7,10 +7,10 @@ import { ChatMessageList } from '../ui/chat/chat-message-list'
 import { ChatBubble, ChatBubbleMessage } from '../ui/chat/chat-bubble'
 import { ChatRequestOptions } from 'ai'
 import { GraduationCap } from 'lucide-react'
-import { Message } from '@ai-sdk/react'
+import { UIMessage } from '@ai-sdk/react'
 
 interface ChatListProps {
-  messages: Message[]
+  messages: UIMessage[]
   isLoading: boolean
   loadingSubmit?: boolean
   reload: (chatRequestOptions?: ChatRequestOptions) => Promise<string | null | undefined>

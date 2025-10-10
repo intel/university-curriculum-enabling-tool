@@ -16,7 +16,7 @@ import {
   AlertCircle,
   ChevronUp,
 } from 'lucide-react'
-import { zodResolver } from '@hookform/resolvers/zod'
+import { standardSchemaResolver } from '@hookform/resolvers/standard-schema'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { Button } from '@/components/ui/button'
@@ -109,7 +109,7 @@ export default function CreateProgrammePage() {
   }
 
   const form = useForm<ProgrammeFormValues>({
-    resolver: zodResolver(programmeFormSchema),
+    resolver: standardSchemaResolver(programmeFormSchema),
     defaultValues,
     mode: 'onBlur', // Validate on blur (not on every change)
     reValidateMode: 'onSubmit', // Only re-validate on submit, not on every change

@@ -1,8 +1,8 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { createOllama } from 'ollama-ai-provider'
-import { generateObject, CoreMessage } from 'ai'
+import { createOllama } from 'ollama-ai-provider-v2'
+import { generateObject, ModelMessage } from 'ai'
 import { errorResponse } from '@/lib/api-response'
 import { hybridSearch } from '@/lib/chunk/hybrid-search'
 import { generateEmbeddings } from '@/lib/embedding/generate-embedding'
@@ -199,34 +199,53 @@ If you do not use at least two heading levels and at least one list, your answer
 - End with a short, insightful conclusion
 If you do not use at least two heading levels and at least one list, your answer will be considered incomplete.`
 
-    const systemMessage: CoreMessage = { role: 'system', content: SystemPrompt }
-    const userMessage: CoreMessage = { role: 'user', content: UserPrompt }
+    const systemMessage: ModelMessage = { role: 'system', content: SystemPrompt }
+    const userMessage: ModelMessage = { role: 'user', content: UserPrompt }
 
     // Combine messages - only include assistant message if source is selected
     const fullMessages = hasValidSources
-      ? [systemMessage, { role: 'assistant', content: topChunkContent } as CoreMessage, userMessage]
+      ? [
+          systemMessage,
+          { role: 'assistant', content: topChunkContent } as ModelMessage,
+          userMessage,
+        ]
       : [systemMessage, userMessage]
 
     const startFinalSummarizeTime = Date.now()
     const { object: summaryObj, usage: finalUsage } = await generateObject({
-      model: ollama(selectedModel, { numCtx: TOKEN_RESPONSE_BUDGET }),
+      model: ollama(selectedModel),
       output: 'no-schema',
       messages: fullMessages,
       temperature: TEMPERATURE,
-      maxTokens: TOKEN_RESPONSE_BUDGET,
+      maxOutputTokens: TOKEN_RESPONSE_BUDGET,
+      providerOptions: {
+        ollama: {
+          mode: 'json',
+          options: {
+            numCtx: TOKEN_RESPONSE_BUDGET,
+          },
+        },
+      },
     })
     const endFinalSummarizeTime = Date.now()
     const finalTimeTakenMs = endFinalSummarizeTime - startFinalSummarizeTime
     const finalTimeTakenSeconds = finalTimeTakenMs / 1000
-    const finalTotalTokens = finalUsage.completionTokens
-    const finalTokenGenerationSpeed = finalTotalTokens / finalTimeTakenSeconds
+    // Safely derive total tokens else fall back to input+output (coerce to number)
+    const finalTotalTokens =
+      typeof finalUsage?.totalTokens === 'number'
+        ? finalUsage.totalTokens
+        : Number(finalUsage?.inputTokens ?? 0) + Number(finalUsage?.outputTokens ?? 0)
+
+    // Guard divide-by-zero when computing generation speed
+    const finalTokenGenerationSpeed =
+      finalTimeTakenSeconds > 0 ? finalTotalTokens / finalTimeTakenSeconds : 0
 
     console.log(
       `Progress: 100.00 % | ` +
         `Tokens: ` +
         `promptEst(?) ` +
-        `prompt(${finalUsage.promptTokens}) ` +
-        `completion(${finalUsage.completionTokens}) | ` +
+        `prompt(${finalUsage?.inputTokens ?? 0}) ` +
+        `completion(${finalUsage?.outputTokens ?? 0}) | ` +
         `${finalTokenGenerationSpeed.toFixed(2)} t/s | ` +
         `Duration: ${finalTimeTakenSeconds} s`,
     )
@@ -400,7 +419,7 @@ If you do not use at least two heading levels and at least one list, your answer
       )
     }
 
-    // Prepare citation blocks (split paragraphs/lists into sentences/items) - only if source is selected
+    // Prepare citation blocks (split paragraphs/lists into sentences) - only if source is selected
     type CitationBlock = { type: string; content: string; blockIdx: number; itemIdx?: number }
     const citationBlocks: CitationBlock[] = []
 

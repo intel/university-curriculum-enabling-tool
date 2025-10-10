@@ -11,7 +11,7 @@ import { generateUUID } from '@/lib/utils'
 import Chat from '@/components/chat/chat'
 import { useEffect, useState } from 'react'
 import { ContextRequirementMessage } from '@/components/context-requirement-message'
-import { Message } from '@ai-sdk/react'
+import { UIMessage } from '@ai-sdk/react'
 import { useContextAvailability } from '@/lib/hooks/use-context-availability'
 import { usePersonaStore } from '@/lib/store/persona-store'
 
@@ -53,14 +53,19 @@ export default function ChatPage() {
     id: 'Bagaimana saya dapat membantu Anda hari ini? ',
     en: 'How can I help you today? ',
   }
-  const prompt = prompts[lang] ?? prompts.en
+  const prompt = (prompts[lang as 'en' | 'id'] ?? prompts.en) as string
 
-  const welcomeMessage: Message[] = [
+  const welcomeMessage: UIMessage[] = [
     {
       id: 'welcome-1',
       role: 'assistant',
-      content: greeting + prompt,
-      createdAt: new Date(),
+      parts: [
+        {
+          type: 'text',
+          text: greeting + prompt,
+        },
+      ],
+      metadata: { createdAt: Date.now() },
     },
   ]
 

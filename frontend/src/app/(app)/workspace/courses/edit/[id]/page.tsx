@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { AlertCircle, ArrowLeft, Check, Loader2, X } from 'lucide-react'
-import { zodResolver } from '@hookform/resolvers/zod'
+import { standardSchemaResolver } from '@hookform/resolvers/standard-schema'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { useModelStore } from '@/lib/store/model-store'
@@ -163,7 +163,7 @@ export default function EditCoursePage({ params }: { params: Promise<{ id: strin
   }, [coursesData])
 
   const form = useForm<CourseFormValues>({
-    resolver: zodResolver(courseFormSchema),
+    resolver: standardSchemaResolver(courseFormSchema),
     mode: 'onBlur', // Validate on blur (not on every change)
     reValidateMode: 'onSubmit', // Only re-validate on submit, not on every change
     defaultValues: staticDefaultValues,

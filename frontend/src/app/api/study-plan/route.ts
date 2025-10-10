@@ -1,16 +1,18 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { createOllama } from 'ollama-ai-provider'
-import { type CoreMessage, generateObject } from 'ai'
+import { createOllama } from 'ollama-ai-provider-v2'
+import { type ModelMessage, generateObject } from 'ai'
 import { NextResponse } from 'next/server'
 import { getStoredChunks } from '@/lib/chunk/get-stored-chunks'
 import { errorResponse } from '@/lib/api-response'
 import type { ClientSource } from '@/lib/types/client-source'
 import type { StudyPlan } from '@/lib/types/study-plan'
 import type { ContextChunk } from '@/lib/types/context-chunk'
+import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
+// export const maxDuration = 600 // 10 minutes (600 seconds) for Vercel deployment
 
 // Configuration constants
 const TEMPERATURE = Number.parseFloat(process.env.RAG_TEMPERATURE || '0.1')
@@ -18,6 +20,70 @@ const TOKEN_MAX = Number.parseInt(process.env.RAG_TOKEN_MAX ?? '2048')
 const TOKEN_RESPONSE_RATIO = Number.parseFloat(process.env.RESPONSE_TOKEN_PERCENTAGE || '0.7')
 const TOKEN_RESPONSE_BUDGET = Math.floor(TOKEN_MAX * TOKEN_RESPONSE_RATIO)
 const TOKEN_CONTEXT_BUDGET = Math.floor(TOKEN_MAX * (1 - TOKEN_RESPONSE_RATIO))
+
+// Zod schema for study plan validation
+const studyPlanSchema = z.object({
+  executiveSummary: z.string().min(1),
+  topicBreakdown: z
+    .array(
+      z.object({
+        topic: z.string(),
+        subtopics: z.array(z.string()),
+        importance: z.string(),
+        estimatedStudyHours: z.number(),
+      }),
+    )
+    .min(1),
+  weeklySchedule: z
+    .array(
+      z.object({
+        week: z.number(),
+        focus: z.string(),
+        topics: z.array(z.string()),
+        activities: z.array(
+          z.object({
+            type: z.string(),
+            description: z.string(),
+            duration: z.string(),
+            resources: z.string(),
+          }),
+        ),
+        milestones: z.array(z.string()),
+      }),
+    )
+    .min(1),
+  studyTechniques: z
+    .array(
+      z.object({
+        technique: z.string(),
+        description: z.string(),
+        bestFor: z.array(z.string()),
+        example: z.string(),
+      }),
+    )
+    .min(1),
+  additionalResources: z
+    .array(
+      z.object({
+        type: z.string(),
+        name: z.string(),
+        description: z.string(),
+        relevantTopics: z.array(z.string()),
+      }),
+    )
+    .min(1),
+  practiceStrategy: z.object({
+    approach: z.string(),
+    frequency: z.string(),
+    questionTypes: z.array(z.string()),
+    selfAssessment: z.string(),
+  }),
+  examPreparation: z.object({
+    finalWeekPlan: z.string(),
+    dayBeforeExam: z.string(),
+    examDayTips: z.string(),
+  }),
+})
 
 // Helper function to count tokens (simple approximation)
 function countTokens(text: string): number {
@@ -244,7 +310,7 @@ The study plan should reflect standard academic expectations for a course with t
     }
 
     // Create assistant message with the source content
-    const assistantMessage: CoreMessage = {
+    const assistantMessage: ModelMessage = {
       role: 'assistant',
       content: assistantContent,
     }
@@ -342,12 +408,12 @@ IMPORTANT RULES:
 12. Do not add any fields that are not in the template above
 13. Do not include any comments or explanations outside the JSON structure`
 
-    const systemMessage: CoreMessage = {
+    const systemMessage: ModelMessage = {
       role: 'system',
       content: studyPlanSystemPrompt,
     }
 
-    const userMessage: CoreMessage = {
+    const userMessage: ModelMessage = {
       role: 'user',
       content: `Generate a comprehensive study plan based on the provided content. Tailor it for a ${difficultyLevel} level student with a ${learningStyle} learning style preference, spanning ${studyPeriodWeeks} weeks with ${studyHoursPerWeek} hours available per week.`,
     }
@@ -355,14 +421,23 @@ IMPORTANT RULES:
     console.log('Generating study plan with Ollama...')
     const startTime = Date.now()
     try {
+      // Use generateObject with increased context window to avoid timeouts
+      // The num_ctx option gives Ollama more memory to work with complex schemas
       const { object: studyPlan } = await generateObject({
-        model: ollama(selectedModel, { numCtx: TOKEN_MAX }),
-        output: 'no-schema',
+        model: ollama(selectedModel),
+        schema: studyPlanSchema,
         messages: [systemMessage, assistantMessage, userMessage],
         temperature: TEMPERATURE,
-        maxTokens: TOKEN_RESPONSE_BUDGET,
-        mode: 'json',
+        maxOutputTokens: TOKEN_RESPONSE_BUDGET,
+        providerOptions: {
+          ollama: {
+            numCtx: TOKEN_MAX,
+          },
+        },
       })
+
+      console.log('Checking on the raw studyPlan')
+      console.log(studyPlan)
 
       // End timing and calculate the time taken
       const endTime = Date.now()
@@ -370,37 +445,35 @@ IMPORTANT RULES:
 
       console.log(`Generation completed in ${timeTakenSeconds.toFixed(2)} seconds`)
 
-      // Type assertion to treat the response as a partial StudyPlan
-      const rawPlan = studyPlan as Partial<StudyPlan>
-
-      // Create a simplified cleaned plan with validation to ensure all required fields exist
-      const cleanedPlan: StudyPlan = {
-        executiveSummary:
-          rawPlan.executiveSummary || 'A personalized study plan tailored to your learning needs.',
-        topicBreakdown: Array.isArray(rawPlan.topicBreakdown) ? rawPlan.topicBreakdown : [],
-        weeklySchedule: Array.isArray(rawPlan.weeklySchedule) ? rawPlan.weeklySchedule : [],
-        studyTechniques: Array.isArray(rawPlan.studyTechniques) ? rawPlan.studyTechniques : [],
-        additionalResources: Array.isArray(rawPlan.additionalResources)
-          ? rawPlan.additionalResources
-          : [],
-        practiceStrategy: rawPlan.practiceStrategy || {
-          approach: 'Regular practice with increasing difficulty',
-          frequency: 'Daily practice sessions',
-          questionTypes: ['Multiple choice', 'Short answer', 'Problem solving'],
-          selfAssessment: 'Regular self-assessment through practice tests',
-        },
-        examPreparation: rawPlan.examPreparation || {
-          finalWeekPlan: 'Review all materials and take practice tests',
-          dayBeforeExam: 'Light review and relaxation',
-          examDayTips: "Get a good night's sleep and arrive early",
-        },
-      }
+      // studyPlan is now properly typed and validated by Zod schema
+      // const cleanedPlan: StudyPlan = {
+      //   ...studyPlan,
+      //   executiveSummary:
+      //     rawPlan.executiveSummary || 'A personalized study plan tailored to your learning needs.',
+      //   topicBreakdown: Array.isArray(rawPlan.topicBreakdown) ? rawPlan.topicBreakdown : [],
+      //   weeklySchedule: Array.isArray(rawPlan.weeklySchedule) ? rawPlan.weeklySchedule : [],
+      //   studyTechniques: Array.isArray(rawPlan.studyTechniques) ? rawPlan.studyTechniques : [],
+      //   additionalResources: Array.isArray(rawPlan.additionalResources)
+      //     ? rawPlan.additionalResources
+      //     : [],
+      //   practiceStrategy: rawPlan.practiceStrategy || {
+      //     approach: 'Regular practice with increasing difficulty',
+      //     frequency: 'Daily practice sessions',
+      //     questionTypes: ['Multiple choice', 'Short answer', 'Problem solving'],
+      //     selfAssessment: 'Regular self-assessment through practice tests',
+      //   },
+      //   examPreparation: rawPlan.examPreparation || {
+      //     finalWeekPlan: 'Review all materials and take practice tests',
+      //     dayBeforeExam: 'Light review and relaxation',
+      //     examDayTips: "Get a good night's sleep and arrive early",
+      //   },
+      // }
 
       // Ensure weeklySchedule has the correct number of weeks
-      if (cleanedPlan.weeklySchedule.length < studyPeriodWeeks) {
+      if (studyPlan.weeklySchedule.length < studyPeriodWeeks) {
         // Add missing weeks
-        for (let i = cleanedPlan.weeklySchedule.length + 1; i <= studyPeriodWeeks; i++) {
-          cleanedPlan.weeklySchedule.push({
+        for (let i = studyPlan.weeklySchedule.length + 1; i <= studyPeriodWeeks; i++) {
+          studyPlan.weeklySchedule.push({
             week: i,
             focus: `Week ${i} Focus`,
             topics: ['Review previous material'],
@@ -415,12 +488,15 @@ IMPORTANT RULES:
             milestones: ['Complete review of previous material'],
           })
         }
-      } else if (cleanedPlan.weeklySchedule.length > studyPeriodWeeks) {
+      } else if (studyPlan.weeklySchedule.length > studyPeriodWeeks) {
         // Trim extra weeks
-        cleanedPlan.weeklySchedule = cleanedPlan.weeklySchedule.slice(0, studyPeriodWeeks)
+        studyPlan.weeklySchedule = studyPlan.weeklySchedule.slice(0, studyPeriodWeeks)
       }
 
-      return NextResponse.json(cleanedPlan)
+      console.log('Checking on the sanitized studyPlan')
+      console.log(studyPlan)
+
+      return NextResponse.json(studyPlan)
     } catch (error) {
       console.error('Error generating study plan:', error)
 
@@ -513,6 +589,9 @@ IMPORTANT RULES:
           examDayTips: "Get a good night's sleep and arrive early",
         },
       }
+
+      console.log('Fallback content is being utilized')
+      console.log(fallbackPlan)
 
       // Return the fallback plan with an error message
       return NextResponse.json(fallbackPlan)

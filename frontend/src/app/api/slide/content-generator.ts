@@ -1,9 +1,9 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { createOllama } from 'ollama-ai-provider'
+import { createOllama } from 'ollama-ai-provider-v2'
 import { languageDirective, type Lang } from '@/lib/utils/lang'
-import { type CoreMessage, generateText } from 'ai'
+import { type ModelMessage, generateText } from 'ai'
 import type { ClientSource } from '@/lib/types/client-source'
 import type { CourseInfo } from '@/lib/types/course-info-types'
 import type {
@@ -73,7 +73,7 @@ export async function generateCourseContent(
     const hasSourceMaterials = hasSelectedSources && assistantContent.includes('SOURCE')
 
     // Build assistant message only when we have sources
-    const assistantMessage: CoreMessage | null = hasSourceMaterials
+    const assistantMessage: ModelMessage | null = hasSourceMaterials
       ? { role: 'assistant', content: assistantContent }
       : null
 
@@ -141,12 +141,12 @@ export async function generateCourseContent(
       hasSourceMaterials,
     )
 
-    const metadataSystemMessage: CoreMessage = {
+    const metadataSystemMessage: ModelMessage = {
       role: 'system',
       content: `${langDirective(language)}\n\n${metadataSystemPrompt}`,
     }
 
-    const metadataUserMessage: CoreMessage = {
+    const metadataUserMessage: ModelMessage = {
       role: 'user',
       content:
         language === 'id'
@@ -166,7 +166,7 @@ export async function generateCourseContent(
       model: ollama(selectedModel),
       messages: metadataMessages,
       temperature: TEMPERATURE,
-      maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 4),
+      maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 4),
     })
 
     console.log('Raw metadata response:', metadataTextResponse.text.substring(0, 500) + '...')
@@ -188,12 +188,12 @@ export async function generateCourseContent(
       hasSourceMaterials,
     )
 
-    const introSystemMessage: CoreMessage = {
+    const introSystemMessage: ModelMessage = {
       role: 'system',
       content: `${langDirective(language)}\n\n${introSystemPrompt}`,
     }
 
-    const introUserMessage: CoreMessage = {
+    const introUserMessage: ModelMessage = {
       role: 'user',
       content:
         language === 'id'
@@ -213,7 +213,7 @@ export async function generateCourseContent(
       model: ollama(selectedModel),
       messages: introMessages,
       temperature: TEMPERATURE,
-      maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 6),
+      maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 6),
     })
 
     console.log('Raw intro response:', introTextResponse.text.substring(0, 500) + '...')
@@ -232,12 +232,12 @@ export async function generateCourseContent(
       hasSourceMaterials,
     )
 
-    const specialSlidesSystemMessage: CoreMessage = {
+    const specialSlidesSystemMessage: ModelMessage = {
       role: 'system',
       content: `${langDirective(language)}\n\n${specialSlidesSystemPrompt}`,
     }
 
-    const specialSlidesUserMessage: CoreMessage = {
+    const specialSlidesUserMessage: ModelMessage = {
       role: 'user',
       content:
         language === 'id'
@@ -257,7 +257,7 @@ export async function generateCourseContent(
       model: ollama(selectedModel),
       messages: specialSlidesMessages,
       temperature: TEMPERATURE,
-      maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 4),
+      maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 4),
     })
 
     console.log(
@@ -312,12 +312,12 @@ export async function generateCourseContent(
         hasSourceMaterials,
       )
 
-      const contentSlidesSystemMessage: CoreMessage = {
+      const contentSlidesSystemMessage: ModelMessage = {
         role: 'system',
         content: `${langDirective(language)}\n\n${contentSlidesSystemPrompt}`,
       }
 
-      const contentSlidesUserMessage: CoreMessage = {
+      const contentSlidesUserMessage: ModelMessage = {
         role: 'user',
         content:
           language === 'id'
@@ -345,7 +345,7 @@ export async function generateCourseContent(
         // ],
         messages: contentSlidesMessages,
         temperature: TEMPERATURE,
-        maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 2),
+        maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 2),
       })
 
       const contentSlidesResponse = extractAndParseJSON(contentSlidesTextResponse.text)
@@ -376,12 +376,12 @@ export async function generateCourseContent(
       hasSourceMaterials,
     )
 
-    const activitiesSystemMessage: CoreMessage = {
+    const activitiesSystemMessage: ModelMessage = {
       role: 'system',
       content: `${langDirective(language)}\n\n${activitiesSystemPrompt}`,
     }
 
-    const activitiesUserMessage: CoreMessage = {
+    const activitiesUserMessage: ModelMessage = {
       role: 'user',
       content:
         language === 'id'
@@ -401,7 +401,7 @@ export async function generateCourseContent(
       model: ollama(selectedModel),
       messages: activitiesMessages,
       temperature: TEMPERATURE,
-      maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 4),
+      maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 4),
     })
 
     console.log('Raw activities response:', activitiesTextResponse.text.substring(0, 500) + '...')
@@ -424,12 +424,12 @@ export async function generateCourseContent(
       hasSourceMaterials,
     )
 
-    const assessmentSystemMessage: CoreMessage = {
+    const assessmentSystemMessage: ModelMessage = {
       role: 'system',
       content: `${langDirective(language)}\n\n${assessmentSystemPrompt}`,
     }
 
-    const assessmentUserMessage: CoreMessage = {
+    const assessmentUserMessage: ModelMessage = {
       role: 'user',
       content:
         language === 'id'
@@ -449,7 +449,7 @@ export async function generateCourseContent(
       model: ollama(selectedModel),
       messages: assessmentMessages,
       temperature: TEMPERATURE,
-      maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 6),
+      maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 6),
     })
 
     console.log('Raw assessment response:', assessmentTextResponse.text.substring(0, 500) + '...')
@@ -498,12 +498,12 @@ export async function generateCourseContent(
       hasSourceMaterials,
     )
 
-    const readingsSystemMessage: CoreMessage = {
+    const readingsSystemMessage: ModelMessage = {
       role: 'system',
       content: `${langDirective(language)}\n\n${readingsSystemPrompt}`,
     }
 
-    const readingsUserMessage: CoreMessage = {
+    const readingsUserMessage: ModelMessage = {
       role: 'user',
       content:
         language === 'id'
@@ -523,7 +523,7 @@ export async function generateCourseContent(
       model: ollama(selectedModel),
       messages: readingsMessages,
       temperature: TEMPERATURE,
-      maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 6),
+      maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 6),
     })
 
     console.log('Raw readings response:', readingsTextResponse.text.substring(0, 500) + '...')
@@ -562,7 +562,7 @@ export async function generateCourseContent(
             model: ollama(selectedModel),
             prompt: prompt,
             temperature: TEMPERATURE,
-            maxTokens: 1000,
+            maxOutputTokens: 1000,
           })
 
           console.log(
@@ -630,7 +630,7 @@ export async function generateCourseContent(
             model: ollama(selectedModel),
             prompt: prompt,
             temperature: TEMPERATURE,
-            maxTokens: 1500,
+            maxOutputTokens: 1500,
           })
 
           console.log(

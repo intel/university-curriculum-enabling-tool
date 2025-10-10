@@ -3,8 +3,8 @@
 
 import type { Source } from '../../../payload-types'
 import { NextResponse } from 'next/server'
-import { createOllama } from 'ollama-ai-provider'
-import { type CoreMessage, generateText, generateObject } from 'ai'
+import { createOllama } from 'ollama-ai-provider-v2'
+import { type ModelMessage, generateText, generateObject } from 'ai'
 import { jsonrepair } from 'jsonrepair'
 import { getStoredChunks } from '@/lib/chunk/get-stored-chunks'
 import type { ClientSource } from '@/lib/types/client-source'
@@ -476,14 +476,14 @@ async function ensureTargetLanguageText(
       ? 'PENTING: Tulis ulang seluruh konten berikut dalam Bahasa Indonesia yang jelas dan alami. Jangan gunakan kata dari bahasa lain. Jangan ubah struktur atau makna.'
       : 'IMPORTANT: Rewrite all of the following content in clear and natural English only. Do not use any words from other languages. Do not change the structure or meaning.'
 
-  const systemMessage: CoreMessage = { role: 'system', content: directive }
-  const userMessage: CoreMessage = { role: 'user', content: text }
+  const systemMessage: ModelMessage = { role: 'system', content: directive }
+  const userMessage: ModelMessage = { role: 'user', content: text }
   try {
     const resp = await generateText({
       model: ollama(selectedModel),
       messages: [systemMessage, userMessage],
       temperature: Math.max(0, TEMPERATURE - 0.05),
-      maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET),
+      maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET),
     })
     return stripThinkTags(resp.text)
   } catch {
@@ -521,15 +521,15 @@ async function enforceRubricLanguage(
       ? `${langDirective(language)}\n\nTugas: Ubah SEMUA nilai string di dalam array JSON berikut menjadi Bahasa Indonesia yang jelas dan alami.\nJANGAN ubah kunci, bentuk array, urutan item, tipe data numerik, atau bobot.\nKembalikan HANYA JSON (array) dengan struktur yang sama.`
       : `${langDirective(language)}\n\nTask: Rewrite ALL string values in the following JSON array into clear and natural English.\nDO NOT change keys, array shape, item order, numeric types, or weights.\nReturn JSON ONLY (the array) with exactly the same structure.`
 
-  const systemMessage: CoreMessage = { role: 'system', content: directive }
-  const userMessage: CoreMessage = { role: 'user', content: JSON.stringify(criteria) }
+  const systemMessage: ModelMessage = { role: 'system', content: directive }
+  const userMessage: ModelMessage = { role: 'user', content: JSON.stringify(criteria) }
 
   try {
     const resp = await generateText({
       model: ollama(selectedModel),
       messages: [systemMessage, userMessage],
       temperature: Math.max(0, TEMPERATURE - 0.05),
-      maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 4),
+      maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 4),
     })
     const cleaned = stripThinkTags(resp.text)
     const jsonStr = extractJsonFromText(cleaned) || cleaned
@@ -741,7 +741,7 @@ async function generateProjectRubric(
   difficultyLevel: string,
   ollama: OllamaFn,
   selectedModel: string,
-  assistantMessage: CoreMessage,
+  assistantMessage: ModelMessage,
   courseInfo: CourseInfo,
   language: 'en' | 'id',
 ): Promise<ProjectRubric> {
@@ -893,7 +893,7 @@ async function generateRubricSection(
   difficultyLevel: string,
   ollama: OllamaFn,
   selectedModel: string,
-  assistantMessage: CoreMessage,
+  assistantMessage: ModelMessage,
   courseInfo: CourseInfo,
   language: 'en' | 'id',
 ): Promise<ProjectRubricCriterion[]> {
@@ -974,12 +974,12 @@ RESPONSE FORMAT (JSON ONLY):
 
 IMPORTANT: Do not use markdown formatting (**, ##, etc.). Pure JSON only.`
 
-  const systemMessage: CoreMessage = {
+  const systemMessage: ModelMessage = {
     role: 'system',
     content: systemPrompt,
   }
 
-  const userMessage: CoreMessage = {
+  const userMessage: ModelMessage = {
     role: 'user',
     content:
       language === 'id'
@@ -995,7 +995,7 @@ IMPORTANT: Do not use markdown formatting (**, ##, etc.). Pure JSON only.`
         output: 'no-schema',
         messages: [systemMessage, assistantMessage, userMessage],
         temperature: TEMPERATURE,
-        maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 3),
+        maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 3),
       })
 
       if (object && Array.isArray(object)) {
@@ -1021,7 +1021,7 @@ IMPORTANT: Do not use markdown formatting (**, ##, etc.). Pure JSON only.`
       model: ollama(selectedModel),
       messages: [systemMessage, assistantMessage, userMessage],
       temperature: TEMPERATURE,
-      maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 3),
+      maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 3), // Ensure integer by using Math.floor
     })
 
     const cleaned = stripThinkTags(response.text)
@@ -1104,7 +1104,7 @@ async function generateProjectDescription(
   difficultyLevel: string,
   ollama: OllamaFn,
   selectedModel: string,
-  assistantMessage: CoreMessage,
+  assistantMessage: ModelMessage,
   courseInfo: CourseInfo,
   language: 'en' | 'id',
 ): Promise<string> {
@@ -1131,12 +1131,12 @@ async function generateProjectDescription(
     hasSourceMaterials,
   )
 
-  const systemMessage: CoreMessage = {
+  const systemMessage: ModelMessage = {
     role: 'system',
     content: systemPrompt,
   }
 
-  const userMessage: CoreMessage = {
+  const userMessage: ModelMessage = {
     role: 'user',
     content: projectPrompts.buildProjectDescriptionUserPrompt(courseInfo, language),
   }
@@ -1146,7 +1146,7 @@ async function generateProjectDescription(
       model: ollama(selectedModel),
       messages: [systemMessage, assistantMessage, userMessage],
       temperature: TEMPERATURE + 0.1,
-      maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET),
+      maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET),
     })
 
     let cleaned = stripThinkTags(response.text)
@@ -1328,7 +1328,7 @@ async function generateQuestions(
   numQuestions: number,
   ollama: OllamaFn,
   selectedModel: string,
-  assistantMessage: CoreMessage,
+  assistantMessage: ModelMessage,
   courseInfo?: CourseInfo,
   language: 'en' | 'id' = 'en',
 ): Promise<GeneratedQuestion[]> {
@@ -1473,12 +1473,12 @@ FORMAT:
 DO NOT include any text outside the JSON array.`
   }
 
-  const systemMessage: CoreMessage = {
+  const systemMessage: ModelMessage = {
     role: 'system',
     content: systemPrompt,
   }
 
-  const userMessage: CoreMessage = {
+  const userMessage: ModelMessage = {
     role: 'user',
     content:
       assessmentType.toLowerCase() === 'exam'
@@ -1503,7 +1503,7 @@ DO NOT include any text outside the JSON array.`
       model: ollama(selectedModel),
       messages: [systemMessage, assistantMessage, userMessage],
       temperature: TEMPERATURE,
-      maxTokens: Math.floor(TOKEN_MAX / 2),
+      maxOutputTokens: Math.floor(TOKEN_MAX / 2),
     })
 
     const cleaned = stripThinkTags(response.text)
@@ -1570,7 +1570,7 @@ async function generateAssessmentMetadata(
   difficultyLevel: string,
   ollama: OllamaFn,
   selectedModel: string,
-  assistantMessage: CoreMessage,
+  assistantMessage: ModelMessage,
   courseInfo: CourseInfo | undefined,
   language: 'en' | 'id',
 ): Promise<AssessmentMetadata> {
@@ -1668,12 +1668,12 @@ FORMAT:
 
 DO NOT include any text outside the JSON object.`
 
-  const systemMessage: CoreMessage = {
+  const systemMessage: ModelMessage = {
     role: 'system',
     content: systemPrompt,
   }
 
-  const userMessage: CoreMessage = {
+  const userMessage: ModelMessage = {
     role: 'user',
     content:
       language === 'id'
@@ -1686,7 +1686,7 @@ DO NOT include any text outside the JSON object.`
       model: ollama(selectedModel),
       messages: [systemMessage, assistantMessage, userMessage],
       temperature: TEMPERATURE,
-      maxTokens: Math.floor(TOKEN_MAX / 4),
+      maxOutputTokens: Math.floor(TOKEN_MAX / 4),
     })
 
     const cleaned = stripThinkTags(response.text)
@@ -1797,7 +1797,7 @@ async function generateModelAnswer(
   difficultyLevel: string,
   ollama: OllamaFn,
   selectedModel: string,
-  assistantMessage: CoreMessage,
+  assistantMessage: ModelMessage,
   courseInfo?: CourseInfo,
   language: 'en' | 'id' = 'en',
 ): Promise<string> {
@@ -1807,8 +1807,8 @@ async function generateModelAnswer(
   const hasSourceMaterials = (assistantMessage.content as string).includes('SOURCE MATERIALS:')
 
   // Choose prompts based on assessment type
-  let systemMessage: CoreMessage
-  let userMessage: CoreMessage
+  let systemMessage: ModelMessage
+  let userMessage: ModelMessage
 
   if (assessmentType.toLowerCase() === 'project') {
     const projectPrompts = await import('./prompts/project')
@@ -1856,7 +1856,7 @@ async function generateModelAnswer(
       model: ollama(selectedModel),
       messages: [systemMessage, assistantMessage, userMessage],
       temperature: TEMPERATURE,
-      maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET),
+      maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET),
     })
 
     let cleaned = stripThinkTags(response.text)
@@ -1882,7 +1882,7 @@ async function generateMarkingCriteria(
   difficultyLevel: string,
   ollama: OllamaFn,
   selectedModel: string,
-  assistantMessage: CoreMessage,
+  assistantMessage: ModelMessage,
   courseInfo?: CourseInfo,
   language: 'en' | 'id' = 'en',
 ): Promise<ExplanationObject> {
@@ -1902,12 +1902,12 @@ async function generateMarkingCriteria(
     modelAnswer,
   )
 
-  const systemMessage: CoreMessage = {
+  const systemMessage: ModelMessage = {
     role: 'system',
     content: systemPrompt,
   }
 
-  const userMessage: CoreMessage = {
+  const userMessage: ModelMessage = {
     role: 'user',
     content: examPrompts.buildExamMarkingCriteriaUserPrompt(
       hasSourceMaterials && assessmentType.toLowerCase() === 'exam',
@@ -1920,11 +1920,19 @@ async function generateMarkingCriteria(
     // Prefer structured generation to minimize parsing errors
     try {
       const { object } = await generateObject({
-        model: ollama(selectedModel, { numCtx: TOKEN_RESPONSE_BUDGET }),
+        model: ollama(selectedModel),
         output: 'no-schema',
         messages: [systemMessage, assistantMessage, userMessage],
         temperature: TEMPERATURE,
-        maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET),
+        maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET),
+        providerOptions: {
+          ollama: {
+            mode: 'json',
+            options: {
+              numCtx: TOKEN_RESPONSE_BUDGET,
+            },
+          },
+        },
       })
       if (
         object &&
@@ -1945,7 +1953,7 @@ async function generateMarkingCriteria(
       model: ollama(selectedModel),
       messages: [systemMessage, assistantMessage, userMessage],
       temperature: TEMPERATURE,
-      maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET),
+      maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET),
     })
 
     const cleanedRaw = stripThinkTags(response.text)
@@ -2052,7 +2060,7 @@ async function processQuestion(
   difficultyLevel: string,
   ollama: OllamaFn,
   selectedModel: string,
-  assistantMessage: CoreMessage,
+  assistantMessage: ModelMessage,
   questionIndex: number,
   courseInfo?: CourseInfo,
   language: 'en' | 'id' = 'en',
@@ -2609,7 +2617,7 @@ Instructions:
     }
 
     // Create assistant message with the source content
-    const assistantMessage: CoreMessage = {
+    const assistantMessage: ModelMessage = {
       role: 'assistant',
       content: assistantContent,
     }
