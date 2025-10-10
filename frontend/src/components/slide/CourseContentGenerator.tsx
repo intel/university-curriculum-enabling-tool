@@ -7,6 +7,8 @@ import { toast } from 'sonner'
 import { ContextRequirementMessage } from '@/components/context-requirement-message'
 import { useContextAvailability } from '@/lib/hooks/use-context-availability'
 import { useSourcesStore } from '@/lib/store/sources-store'
+import { usePersonaStore } from '@/lib/store/persona-store'
+import { useCourses } from '@/lib/hooks/use-courses'
 import type { LectureContent, View } from '@/lib/types/slide'
 import { WelcomeView } from './WelcomeView'
 import { ConfigView } from './ConfigView'
@@ -37,6 +39,8 @@ export default function CourseContentGenerator() {
   const { getActiveContextModelName } = useContextAvailability()
   const selectedModel = getActiveContextModelName()
   const selectedSources = useSourcesStore((state) => state.selectedSources)
+  const { selectedCourseId } = usePersonaStore()
+  const { data: coursesData } = useCourses()
 
   const generateCourseContent = async () => {
     if (!selectedModel) {
@@ -50,8 +54,11 @@ export default function CourseContentGenerator() {
     }
 
     const selectedSourcesCount = selectedSources.filter((source) => source.selected).length
-    if (selectedSourcesCount === 0 || selectedSourcesCount >= 2) {
-      toast.error('Please select EXACTLY one source.')
+    // Allow generation with no sources selected (will use course context)
+    if (selectedSourcesCount > 1) {
+      toast.error(
+        'Please select at most one source. You can also generate content without selecting any sources.',
+      )
       return
     }
 
@@ -62,6 +69,20 @@ export default function CourseContentGenerator() {
     setExpandedQuestions({})
 
     try {
+      // Get course information from context - using proven method from assessment page
+      const selectedCourse = coursesData?.docs.find((course) => course.id === selectedCourseId)
+      const courseDescription = selectedCourse?.description || ''
+      const courseInfo = selectedCourse
+        ? {
+            courseCode: selectedCourse.code || '',
+            courseName: selectedCourse.name || '',
+            courseDescription: courseDescription,
+            // Add semester and academic year if available in the course data
+            semester: selectedCourse.tag || '',
+            academicYear: '', // This might need to be added to the Course type if not available
+          }
+        : undefined
+
       const response = await fetch('/api/slide', {
         method: 'POST',
         headers: {
@@ -75,6 +96,7 @@ export default function CourseContentGenerator() {
           sessionLength,
           difficultyLevel,
           topicName,
+          courseInfo,
         }),
       })
 
@@ -92,7 +114,14 @@ export default function CourseContentGenerator() {
         setGenerationError(data._error)
         toast.warning('Content generation had issues. Using fallback content.')
       } else {
-        toast.success('Course content generated successfully from your selected sources!')
+        // Different success messages based on whether sources were used
+        if (selectedSourcesCount === 0) {
+          toast.success(
+            'Course content generated successfully using general knowledge and course context!',
+          )
+        } else {
+          toast.success('Course content generated successfully from your selected sources!')
+        }
       }
 
       // Store source metadata if available

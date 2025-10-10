@@ -139,6 +139,7 @@ export async function POST(req: Request) {
       sessionLength,
       difficultyLevel,
       topicName,
+      courseInfo,
     } = requestData
 
     console.log('Data from request:', {
@@ -149,6 +150,7 @@ export async function POST(req: Request) {
       sessionLength,
       difficultyLevel,
       topicName,
+      courseInfo,
     })
 
     // Generate course content
@@ -160,6 +162,7 @@ export async function POST(req: Request) {
       sessionLength,
       difficultyLevel,
       topicName,
+      courseInfo,
     )
 
     return NextResponse.json(generatedContent)

@@ -4,6 +4,7 @@
 import { createOllama } from 'ollama-ai-provider'
 import { type CoreMessage, generateText } from 'ai'
 import type { ClientSource } from '@/lib/types/client-source'
+import type { CourseInfo } from '@/lib/types/course-info-types'
 import type {
   LectureContent,
   AssessmentQuestion,
@@ -42,6 +43,7 @@ export async function generateCourseContent(
   sessionLength: number,
   difficultyLevel: string,
   topicName: string,
+  courseInfo?: CourseInfo,
 ): Promise<LectureContent> {
   try {
     // Check for required environment variables
@@ -55,8 +57,11 @@ export async function generateCourseContent(
 
     // Prepare source content
     console.log('Preparing source content...')
-    const { content: assistantContent, metadata: sourceMetadata } =
-      await prepareSourceContent(selectedSources)
+    const { content: assistantContent, metadata: sourceMetadata } = await prepareSourceContent(
+      selectedSources,
+      topicName,
+      courseInfo,
+    )
 
     // Ensure assistant content fits within context window
     const assistantMessage: CoreMessage = {
@@ -112,7 +117,9 @@ export async function generateCourseContent(
 
     const metadataUserMessage: CoreMessage = {
       role: 'user',
-      content: `Generate the title, learning outcomes, and at least 5-10 key terms for a ${difficultyLevel} level ${contentType} on "${topicName}" based STRICTLY on the provided source materials above.`,
+      content: sourceMetadata.usingCourseContext
+        ? `Generate the title, learning outcomes, and at least 5-10 key terms for a ${difficultyLevel} level ${contentType} on "${topicName}" based on standard academic knowledge and best practices for this subject area.`
+        : `Generate the title, learning outcomes, and at least 5-10 key terms for a ${difficultyLevel} level ${contentType} on "${topicName}" based STRICTLY on the provided source materials above.`,
     }
 
     const metadataMessages = [metadataSystemMessage, assistantMessage, metadataUserMessage]
@@ -137,10 +144,17 @@ export async function generateCourseContent(
     const introSystemPrompt = `You are an expert educational content developer. Continue creating a ${difficultyLevel} level ${contentType} on "${topicName}" designed for a ${sessionLength}-minute session.
 
 IMPORTANT INSTRUCTIONS:
-1. You MUST base your content ENTIRELY on the source materials provided.
+${
+  sourceMetadata.usingCourseContext
+    ? `1. Since no specific source materials were provided, base your content on standard academic knowledge for the topic.
+2. Draw from established educational practices and common curriculum content for this subject area.
+3. Create content appropriate for the specified difficulty level and session length.
+4. Ensure the introduction provides context and importance of the topic based on general knowledge.`
+    : `1. You MUST base your content ENTIRELY on the source materials provided.
 2. Extract key concepts, terminology, examples, and explanations directly from the source materials.
 3. Do not introduce concepts or information that is not present in the source materials.
-4. Create an engaging introduction that provides context and importance of the topic.
+4. Create an engaging introduction that provides context and importance of the topic.`
+}
 
 RESPONSE FORMAT:
 Your response MUST be a valid JSON object with EXACTLY these fields:
@@ -157,7 +171,9 @@ CRITICAL: Your response MUST be valid JSON only. Do not include any text, markdo
 
     const introUserMessage: CoreMessage = {
       role: 'user',
-      content: `Generate an engaging introduction for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based STRICTLY on the provided source materials above.`,
+      content: sourceMetadata.usingCourseContext
+        ? `Generate an engaging introduction for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based on standard academic knowledge and best practices for this subject area.`
+        : `Generate an engaging introduction for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based STRICTLY on the provided source materials above.`,
     }
 
     const introMessages = [introSystemMessage, assistantMessage, introUserMessage]
@@ -179,9 +195,15 @@ CRITICAL: Your response MUST be valid JSON only. Do not include any text, markdo
     const specialSlidesSystemPrompt = `You are an expert educational content developer. Continue creating a ${difficultyLevel} level ${contentType} on "${topicName}" designed for a ${sessionLength}-minute session.
 
 IMPORTANT INSTRUCTIONS:
-1. You MUST base your content ENTIRELY on the source materials provided.
+${
+  sourceMetadata.usingCourseContext
+    ? `1. Since no specific source materials were provided, base your content on standard academic knowledge for the topic.
+2. Draw from established educational practices and common curriculum content for this subject area.
+3. Create content appropriate for the specified difficulty level and session length.`
+    : `1. You MUST base your content ENTIRELY on the source materials provided.
 2. Extract key concepts, terminology, examples, and explanations directly from the source materials.
-3. Do not introduce concepts or information that is not present in the source materials.
+3. Do not introduce concepts or information that is not present in the source materials.`
+}
 4. Create ONLY the following special slides:
  - Introduction slide (first slide that introduces the topic)
  - Agenda/Overview slide (outlines what will be covered)
@@ -228,7 +250,9 @@ CRITICAL: Your response MUST be valid JSON only. Do not include any text, markdo
 
     const specialSlidesUserMessage: CoreMessage = {
       role: 'user',
-      content: `Generate the introduction, agenda, assessment, and conclusion slides for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based STRICTLY on the provided source materials above.`,
+      content: sourceMetadata.usingCourseContext
+        ? `Generate the introduction, agenda, assessment, and conclusion slides for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based on standard academic knowledge and best practices for this subject area.`
+        : `Generate the introduction, agenda, assessment, and conclusion slides for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based STRICTLY on the provided source materials above.`,
     }
 
     const specialSlidesMessages = [
@@ -291,9 +315,15 @@ CRITICAL: Your response MUST be valid JSON only. Do not include any text, markdo
       const contentSlidesSystemPrompt = `You are generating content slides ${startSlideNum} through ${endSlideNum} of a total of ${totalContentSlidesNeeded} content slides. Ensure all slides are unique.
 
 IMPORTANT INSTRUCTIONS:
-1. You MUST base your content ENTIRELY on the source materials provided.
+${
+  sourceMetadata.usingCourseContext
+    ? `1. Since no specific source materials were provided, base your content on standard academic knowledge for the topic.
+2. Draw from established educational practices and common curriculum content for this subject area.
+3. Create content appropriate for the specified difficulty level and session length.`
+    : `1. You MUST base your content ENTIRELY on the source materials provided.
 2. Extract key concepts, terminology, examples, and explanations directly from the source materials.
-3. Do not introduce concepts or information that is not present in the source materials.
+3. Do not introduce concepts or information that is not present in the source materials.`
+}
 4. Create detailed teaching slides with substantial content on each slide.
 5. Focus ONLY on core teaching content slides.
 6. Each slide should have comprehensive speaker notes with additional details and examples.
@@ -324,7 +354,11 @@ CRITICAL: Your response MUST be valid JSON only. Do not include any text, markdo
 
       const contentSlidesUserMessage: CoreMessage = {
         role: 'user',
-        content: `Generate content slides ${startSlideNum} through ${endSlideNum} for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based STRICTLY on the provided source materials above. 
+        content: sourceMetadata.usingCourseContext
+          ? `Generate content slides ${startSlideNum} through ${endSlideNum} for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based on standard academic knowledge and best practices for this subject area. 
+        
+DO NOT create introduction, agenda, assessment, or conclusion slides. Focus ONLY on core teaching content slides.`
+          : `Generate content slides ${startSlideNum} through ${endSlideNum} for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based STRICTLY on the provided source materials above. 
         
 DO NOT create introduction, agenda, assessment, or conclusion slides. Focus ONLY on core teaching content slides.`,
       }
@@ -381,7 +415,9 @@ DO NOT create introduction, agenda, assessment, or conclusion slides. Focus ONLY
 
     const activitiesUserMessage: CoreMessage = {
       role: 'user',
-      content: `Generate the activities for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based STRICTLY on the provided source materials above.`,
+      content: sourceMetadata.usingCourseContext
+        ? `Generate the activities for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based on standard academic knowledge and best practices for this subject area.`
+        : `Generate the activities for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based STRICTLY on the provided source materials above.`,
     }
 
     const activitiesMessages = [activitiesSystemMessage, assistantMessage, activitiesUserMessage]
@@ -417,7 +453,9 @@ DO NOT create introduction, agenda, assessment, or conclusion slides. Focus ONLY
 
     const assessmentUserMessage: CoreMessage = {
       role: 'user',
-      content: `Generate assessment ideas (without example questions) for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based STRICTLY on the provided source materials above.`,
+      content: sourceMetadata.usingCourseContext
+        ? `Generate assessment ideas (without example questions) for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based on standard academic knowledge and best practices for this subject area.`
+        : `Generate assessment ideas (without example questions) for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based STRICTLY on the provided source materials above.`,
     }
 
     const assessmentMessages = [assessmentSystemMessage, assistantMessage, assessmentUserMessage]
@@ -479,7 +517,9 @@ DO NOT create introduction, agenda, assessment, or conclusion slides. Focus ONLY
 
     const readingsUserMessage: CoreMessage = {
       role: 'user',
-      content: `Generate further reading suggestions for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based STRICTLY on the provided source materials above.`,
+      content: sourceMetadata.usingCourseContext
+        ? `Generate further reading suggestions for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based on standard academic knowledge and best practices for this subject area.`
+        : `Generate further reading suggestions for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based STRICTLY on the provided source materials above.`,
     }
 
     const readingsMessages = [readingsSystemMessage, assistantMessage, readingsUserMessage]
