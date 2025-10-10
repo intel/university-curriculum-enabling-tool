@@ -887,6 +887,77 @@ function getDefaultLevels(language: 'en' | 'id'): {
       }
 }
 
+// Helper function to manually extract criteria from text when JSON parsing fails
+function extractCriteriaFromText(text: string, language: 'en' | 'id'): ProjectRubricCriterion[] {
+  const criteria: ProjectRubricCriterion[] = []
+
+  // Look for numbered items or bullet points that might contain criteria
+  const lines = text.split('\n')
+  let currentCriterion: Partial<ProjectRubricCriterion> | null = null
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+
+    // Look for numbered criteria (1., 2., etc.) or bullet points
+    const criterionMatch = trimmed.match(
+      /^(?:\d+\.|\*|-)\s*\*?\*?([^(]+?)(?:\s*\((\d+)%?\))?\*?\*?/,
+    )
+    if (criterionMatch) {
+      // Save previous criterion if exists
+      if (currentCriterion && currentCriterion.name) {
+        criteria.push({
+          name: currentCriterion.name,
+          weight: currentCriterion.weight || 20,
+          levels: currentCriterion.levels || getDefaultLevels(language),
+        })
+      }
+
+      // Start new criterion
+      currentCriterion = {
+        name: criterionMatch[1].trim(),
+        weight: criterionMatch[2] ? parseInt(criterionMatch[2]) : 20,
+        levels: getDefaultLevels(language),
+      }
+    }
+  }
+
+  // Add last criterion if exists
+  if (currentCriterion && currentCriterion.name) {
+    criteria.push({
+      name: currentCriterion.name,
+      weight: currentCriterion.weight || 20,
+      levels: currentCriterion.levels || getDefaultLevels(language),
+    })
+  }
+
+  return criteria
+}
+
+// Helper function to get default level descriptions
+function getDefaultLevels(language: 'en' | 'id'): {
+  excellent: string
+  good: string
+  average: string
+  acceptable: string
+  poor: string
+} {
+  return language === 'id'
+    ? {
+        excellent: 'Menunjukkan pemahaman yang luar biasa dan penerapan yang sangat baik',
+        good: 'Menunjukkan pemahaman yang baik dan penerapan yang tepat',
+        average: 'Menunjukkan pemahaman yang memadai dengan beberapa kekurangan',
+        acceptable: 'Menunjukkan pemahaman dasar dengan kekurangan yang jelas',
+        poor: 'Menunjukkan pemahaman yang terbatas atau tidak memadai',
+      }
+    : {
+        excellent: 'Demonstrates exceptional understanding and excellent application',
+        good: 'Shows good understanding and appropriate application',
+        average: 'Shows adequate understanding with some shortcomings',
+        acceptable: 'Shows basic understanding with clear deficiencies',
+        poor: 'Shows limited or inadequate understanding',
+      }
+}
+
 // Add a new function to generate each section of the rubric separately
 async function generateRubricSection(
   section: 'report' | 'demo' | 'individual',
