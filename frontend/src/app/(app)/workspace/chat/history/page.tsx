@@ -33,6 +33,7 @@ import { usePersonaStore } from '@/lib/store/persona-store'
 import { Badge } from '@/components/ui/badge'
 import { useContextAvailability } from '@/lib/hooks/use-context-availability'
 import { getSelectContextDescription } from '@/lib/utils/context-messages'
+import { extractTextFromMessage } from '@/lib/utils/message'
 
 export default function ChatHistoryPage() {
   const [, setIsMobile] = useState(false)
@@ -53,7 +54,7 @@ export default function ChatHistoryPage() {
 
   const filteredChats = chatArray.filter((chat) =>
     chat.messages.some((message) =>
-      message.content.toLowerCase().includes(searchTerm.toLowerCase()),
+      extractTextFromMessage(message).toLowerCase().includes(searchTerm.toLowerCase()),
     ),
   )
 
@@ -185,7 +186,7 @@ export default function ChatHistoryPage() {
                         )}
                       </CardTitle>
                       <CardDescription className="ml-2 max-w-[240px] truncate text-sm">
-                        {chat.messages[1].content}
+                        {extractTextFromMessage(chat.messages[1])}
                       </CardDescription>
                     </div>
                     <div className="flex items-center space-x-2">

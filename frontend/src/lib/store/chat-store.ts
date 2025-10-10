@@ -4,11 +4,11 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { ClientSource } from '../types/client-source'
-import { Message } from '@ai-sdk/react'
+import { UIMessage } from '@ai-sdk/react'
 import { usePersonaStore } from '@/lib/store/persona-store'
 import { Course } from '@/payload-types'
 
-interface ExtendedMessage extends Message {
+interface ExtendedMessage extends UIMessage {
   model?: string
   selectedCourse?: Course
   selectedSources?: ClientSource[]
@@ -40,7 +40,7 @@ interface Actions {
   getMessagesById: (chatId: string) => ExtendedMessage[]
   saveMessages: (
     chatId: string,
-    messages: Message[],
+    messages: UIMessage[],
     model: string,
     selectedCourse: Course | undefined,
     selectedSources: ClientSource[],

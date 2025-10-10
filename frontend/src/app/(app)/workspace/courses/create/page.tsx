@@ -16,7 +16,7 @@ import {
   Search,
   X,
 } from 'lucide-react'
-import { zodResolver } from '@hookform/resolvers/zod'
+import { standardSchemaResolver } from '@hookform/resolvers/standard-schema'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { useModelStore } from '@/lib/store/model-store'
@@ -147,7 +147,7 @@ export default function CreateCoursePage() {
   }
 
   const form = useForm<CourseFormValues>({
-    resolver: zodResolver(courseFormSchema),
+    resolver: standardSchemaResolver(courseFormSchema),
     defaultValues,
     mode: 'onBlur', // Validate on blur (not on every change)
     reValidateMode: 'onSubmit', // Only re-validate on submit, not on every change

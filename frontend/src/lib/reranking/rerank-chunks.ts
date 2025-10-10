@@ -1,9 +1,9 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { CoreMessage, generateText } from 'ai'
+import { ModelMessage, generateText } from 'ai'
 import { ScoredChunk } from '../types/context-chunk'
-import { createOllama } from 'ollama-ai-provider'
+import { createOllama } from 'ollama-ai-provider-v2'
 
 // Configuration
 const CONFIG = {
@@ -53,7 +53,7 @@ type OllamaFn = ReturnType<typeof createOllama>
 /**
  * Creates a reranking prompt for the given query and chunk
  */
-function createRerankingPrompt(query: string, chunk: string): CoreMessage {
+function createRerankingPrompt(query: string, chunk: string): ModelMessage {
   return {
     role: 'user',
     content: `Rate the relevance of the following passage to the query on a scale from 0 to 10.
@@ -122,7 +122,7 @@ async function rerankChunk(
       model: ollama(modelName),
       messages: [prompt],
       temperature: 0.0,
-      maxTokens: 20, // We only need a small response
+      maxOutputTokens: 20, // We only need a small response
     })
 
     // Extract score from response

@@ -8,7 +8,7 @@ import { summarizeDocument } from './summarize-document'
 export const autoSummarize = tool({
   description:
     'Automatically determines if full-document summarization is needed. If so, it uses the summarization flow without inferring beyond the provided data.',
-  parameters: z.object({
+  inputSchema: z.object({
     selectedSources: z
       .string()
       .describe(
@@ -18,6 +18,9 @@ export const autoSummarize = tool({
     selectedModel: z.string().optional().default('llama3.1'),
   }),
   async execute(args, options) {
+    if (!summarizeDocument.execute) {
+      throw new Error('summarizeDocument.execute is not available')
+    }
     return await summarizeDocument.execute({ ...args, approach: 'narrative' }, options)
   },
 })

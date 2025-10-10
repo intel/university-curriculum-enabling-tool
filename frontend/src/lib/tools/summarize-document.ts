@@ -4,13 +4,13 @@
 import { z } from 'zod'
 import { tool, generateText } from 'ai'
 import { getStoredEmbeddings } from '../embedding/get-stored-embeddings'
-import { createOllama } from 'ollama-ai-provider'
+import { createOllama } from 'ollama-ai-provider-v2'
 import { verifyModel } from '../model/model-manager'
 
 export const summarizeDocument = tool({
   description:
     'Summarizes the entire document by reconstructing it from all chunks (sorted by order). Only uses the provided data and does not infer beyond it.',
-  parameters: z.object({
+  inputSchema: z.object({
     selectedSources: z
       .string()
       .describe(

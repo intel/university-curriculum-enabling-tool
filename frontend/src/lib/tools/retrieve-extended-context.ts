@@ -10,7 +10,7 @@ import { getUserEmbedding } from '../embedding/get-user-embedding'
 export const retrieveExtendedContext = tool({
   description:
     'Retrieves extended context using a lower similarity threshold (default threshold: 0.5, topK: 5) and orders chunks properly.',
-  parameters: z.object({
+  inputSchema: z.object({
     query: z.string().describe('Latest user query for context retrieval.'),
     conversationHistory: z
       .string()

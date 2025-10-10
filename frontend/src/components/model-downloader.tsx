@@ -16,7 +16,7 @@ import useChatStore from '@/lib/store/chat-store'
 import { useModels } from '@/lib/hooks/use-models'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
-import { zodResolver } from '@hookform/resolvers/zod'
+import { standardSchemaResolver } from '@hookform/resolvers/standard-schema'
 import { throttle } from 'lodash'
 import { Info, Loader2 } from 'lucide-react'
 
@@ -46,7 +46,7 @@ export function ModelDownloader({ open, onOpenChange }: ModelDownloaderProps) {
   const { mutate } = useModels()
 
   const form = useForm<z.infer<typeof formSchema>>({
-    resolver: zodResolver(formSchema),
+    resolver: standardSchemaResolver(formSchema),
     defaultValues: {
       name: '',
     },

@@ -6,11 +6,14 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { ContextRequirementMessage } from '@/components/context-requirement-message'
 import { useContextAvailability } from '@/lib/hooks/use-context-availability'
+import { useCourses } from '@/lib/hooks/use-courses'
+import type { Course } from '@/payload-types'
 import { useSourcesStore } from '@/lib/store/sources-store'
 import type { LectureContent, View } from '@/lib/types/slide'
 import { WelcomeView } from './WelcomeView'
 import { ConfigView } from './ConfigView'
 import { ContentView } from './ContentView'
+import { usePersonaStore } from '@/lib/store/persona-store'
 
 export default function CourseContentGenerator() {
   const [courseContent, setCourseContent] = useState<LectureContent | null>(null)
@@ -35,8 +38,12 @@ export default function CourseContentGenerator() {
   } | null>(null)
 
   const { getActiveContextModelName } = useContextAvailability()
+  const { data: coursesData } = useCourses()
   const selectedModel = getActiveContextModelName()
   const selectedSources = useSourcesStore((state) => state.selectedSources)
+  const activePersona = usePersonaStore((s) => s.activePersona)
+  const getPersonaLanguage = usePersonaStore((s) => s.getPersonaLanguage)
+  const selectedCourseId = usePersonaStore((s) => s.selectedCourseId)
 
   const generateCourseContent = async () => {
     if (!selectedModel) {
@@ -50,8 +57,9 @@ export default function CourseContentGenerator() {
     }
 
     const selectedSourcesCount = selectedSources.filter((source) => source.selected).length
-    if (selectedSourcesCount === 0 || selectedSourcesCount >= 2) {
-      toast.error('Please select EXACTLY one source.')
+    // Allow 0 or 1 source selected; block only if more than one
+    if (selectedSourcesCount > 1) {
+      toast.error('Please select at most one source.')
       return
     }
 
@@ -62,6 +70,15 @@ export default function CourseContentGenerator() {
     setExpandedQuestions({})
 
     try {
+      // Derive courseInfo from the selected course (if available)
+      const selectedCourse = coursesData?.docs?.find((c: Course) => c.id === selectedCourseId)
+      const courseInfo = selectedCourse
+        ? {
+            courseCode: selectedCourse.code || '',
+            courseName: selectedCourse.name || '',
+          }
+        : undefined
+
       const response = await fetch('/api/slide', {
         method: 'POST',
         headers: {
@@ -75,6 +92,8 @@ export default function CourseContentGenerator() {
           sessionLength,
           difficultyLevel,
           topicName,
+          language: getPersonaLanguage(activePersona),
+          courseInfo,
         }),
       })
 
@@ -92,7 +111,7 @@ export default function CourseContentGenerator() {
         setGenerationError(data._error)
         toast.warning('Content generation had issues. Using fallback content.')
       } else {
-        toast.success('Course content generated successfully from your selected sources!')
+        toast.success('Course content generated successfully (using sources if provided).')
       }
 
       // Store source metadata if available
@@ -134,6 +153,8 @@ export default function CourseContentGenerator() {
         body: JSON.stringify({
           action: 'download-pptx',
           content: enhancedContent,
+          // Pass persona language so the PPTX headings can be localized
+          language: getPersonaLanguage(activePersona),
         }),
       })
 
@@ -199,6 +220,8 @@ export default function CourseContentGenerator() {
         body: JSON.stringify({
           action: 'download-pdf',
           content: enhancedContent,
+          // Pass persona language so the PDF headings can be localized
+          language: getPersonaLanguage(activePersona),
         }),
       })
 

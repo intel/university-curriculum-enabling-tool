@@ -1,8 +1,8 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { createOllama } from 'ollama-ai-provider'
-import { generateObject } from 'ai'
+import { createOllama } from 'ollama-ai-provider-v2'
+import { generateObject, convertToModelMessages, type UIMessage } from 'ai'
 import { NextResponse } from 'next/server'
 import { hybridSearch } from '@/lib/chunk/hybrid-search'
 import { getStoredChunks } from '@/lib/chunk/get-stored-chunks'
@@ -29,12 +29,23 @@ type FaqResult = {
   _sentToFrontend?: boolean
 }
 
+type Usage = { inputTokens?: number; outputTokens?: number; totalTokens?: number }
+const getInputTokens = (u?: Usage | undefined) => u?.inputTokens ?? 0
+const getOutputTokens = (u?: Usage | undefined) => u?.outputTokens ?? 0
+const getTotalTokens = (u?: Usage | undefined) => u?.totalTokens ?? 0
+
 export const dynamic = 'force-dynamic'
 
 // Configuration constants
 const TEMPERATURE = parseFloat(process.env.RAG_TEMPERATURE || '0.1')
 const TOKEN_RESPONSE_BUDGET = 2048
 const TOKEN_CONTEXT_BUDGET = 1024
+
+// Language directive for enforcing output language
+const langDirective = (lang: 'en' | 'id') =>
+  lang === 'id'
+    ? 'PENTING: Semua output harus dalam Bahasa Indonesia yang jelas dan alami.'
+    : 'IMPORTANT: All output must be in clear and natural English.'
 
 // Content generation type for FAQs, not secret
 const CONTENT_TYPE_FAQ = 'faq'
@@ -49,17 +60,55 @@ const faqSystemPromptGenerator: SystemPromptGenerator = (isFirstPass, query, opt
   const courseInfo = options.courseInfo as
     | { courseName?: string; courseDescription?: string }
     | undefined
+  const language = (options.language as 'en' | 'id') || 'en'
 
-  const contextInstruction = hasValidSources
-    ? 'based on the context provided'
+  const contextInstructionEN = hasValidSources
+    ? 'based on the provided context'
     : courseInfo?.courseName
       ? `for the course "${courseInfo.courseName}"${courseInfo.courseDescription ? ` (${courseInfo.courseDescription})` : ''}. Use general academic knowledge relevant to this course`
       : 'using general academic knowledge'
 
-  return `
-  Your job is to generate diverse and interesting FAQs with question answer pairs ${contextInstruction}.
+  const contextInstructionID = hasValidSources
+    ? 'berdasarkan konteks yang disediakan'
+    : courseInfo?.courseName
+      ? `untuk mata kuliah "${courseInfo.courseName}"${courseInfo.courseDescription ? ` (${courseInfo.courseDescription})` : ''}. Gunakan pengetahuan akademik umum yang relevan dengan mata kuliah ini`
+      : 'dengan menggunakan pengetahuan akademik umum'
 
-  Format ALL FAQs as a JSON object with this structure:
+  if (language === 'id') {
+    return `
+  ${langDirective(language)}
+
+  Tugas Anda adalah menghasilkan FAQ yang beragam dan menarik berupa pasangan pertanyaan–jawaban ${contextInstructionID}.
+
+  Format SEMUA FAQ sebagai objek JSON dengan struktur berikut (JANGAN terjemahkan kunci JSON – gunakan persis: FAQs, question, answer):
+  {
+    "FAQs": [
+      {
+        "question": "Teks pertanyaan",
+        "answer": "Jawaban yang rinci dan deskriptif. HARUS berupa string (bukan objek atau array) dan terstruktur dengan baik agar mudah dibaca."
+      }
+    ]
+  }
+    
+  Instruksi Penting:
+  1. Anda HARUS menghasilkan TEPAT ${faqCount} FAQ — tidak kurang, tidak lebih.
+  2. Buat pertanyaan yang BERAGAM — variasikan format (bagaimana, apa, mengapa, apakah, dll.) dan topik.
+  3. Susun pertanyaan dengan cara yang berbeda — jangan mengikuti pola yang kaku.
+  4. Fokus pada aspek konten yang berbeda — temukan sudut pandang dan wawasan yang unik.
+  5. Pastikan semua tanda kutip dan karakter khusus dalam JSON ter-escape dengan benar.
+  6. JSON harus valid dan dapat di-parse tanpa kesalahan.
+  7. Jawaban harus rinci, deskriptif, dan memberikan penjelasan yang jelas${hasValidSources ? ' berdasarkan konteks' : ''}.
+  ${!hasValidSources && courseInfo?.courseName ? `8. Fokus pada pertanyaan dan jawaban yang relevan bagi mahasiswa di ${courseInfo.courseName}.` : ''}
+  `
+  }
+
+  // English default
+  return `
+  ${langDirective(language)}
+
+  Your job is to generate diverse and interesting FAQs with question–answer pairs ${contextInstructionEN}.
+
+  Format ALL FAQs as a JSON object with this structure (Do NOT translate JSON keys — use exactly: FAQs, question, answer):
   {
     "FAQs": [
       {
@@ -68,12 +117,12 @@ const faqSystemPromptGenerator: SystemPromptGenerator = (isFirstPass, query, opt
       }
     ]
   }
-
+    
   Important Instructions:
-  1. You MUST generate EXACTLY ${faqCount} FAQs - no more, no less.
-  2. Create DIVERSE questions - vary question formats (how, what, why, can, etc.) and topics.
-  3. Phrase questions differently - don't follow a rigid pattern.
-  4. Focus on different aspects of the content - find unique angles and insights.
+  1. You MUST generate EXACTLY ${faqCount} FAQs — no more, no less.
+  2. Create DIVERSE questions — vary question formats (how, what, why, can, etc.) and topics.
+  3. Phrase questions differently — don't follow a rigid pattern.
+  4. Focus on different aspects of the content — find unique angles and insights.
   5. Ensure all quotes and special characters in the JSON are properly escaped.
   6. The JSON must be valid and parsable without errors.
   7. Answers should be detailed, descriptive, and provide clear explanations${hasValidSources ? ' based on the context' : ''}.
@@ -90,12 +139,16 @@ const createFaqContentProcessor = (faqCount: number): ContentProcessor<FaqResult
   const sentToFrontendQuestions = new Set<string>()
 
   return (result, previousResults) => {
-    // Extract FAQs from the current result
-    const faqs = result.FAQs || []
+    // Extract FAQs from the current result - with better error handling
+    if (!result) {
+      console.error('FAQ Content Processor: result is undefined or null')
+      result = { FAQs: [] }
+    }
+    const faqs = Array.isArray(result.FAQs) ? result.FAQs : []
 
     // Process previous FAQs
     let previousFaqs: FaqItem[] = []
-    if (previousResults && previousResults.length > 0) {
+    if (previousResults && Array.isArray(previousResults) && previousResults.length > 0) {
       const prevResult = previousResults[previousResults.length - 1]
       if (prevResult && 'FAQs' in prevResult && Array.isArray(prevResult.FAQs)) {
         previousFaqs = prevResult.FAQs
@@ -110,12 +163,25 @@ const createFaqContentProcessor = (faqCount: number): ContentProcessor<FaqResult
       }
     }
 
+    // Ensure previousFaqs is always an array
+    if (!Array.isArray(previousFaqs)) {
+      previousFaqs = []
+    }
+
     // Normalize previous questions for comparison
     const normalizedPrevQuestions = previousFaqs.map((faq) =>
       faq.question.toLowerCase().trim().replace(/\s+/g, ' '),
     )
 
     // Filter out duplicates from current generation
+    console.log(
+      'DEBUG FAQ Processor: faqs type:',
+      typeof faqs,
+      'isArray:',
+      Array.isArray(faqs),
+      'length:',
+      faqs?.length,
+    )
     const uniqueNewFaqsList = faqs.filter((newFaq: { question: string }) => {
       const normalizedNewQuestion = newFaq.question.toLowerCase().trim().replace(/\s+/g, ' ')
       const questionKey = normalizedNewQuestion.substring(0, 40)
@@ -184,30 +250,80 @@ const createFaqContentProcessor = (faqCount: number): ContentProcessor<FaqResult
  */
 const createFaqGenerationFunction = (): GenerationFunction<FaqResult> => {
   return async (options: Record<string, unknown>) => {
-    const { model, messages, temperature, maxTokens } = options as {
+    const { model, messages, temperature, maxOutputTokens } = options as {
       model: unknown
       messages: unknown
       temperature: number
-      maxTokens: number
+      maxOutputTokens: number
+    }
+
+    if (!messages) {
+      throw new Error('createFaqGenerationFunction: messages is required')
+    }
+
+    if (!Array.isArray(messages)) {
+      throw new Error('createFaqGenerationFunction: messages must be an array')
+    }
+
+    // Handle both UIMessage format (with parts) and ModelMessage format (with content)
+    let modelMessages: Parameters<typeof generateObject>[0]['messages']
+
+    if (messages.length > 0 && 'parts' in messages[0]) {
+      // UIMessage format from direct generation - convert using AI SDK utility
+      modelMessages = convertToModelMessages(messages as UIMessage[])
+    } else {
+      // ModelMessage format from multi-pass system - use directly
+      modelMessages = messages as Parameters<typeof generateObject>[0]['messages']
+    }
+
+    // Ensure modelMessages is never undefined
+    if (!modelMessages || !Array.isArray(modelMessages)) {
+      throw new Error('createFaqGenerationFunction: Failed to process messages into valid format')
     }
 
     const result = await generateObject({
       model: model as Parameters<typeof generateObject>[0]['model'],
       output: 'no-schema' as const,
-      messages: messages as Parameters<typeof generateObject>[0]['messages'],
+      messages: modelMessages,
       temperature,
-      maxTokens,
+      maxOutputTokens,
+      providerOptions: {
+        ollama: {
+          mode: 'json',
+          options: {
+            numCtx: TOKEN_RESPONSE_BUDGET,
+          },
+        },
+      },
     })
 
     // Transform the raw AI response to FaqResult format
+    if (!result || !result.object) {
+      console.error('FAQ Generation: generateObject returned null or undefined result')
+      return {
+        object: { FAQs: [], _needNextPass: false, _sentToFrontend: false },
+        usage: undefined,
+      }
+    }
+
     const rawResponse = result.object as Record<string, unknown>
     let faqs: FaqItem[] = []
 
-    // Extract FAQs from the response
-    if (rawResponse.FAQs && Array.isArray(rawResponse.FAQs)) {
+    // Extract FAQs from the response with better error handling
+    console.log(
+      'DEBUG FAQ Generation: rawResponse type:',
+      typeof rawResponse,
+      'rawResponse:',
+      JSON.stringify(rawResponse, null, 2),
+    )
+
+    if (rawResponse && rawResponse.FAQs && Array.isArray(rawResponse.FAQs)) {
       faqs = rawResponse.FAQs
     } else if (Array.isArray(rawResponse)) {
       faqs = rawResponse
+    } else {
+      console.warn('FAQ Generation: Unexpected response format, using empty array')
+      faqs = []
     }
 
     const faqResult: FaqResult = {
@@ -216,15 +332,17 @@ const createFaqGenerationFunction = (): GenerationFunction<FaqResult> => {
       _sentToFrontend: false,
     }
 
+    const usageObj = result.usage
+      ? ({
+          inputTokens: (result.usage as Usage).inputTokens ?? undefined,
+          outputTokens: (result.usage as Usage).outputTokens ?? undefined,
+          totalTokens: (result.usage as Usage).totalTokens ?? undefined,
+        } as Usage)
+      : undefined
+
     return {
       object: faqResult,
-      usage: result.usage
-        ? {
-            promptTokens: result.usage.promptTokens,
-            completionTokens: result.usage.completionTokens,
-            totalTokens: result.usage.totalTokens,
-          }
-        : undefined,
+      usage: usageObj,
     }
   }
 }
@@ -246,6 +364,7 @@ export async function POST(req: Request) {
       useReranker, // Add this line with default value true
       _recursionDepth = 0,
       courseInfo, // Add courseInfo parameter
+      language = 'en',
     } = await req.json()
 
     // Debug logging
@@ -315,6 +434,7 @@ export async function POST(req: Request) {
       preserveOrder: !hasUserQuery,
       hasValidSources, // Add this for system prompt
       courseInfo, // Add this for system prompt
+      language,
     }
 
     // Start processing timer
@@ -330,22 +450,41 @@ export async function POST(req: Request) {
       // Direct generation without chunks for course context
       console.log('DEBUG FAQ API: Generating FAQs using course context only')
       const systemPrompt = faqSystemPromptGenerator(true, userQuery, options)
-      const userPrompt = courseInfo?.courseName
-        ? `Generate FAQs for the course "${courseInfo.courseName}"${userQuery ? ` related to: "${userQuery}"` : ''}. Use general academic knowledge relevant to this course.`
-        : `Generate FAQs${userQuery ? ` for the topic: "${userQuery}"` : ''}. Use general academic knowledge to provide comprehensive answers.`
+      let userPrompt: string
+      if (courseInfo?.courseName) {
+        if (language === 'id') {
+          userPrompt = `Buat FAQ untuk mata kuliah "${courseInfo.courseName}"${userQuery ? ` terkait: "${userQuery}"` : ''}. Gunakan pengetahuan akademik umum yang relevan dengan mata kuliah ini.`
+        } else {
+          userPrompt = `Generate FAQs for the course "${courseInfo.courseName}"${userQuery ? ` related to: "${userQuery}"` : ''}. Use general academic knowledge relevant to this course.`
+        }
+      } else {
+        if (language === 'id') {
+          userPrompt = `Buat FAQ${userQuery ? ` untuk topik: "${userQuery}"` : ''}. Gunakan pengetahuan akademik umum untuk memberikan jawaban yang komprehensif.`
+        } else {
+          userPrompt = `Generate FAQs${userQuery ? ` for the topic: "${userQuery}"` : ''}. Use general academic knowledge to provide comprehensive answers.`
+        }
+      }
 
       const messages = [
-        { role: 'system' as const, content: systemPrompt },
-        { role: 'user' as const, content: userPrompt },
+        { role: 'system' as const, parts: [{ type: 'text', text: systemPrompt }] },
+        { role: 'user' as const, parts: [{ type: 'text', text: userPrompt }] },
       ]
 
       try {
         const { object: rawResult, usage } = await faqGenerationFunction({
-          model: ollama(selectedModel, { numCtx: TOKEN_RESPONSE_BUDGET }),
+          model: ollama(selectedModel),
           output: 'no-schema',
           messages: messages,
           temperature: TEMPERATURE + 0.1,
-          maxTokens: TOKEN_RESPONSE_BUDGET,
+          maxOutputTokens: TOKEN_RESPONSE_BUDGET,
+          providerOptions: {
+            ollama: {
+              mode: 'json',
+              options: {
+                numCtx: TOKEN_RESPONSE_BUDGET,
+              },
+            },
+          },
         })
 
         const processedResult = faqContentProcessor(rawResult, [])
@@ -367,9 +506,9 @@ export async function POST(req: Request) {
             totalChunks: 0,
             remainingChunks: 0,
             tokenUsage: {
-              prompt: usage?.promptTokens || 0,
-              completion: usage?.completionTokens || 0,
-              total: usage?.totalTokens || 0,
+              prompt: getInputTokens(usage as Usage | undefined),
+              completion: getOutputTokens(usage as Usage | undefined),
+              total: getTotalTokens(usage as Usage | undefined),
             },
             timeTaken: Date.now() - startTime,
           },
@@ -384,17 +523,23 @@ export async function POST(req: Request) {
         userQuery,
         continueFaqs ? [] : retrievedChunks,
         faqGenerationFunction,
-        ollama(selectedModel, { numCtx: TOKEN_RESPONSE_BUDGET }),
+        ollama(selectedModel),
         options,
         CONTENT_TYPE_FAQ,
         faqSystemPromptGenerator,
         (query) => {
           if (hasValidSources) {
-            return `Generate FAQs for the following query: "${query}". Use the provided context to answer.`
+            return language === 'id'
+              ? `Buat FAQ untuk kueri berikut: "${query}". Gunakan konteks yang disediakan untuk menjawab.`
+              : `Generate FAQs for the following query: "${query}". Use the provided context to answer.`
           } else if (courseInfo?.courseName) {
-            return `Generate FAQs for the course "${courseInfo.courseName}"${query ? ` related to: "${query}"` : ''}. Use general academic knowledge relevant to this course.`
+            return language === 'id'
+              ? `Buat FAQ untuk mata kuliah "${courseInfo.courseName}"${query ? ` terkait: "${query}"` : ''}. Gunakan pengetahuan akademik umum yang relevan dengan mata kuliah ini.`
+              : `Generate FAQs for the course "${courseInfo.courseName}"${query ? ` related to: "${query}"` : ''}. Use general academic knowledge relevant to this course.`
           } else {
-            return `Generate FAQs${query ? ` for the topic: "${query}"` : ''}. Use general academic knowledge to provide comprehensive answers.`
+            return language === 'id'
+              ? `Buat FAQ${query ? ` untuk topik: "${query}"` : ''}. Gunakan pengetahuan akademik umum untuk memberikan jawaban yang komprehensif.`
+              : `Generate FAQs${query ? ` for the topic: "${query}"` : ''}. Use general academic knowledge to provide comprehensive answers.`
           }
         },
         faqContentProcessor,
@@ -423,6 +568,7 @@ export async function POST(req: Request) {
         continueFaqs: true,
         useReranker, // Include in recursive calls
         _recursionDepth: _recursionDepth + 1,
+        language,
       }
 
       const nextReqObj = new Request(req.url, {

@@ -58,7 +58,7 @@ export default function FAQComponent() {
   const { getActiveContextModelName, getContextTypeLabel } = useContextAvailability()
   const selectedSources = useSourcesStore((state) => state.selectedSources)
   const { data: coursesData } = useCourses()
-  const { selectedCourseId } = usePersonaStore()
+  const { selectedCourseId, getPersonaLanguage } = usePersonaStore()
 
   // Function to trigger the API and fetch initial FAQs
   const fetchAPI = async () => {
@@ -113,6 +113,7 @@ export default function FAQComponent() {
           continueFaqs: false,
           useReranker: useReranker, // Add this line
           courseInfo, // Add course info
+          language: getPersonaLanguage(),
         }),
       })
 
@@ -171,6 +172,7 @@ export default function FAQComponent() {
           continueFaqs: true, // Flag that this is a continuation request
           useReranker: useReranker, // Add this line
           courseInfo, // Add course info
+          language: getPersonaLanguage(),
         }),
       })
 

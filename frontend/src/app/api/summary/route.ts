@@ -1,8 +1,8 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { createOllama } from 'ollama-ai-provider'
-import { generateObject, CoreMessage } from 'ai'
+import { createOllama } from 'ollama-ai-provider-v2'
+import { generateObject, ModelMessage } from 'ai'
 import { errorResponse } from '@/lib/api-response'
 import { hybridSearch } from '@/lib/chunk/hybrid-search'
 import { generateEmbeddings } from '@/lib/embedding/generate-embedding'
@@ -66,7 +66,7 @@ const useReranker = false
 const similarityThreshold = 0.8
 
 export async function POST(req: Request) {
-  const { selectedModel, selectedSources, courseInfo } = await req.json()
+  const { selectedModel, selectedSources, courseInfo, language } = await req.json()
 
   // Check if we have valid sources
   const hasValidSources =
@@ -125,8 +125,28 @@ export async function POST(req: Request) {
       ? topChunks.map((chunk) => chunk.chunk).join('\n\n')
       : ''
 
-    const SystemPrompt = `You are a world-class academic summarizer. Your job is to generate a highly detailed, 
-    well-structured, and interesting summary for students, based ${hasValidSources ? 'strictly on the provided context' : `on general academic knowledge${courseInfo?.courseName ? ` for the course "${courseInfo.courseName}"` : ''}${courseInfo?.courseDescription ? `. Course context: ${courseInfo.courseDescription}` : ''}`}.
+    const isID = language === 'id'
+    const languageDirective = isID
+      ? 'PENTING: Anda harus menghasilkan seluruh keluaran dalam Bahasa Indonesia.'
+      : 'IMPORTANT: You must produce the entire output in English.'
+    const overviewHeadingLabel = isID ? 'Ikhtisar' : 'Overview'
+    const conclusionHeadingLabel = isID ? 'Kesimpulan' : 'Conclusion'
+    const isConclusionHeadingText = (txt: string | undefined) => {
+      if (!txt) return false
+      const t = txt.trim().toLowerCase()
+      return t === 'conclusion' || t === 'kesimpulan'
+    }
+
+    const strictnessDirective = hasValidSources
+      ? isID
+        ? 'SANGAT PENTING: Hanya gunakan konteks yang disediakan. Jangan menambahkan informasi yang tidak ada dalam konteks. Jika informasi tertentu tidak tersedia, abaikan bagian tersebut dan jangan menebak.'
+        : 'CRITICAL: Use only the provided context. Do not add information that is not present in the context. If certain information is missing, omit that part rather than guessing.'
+      : ''
+
+    const SystemPrompt = `${languageDirective}\n\nYou are a world-class academic summarizer. Your job is to generate a highly detailed, 
+    well-structured, and interesting summary for students, based ${hasValidSources ? 'strictly on the provided context' : `on general academic knowledge${courseInfo?.courseName ? ` for the course \"${courseInfo.courseName}\"` : ''}${courseInfo?.courseDescription ? `. Course context: ${courseInfo.courseDescription}` : ''}`}.
+
+${strictnessDirective}
 
 INSTRUCTIONS:
 - The summary must be comprehensive, with clear hierarchy (multiple heading levels, sections, and subsections).
@@ -167,6 +187,7 @@ CRITICAL: Your response MUST be valid JSON only. Do not include any text, markdo
 - Be comprehensive, but concise and easy to scan
 - Include as much technical detail, facts, and examples as possible from the context. Do not omit any important information.
 - End with a short, insightful conclusion
+STRICTNESS: Only use the provided context. Do not invent facts or add content from outside the provided context.
 If you do not use at least two heading levels and at least one list, your answer will be considered incomplete.`
       : `Generate a highly detailed, structured, and interesting summary${courseInfo?.courseName ? ` for students in ${courseInfo.courseName}` : ''}. ${courseInfo?.courseDescription ? `Use this course context to guide your summary: ${courseInfo.courseDescription}. ` : ''}The summary should:
 - Start with a clear, descriptive title (no markdown)
@@ -178,34 +199,53 @@ If you do not use at least two heading levels and at least one list, your answer
 - End with a short, insightful conclusion
 If you do not use at least two heading levels and at least one list, your answer will be considered incomplete.`
 
-    const systemMessage: CoreMessage = { role: 'system', content: SystemPrompt }
-    const userMessage: CoreMessage = { role: 'user', content: UserPrompt }
+    const systemMessage: ModelMessage = { role: 'system', content: SystemPrompt }
+    const userMessage: ModelMessage = { role: 'user', content: UserPrompt }
 
     // Combine messages - only include assistant message if source is selected
     const fullMessages = hasValidSources
-      ? [systemMessage, { role: 'assistant', content: topChunkContent } as CoreMessage, userMessage]
+      ? [
+          systemMessage,
+          { role: 'assistant', content: topChunkContent } as ModelMessage,
+          userMessage,
+        ]
       : [systemMessage, userMessage]
 
     const startFinalSummarizeTime = Date.now()
     const { object: summaryObj, usage: finalUsage } = await generateObject({
-      model: ollama(selectedModel, { numCtx: TOKEN_RESPONSE_BUDGET }),
+      model: ollama(selectedModel),
       output: 'no-schema',
       messages: fullMessages,
       temperature: TEMPERATURE,
-      maxTokens: TOKEN_RESPONSE_BUDGET,
+      maxOutputTokens: TOKEN_RESPONSE_BUDGET,
+      providerOptions: {
+        ollama: {
+          mode: 'json',
+          options: {
+            numCtx: TOKEN_RESPONSE_BUDGET,
+          },
+        },
+      },
     })
     const endFinalSummarizeTime = Date.now()
     const finalTimeTakenMs = endFinalSummarizeTime - startFinalSummarizeTime
     const finalTimeTakenSeconds = finalTimeTakenMs / 1000
-    const finalTotalTokens = finalUsage.completionTokens
-    const finalTokenGenerationSpeed = finalTotalTokens / finalTimeTakenSeconds
+    // Safely derive total tokens else fall back to input+output (coerce to number)
+    const finalTotalTokens =
+      typeof finalUsage?.totalTokens === 'number'
+        ? finalUsage.totalTokens
+        : Number(finalUsage?.inputTokens ?? 0) + Number(finalUsage?.outputTokens ?? 0)
+
+    // Guard divide-by-zero when computing generation speed
+    const finalTokenGenerationSpeed =
+      finalTimeTakenSeconds > 0 ? finalTotalTokens / finalTimeTakenSeconds : 0
 
     console.log(
       `Progress: 100.00 % | ` +
         `Tokens: ` +
         `promptEst(?) ` +
-        `prompt(${finalUsage.promptTokens}) ` +
-        `completion(${finalUsage.completionTokens}) | ` +
+        `prompt(${finalUsage?.inputTokens ?? 0}) ` +
+        `completion(${finalUsage?.outputTokens ?? 0}) | ` +
         `${finalTokenGenerationSpeed.toFixed(2)} t/s | ` +
         `Duration: ${finalTimeTakenSeconds} s`,
     )
@@ -326,8 +366,7 @@ If you do not use at least two heading levels and at least one list, your answer
         flattenBlocks(filteredContent, 2)
       }
       const conclusionCount = blocks.filter(
-        (block) =>
-          block.type === 'heading' && block.content.trim().toLowerCase().includes('conclusion'),
+        (block) => block.type === 'heading' && isConclusionHeadingText(block.content),
       ).length
 
       if (conclusionCount > 0) {
@@ -338,13 +377,12 @@ If you do not use at least two heading levels and at least one list, your answer
         console.log(`DEBUG: Also found conclusion in summaryObj.conclusion field`)
       }
       const hasExistingConclusion = blocks.some(
-        (block) =>
-          block.type === 'heading' && block.content.trim().toLowerCase().includes('conclusion'),
+        (block) => block.type === 'heading' && isConclusionHeadingText(block.content),
       )
 
       if (summaryObj.conclusion && !hasExistingConclusion) {
         console.log(`DEBUG: Adding conclusion from summaryObj.conclusion`)
-        blocks.push({ type: 'heading', content: 'Conclusion', level: 2 })
+        blocks.push({ type: 'heading', content: conclusionHeadingLabel, level: 2 })
         blocks.push({ type: 'paragraph', content: summaryObj.conclusion })
       } else if (summaryObj.conclusion && hasExistingConclusion) {
         console.log(`DEBUG: Not adding conclusion - already exists in content blocks`)
@@ -357,7 +395,12 @@ If you do not use at least two heading levels and at least one list, your answer
       if (fallbackText && fallbackText.trim().length > 0) {
         blocks.push({ type: 'paragraph', content: fallbackText })
       } else {
-        blocks.push({ type: 'paragraph', content: 'No summary content was generated.' })
+        blocks.push({
+          type: 'paragraph',
+          content: isID
+            ? 'Tidak ada ringkasan yang dihasilkan.'
+            : 'No summary content was generated.',
+        })
       }
       console.warn(
         'WARNING: LLM summary object was missing or malformed. Fallback to plain text.',
@@ -376,7 +419,7 @@ If you do not use at least two heading levels and at least one list, your answer
       )
     }
 
-    // Prepare citation blocks (split paragraphs/lists into sentences/items) - only if source is selected
+    // Prepare citation blocks (split paragraphs/lists into sentences) - only if source is selected
     type CitationBlock = { type: string; content: string; blockIdx: number; itemIdx?: number }
     const citationBlocks: CitationBlock[] = []
 
@@ -670,7 +713,7 @@ If you do not use at least two heading levels and at least one list, your answer
     // Insert a special heading-title block for the title, and avoid duplicate Conclusion
     let processedBlocks: Block[] = []
     const hasConclusionHeading = blocks.some(
-      (b) => b.type === 'heading' && b.content.trim().toLowerCase() === 'conclusion',
+      (b) => b.type === 'heading' && isConclusionHeadingText(b.content),
     )
     // --- HIERARCHY IMPROVEMENT LOGIC ---
     // 1. Always insert a level 1 title as heading-title
@@ -693,10 +736,10 @@ If you do not use at least two heading levels and at least one list, your answer
           break
         }
       }
-      // 3. If no level 2 headings, insert 'Overview' before first paragraph (if present)
+      // 3. If no level 2 headings, insert localized 'Overview' before first paragraph (if present)
       if (!hasLevel2) {
         if (blocks[idx] && blocks[idx].type === 'paragraph') {
-          out.push({ type: 'heading', content: 'Overview', level: 2 })
+          out.push({ type: 'heading', content: overviewHeadingLabel, level: 2 })
           out.push(blocks[idx])
           idx++
         }
@@ -718,10 +761,10 @@ If you do not use at least two heading levels and at least one list, your answer
           if (b) out.push(b)
         }
       }
-      // 5. Remove all but the last 'Conclusion' heading and its following paragraph
+      // 5. Remove all but the last localized 'Conclusion' heading and its following paragraph
       let lastConclusionIdx = -1
       for (let i = 0; i < out.length; i++) {
-        if (out[i].type === 'heading' && out[i].content.trim().toLowerCase() === 'conclusion') {
+        if (out[i].type === 'heading' && isConclusionHeadingText(out[i].content)) {
           lastConclusionIdx = i
         }
       }
@@ -731,7 +774,7 @@ If you do not use at least two heading levels and at least one list, your answer
         for (let i = 0; i < out.length; ) {
           if (
             out[i].type === 'heading' &&
-            out[i].content.trim().toLowerCase() === 'conclusion' &&
+            isConclusionHeadingText(out[i].content) &&
             i !== lastConclusionIdx
           ) {
             // Skip this heading and the next paragraph if present
@@ -753,10 +796,8 @@ If you do not use at least two heading levels and at least one list, your answer
         (b, i, arr) =>
           !(
             b.type === 'heading' &&
-            b.content.trim().toLowerCase() === 'conclusion' &&
-            arr.findIndex(
-              (x) => x.type === 'heading' && x.content.trim().toLowerCase() === 'conclusion',
-            ) !== i
+            isConclusionHeadingText(b.content) &&
+            arr.findIndex((x) => x.type === 'heading' && isConclusionHeadingText(x.content)) !== i
           ),
       )
     }

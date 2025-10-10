@@ -10,7 +10,7 @@ export type GenerationFunction<TResult = Record<string, unknown>> = (
   object: TResult
   usage?: {
     promptTokens?: number
-    completionTokens?: number
+    outputTokens?: number
     totalTokens?: number
   }
 }>

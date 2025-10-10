@@ -1,7 +1,7 @@
 'use client'
 
 import { z } from 'zod'
-import { zodResolver } from '@hookform/resolvers/zod'
+import { standardSchemaResolver } from '@hookform/resolvers/standard-schema'
 import { useForm } from 'react-hook-form'
 import { Button } from '@/components/ui/button'
 import {
@@ -29,7 +29,7 @@ export default function EditUsernameForm() {
   const setUserName = useChatStore((state) => state.setUserName)
 
   const form = useForm<z.infer<typeof formSchema>>({
-    resolver: zodResolver(formSchema),
+    resolver: standardSchemaResolver(formSchema),
     defaultValues: {
       username: userName,
     },

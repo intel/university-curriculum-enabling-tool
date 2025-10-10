@@ -10,7 +10,7 @@ import {
 } from 'ai'
 import { ContextChunk } from '../types/context-chunk'
 import { verifyModel } from '../model/model-manager'
-import { createOllama } from 'ollama-ai-provider'
+import { createOllama } from 'ollama-ai-provider-v2'
 import { EmbeddingChunk } from '../types/embedding-chunk'
 import { z } from 'zod'
 import { effectiveTokenCountForText } from '../utils'
@@ -153,10 +153,19 @@ Example Correct Response:
 
     // Generate the reranking result using the model.
     const { object, usage } = await generateObject({
-      model: ollama(rerankingModel, { numCtx: tokenMax }),
+      model: ollama(rerankingModel),
       mode: 'json',
       schema: rerankingSchema,
       prompt: rerankingPrompt,
+      maxOutputTokens: tokenMax,
+      providerOptions: {
+        ollama: {
+          mode: 'json',
+          options: {
+            numCtx: tokenMax, // 2048 tokens for context window
+          },
+        },
+      },
     })
 
     // End timing and calculate the time taken.
@@ -165,14 +174,14 @@ Example Correct Response:
     const timeTakenSeconds = timeTakenMs / 1000
 
     // Calculate token generation speed.
-    const totalTokens = usage.completionTokens
+    const totalTokens = usage.outputTokens || 0
     const tokenGenerationSpeed = totalTokens / timeTakenSeconds
 
     console.log(
       `Usage tokens: ` +
         `promptEst(${effectiveTokenCountForText(rerankingPrompt)}) ` +
-        `prompt(${usage.promptTokens}) ` +
-        `completion(${usage.completionTokens}) | ` +
+        `prompt(${usage.inputTokens}) ` +
+        `completion(${usage.outputTokens}) | ` +
         `${tokenGenerationSpeed.toFixed(2)} t/s | ` +
         `Duration: ${timeTakenSeconds.toFixed(2)} s`,
     )

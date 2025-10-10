@@ -1,9 +1,11 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { createOllama } from 'ollama-ai-provider'
-import { type CoreMessage, generateText } from 'ai'
+import { createOllama } from 'ollama-ai-provider-v2'
+import { languageDirective, type Lang } from '@/lib/utils/lang'
+import { type ModelMessage, generateText } from 'ai'
 import type { ClientSource } from '@/lib/types/client-source'
+import type { CourseInfo } from '@/lib/types/course-info-types'
 import type {
   LectureContent,
   AssessmentQuestion,
@@ -28,6 +30,9 @@ import {
   getReadingsSystemPrompt,
   getQuizQuestionPrompt,
   getDiscussionQuestionPrompt,
+  getIntroSystemPrompt,
+  getSpecialSlidesSystemPrompt,
+  getContentSlidesSystemPrompt,
 } from './prompts'
 import { validateAndSanitizeContent } from './content-validator'
 import { createFallbackContent } from './fallback-content'
@@ -42,6 +47,8 @@ export async function generateCourseContent(
   sessionLength: number,
   difficultyLevel: string,
   topicName: string,
+  language: Lang,
+  courseInfo?: CourseInfo,
 ): Promise<LectureContent> {
   try {
     // Check for required environment variables
@@ -55,16 +62,43 @@ export async function generateCourseContent(
 
     // Prepare source content
     console.log('Preparing source content...')
-    const { content: assistantContent, metadata: sourceMetadata } =
-      await prepareSourceContent(selectedSources)
+    const hasSelectedSources = Array.isArray(selectedSources) && selectedSources.length > 0
+    const { content: assistantContent, metadata: sourceMetadata } = hasSelectedSources
+      ? await prepareSourceContent(selectedSources, topicName, courseInfo)
+      : {
+          content: '',
+          metadata: { sourceCount: 0, chunkCount: 0, tokenEstimate: 0, sourceNames: [] },
+        }
 
-    // Ensure assistant content fits within context window
-    const assistantMessage: CoreMessage = {
-      role: 'assistant',
-      content: assistantContent,
-    }
+    const hasSourceMaterials = hasSelectedSources && assistantContent.includes('SOURCE')
+
+    // Build assistant message only when we have sources
+    const assistantMessage: ModelMessage | null = hasSourceMaterials
+      ? { role: 'assistant', content: assistantContent }
+      : null
+
+    // Determine effective topic: when sources are selected, use topicName; when no sources, prefer courseInfo.courseName
+    const effectiveTopic = hasSelectedSources
+      ? topicName && topicName.trim().length > 0
+        ? topicName
+        : courseInfo?.courseName || 'this course'
+      : courseInfo?.courseName && courseInfo.courseName.trim().length > 0
+        ? courseInfo.courseName
+        : topicName && topicName.trim().length > 0
+          ? topicName
+          : 'this course'
+
+    console.log('=== TOPIC SELECTION DEBUG ===')
+    console.log('hasSelectedSources:', hasSelectedSources)
+    console.log('hasSourceMaterials:', hasSourceMaterials)
+    console.log('topicName:', topicName)
+    console.log('courseInfo?.courseName:', courseInfo?.courseName)
+    console.log('effectiveTopic:', effectiveTopic)
+    console.log('=== END TOPIC DEBUG ===')
 
     console.log('Generating course content with Ollama in sequential steps...')
+
+    const langDirective = languageDirective
 
     // STEP 1: Generate basic metadata (title, contentType, difficultyLevel, learningOutcomes, keyTerms)
     console.log('STEP 1: Generating basic metadata...')
@@ -75,23 +109,23 @@ export async function generateCourseContent(
     // Add specialized prompts for tutorials and workshops
     const specializedPrompt =
       contentType === 'tutorial'
-        ? `For this tutorial, ensure you:
-    - Structure content as a learning journey with clear progression
-    - Include detailed step-by-step instructions that build skills incrementally
-    - Provide sample solutions with explanations of the reasoning process
+        ? `For this tutorial, make sure you:
+    - Structure the content as a learning journey with clear progression
+    - Include step-by-step instructions that build skills gradually
+    - Provide example solutions with reasoning/explanation of the approach
     - Include troubleshooting tips for common mistakes
     - Add reflection questions after each major section
     - Ensure activities have clear success criteria
-    - Include both basic exercises and extension activities for differentiation`
+    - Provide foundational exercises and enrichment activities for differentiation`
         : contentType === 'workshop'
-          ? `For this workshop, ensure you:
-    - Design activities that promote active participation and collaboration
+          ? `For this workshop, make sure you:
+    - Design activities that encourage active participation and collaboration
     - Include detailed facilitation notes for the instructor
-    - Provide clear timing guidelines for each activity
+    - Provide clear time guidance for each activity
     - Include discussion prompts that connect theory to practice
-    - Structure activities with clear phases (introduction, main activity, debrief)
-    - Include guidance on managing group dynamics
-    - Provide templates and worksheets that support the activities`
+    - Structure activities with clear phases (introduction, core activity, closing)
+    - Include guidance for managing group dynamics
+    - Provide templates and worksheets to support activities`
           : ''
 
     const difficultyLevelPrompt = getDifficultyLevelPrompt(difficultyLevel)
@@ -103,25 +137,36 @@ export async function generateCourseContent(
       contentStylePrompt,
       difficultyLevelPrompt,
       specializedPrompt, // Add this parameter
+      language,
+      hasSourceMaterials,
     )
 
-    const metadataSystemMessage: CoreMessage = {
+    const metadataSystemMessage: ModelMessage = {
       role: 'system',
-      content: metadataSystemPrompt,
+      content: `${langDirective(language)}\n\n${metadataSystemPrompt}`,
     }
 
-    const metadataUserMessage: CoreMessage = {
+    const metadataUserMessage: ModelMessage = {
       role: 'user',
-      content: `Generate the title, learning outcomes, and at least 5-10 key terms for a ${difficultyLevel} level ${contentType} on "${topicName}" based STRICTLY on the provided source materials above.`,
+      content:
+        language === 'id'
+          ? hasSourceMaterials
+            ? `Buat judul, capaian pembelajaran, dan setidaknya 5-10 istilah kunci untuk ${contentType} tingkat ${difficultyLevel} tentang "${effectiveTopic}" SECARA KETAT berdasarkan materi sumber di atas. Semua dalam Bahasa Indonesia.`
+            : `Buat judul, capaian pembelajaran, dan setidaknya 5-10 istilah kunci untuk ${contentType} tingkat ${difficultyLevel} tentang "${effectiveTopic}". Semua dalam Bahasa Indonesia.`
+          : hasSourceMaterials
+            ? `Create a title, learning outcomes, and at least 5-10 key terms for a ${difficultyLevel} level ${contentType} on "${effectiveTopic}" STRICTLY based on the source materials provided above. All content MUST be in English.`
+            : `Create a title, learning outcomes, and at least 5-10 key terms for a ${difficultyLevel} level ${contentType} on "${effectiveTopic}". All content MUST be in English.`,
     }
 
-    const metadataMessages = [metadataSystemMessage, assistantMessage, metadataUserMessage]
+    const metadataMessages = assistantMessage
+      ? [metadataSystemMessage, assistantMessage, metadataUserMessage]
+      : [metadataSystemMessage, metadataUserMessage]
 
     const metadataTextResponse = await generateText({
       model: ollama(selectedModel),
       messages: metadataMessages,
       temperature: TEMPERATURE,
-      maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 4),
+      maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 4),
     })
 
     console.log('Raw metadata response:', metadataTextResponse.text.substring(0, 500) + '...')
@@ -134,39 +179,41 @@ export async function generateCourseContent(
     // STEP 2: Generate introduction
     console.log('STEP 2: Generating introduction...')
 
-    const introSystemPrompt = `You are an expert educational content developer. Continue creating a ${difficultyLevel} level ${contentType} on "${topicName}" designed for a ${sessionLength}-minute session.
+    const introSystemPrompt = getIntroSystemPrompt(
+      difficultyLevel,
+      contentType,
+      effectiveTopic,
+      sessionLength,
+      language,
+      hasSourceMaterials,
+    )
 
-IMPORTANT INSTRUCTIONS:
-1. You MUST base your content ENTIRELY on the source materials provided.
-2. Extract key concepts, terminology, examples, and explanations directly from the source materials.
-3. Do not introduce concepts or information that is not present in the source materials.
-4. Create an engaging introduction that provides context and importance of the topic.
-
-RESPONSE FORMAT:
-Your response MUST be a valid JSON object with EXACTLY these fields:
-{
-"introduction": "Engaging introduction paragraph that provides context and importance of the topic"
-}
-
-CRITICAL: Your response MUST be valid JSON only. Do not include any text, markdown, explanations, or other content outside the JSON object. Do not include backticks or code block markers.`
-
-    const introSystemMessage: CoreMessage = {
+    const introSystemMessage: ModelMessage = {
       role: 'system',
-      content: introSystemPrompt,
+      content: `${langDirective(language)}\n\n${introSystemPrompt}`,
     }
 
-    const introUserMessage: CoreMessage = {
+    const introUserMessage: ModelMessage = {
       role: 'user',
-      content: `Generate an engaging introduction for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based STRICTLY on the provided source materials above.`,
+      content:
+        language === 'id'
+          ? hasSourceMaterials
+            ? `Buat pengantar yang menarik untuk ${contentType} tingkat ${difficultyLevel} tentang "${effectiveTopic}" dengan judul "${metadataResponse.title}" SECARA KETAT berdasarkan materi sumber di atas. Gunakan Bahasa Indonesia.`
+            : `Buat pengantar yang menarik untuk ${contentType} tingkat ${difficultyLevel} tentang "${effectiveTopic}" dengan judul "${metadataResponse.title}". Gunakan Bahasa Indonesia.`
+          : hasSourceMaterials
+            ? `Create an engaging introduction for a ${difficultyLevel} level ${contentType} on "${effectiveTopic}" with the title "${metadataResponse.title}" STRICTLY based on the source materials provided above. Use English only.`
+            : `Create an engaging introduction for a ${difficultyLevel} level ${contentType} on "${effectiveTopic}" with the title "${metadataResponse.title}". Use English only.`,
     }
 
-    const introMessages = [introSystemMessage, assistantMessage, introUserMessage]
+    const introMessages = assistantMessage
+      ? [introSystemMessage, assistantMessage, introUserMessage]
+      : [introSystemMessage, introUserMessage]
 
     const introTextResponse = await generateText({
       model: ollama(selectedModel),
       messages: introMessages,
       temperature: TEMPERATURE,
-      maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 6),
+      maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 6),
     })
 
     console.log('Raw intro response:', introTextResponse.text.substring(0, 500) + '...')
@@ -176,72 +223,41 @@ CRITICAL: Your response MUST be valid JSON only. Do not include any text, markdo
     // STEP 3: Generate special slides (introduction, agenda, assessment, conclusion)
     console.log('STEP 3: Generating special slides...')
 
-    const specialSlidesSystemPrompt = `You are an expert educational content developer. Continue creating a ${difficultyLevel} level ${contentType} on "${topicName}" designed for a ${sessionLength}-minute session.
+    const specialSlidesSystemPrompt = getSpecialSlidesSystemPrompt(
+      difficultyLevel,
+      contentType,
+      effectiveTopic,
+      sessionLength,
+      language,
+      hasSourceMaterials,
+    )
 
-IMPORTANT INSTRUCTIONS:
-1. You MUST base your content ENTIRELY on the source materials provided.
-2. Extract key concepts, terminology, examples, and explanations directly from the source materials.
-3. Do not introduce concepts or information that is not present in the source materials.
-4. Create ONLY the following special slides:
- - Introduction slide (first slide that introduces the topic)
- - Agenda/Overview slide (outlines what will be covered)
- - Assessment slide(s) (summarizes assessment approaches)
- - Conclusion/Summary slide (wraps up the presentation)
-
-RESPONSE FORMAT:
-Your response MUST be a valid JSON object with EXACTLY these fields:
-{
-"specialSlides": [
-  {
-    "type": "introduction",
-    "title": "Introduction to [Topic]",
-    "content": ["Point 1", "Point 2", "Point 3"],
-    "notes": "Speaker notes for this slide"
-  },
-  {
-    "type": "agenda",
-    "title": "Agenda/Overview",
-    "content": ["Topic 1", "Topic 2", "Topic 3"],
-    "notes": "Speaker notes for this slide"
-  },
-  {
-    "type": "assessment",
-    "title": "Assessment Approaches",
-    "content": ["Assessment method 1", "Assessment method 2"],
-    "notes": "Speaker notes for this slide"
-  },
-  {
-    "type": "conclusion",
-    "title": "Summary and Conclusion",
-    "content": ["Key takeaway 1", "Key takeaway 2", "Next steps"],
-    "notes": "Speaker notes for this slide"
-  }
-]
-}
-
-CRITICAL: Your response MUST be valid JSON only. Do not include any text, markdown, explanations, or other content outside the JSON object. Do not include backticks or code block markers.`
-
-    const specialSlidesSystemMessage: CoreMessage = {
+    const specialSlidesSystemMessage: ModelMessage = {
       role: 'system',
-      content: specialSlidesSystemPrompt,
+      content: `${langDirective(language)}\n\n${specialSlidesSystemPrompt}`,
     }
 
-    const specialSlidesUserMessage: CoreMessage = {
+    const specialSlidesUserMessage: ModelMessage = {
       role: 'user',
-      content: `Generate the introduction, agenda, assessment, and conclusion slides for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based STRICTLY on the provided source materials above.`,
+      content:
+        language === 'id'
+          ? hasSourceMaterials
+            ? `Buat slide pengantar, agenda, penilaian, dan kesimpulan untuk ${contentType} tingkat ${difficultyLevel} tentang "${effectiveTopic}" dengan judul "${metadataResponse.title}" SECARA KETAT berdasarkan materi sumber di atas. Gunakan Bahasa Indonesia.`
+            : `Buat slide pengantar, agenda, penilaian, dan kesimpulan untuk ${contentType} tingkat ${difficultyLevel} tentang "${effectiveTopic}" dengan judul "${metadataResponse.title}". Gunakan Bahasa Indonesia.`
+          : hasSourceMaterials
+            ? `Create the introduction, agenda, assessment, and conclusion slides for a ${difficultyLevel} level ${contentType} on "${effectiveTopic}" with the title "${metadataResponse.title}" STRICTLY based on the source materials provided above. Use English only.`
+            : `Create the introduction, agenda, assessment, and conclusion slides for a ${difficultyLevel} level ${contentType} on "${effectiveTopic}" with the title "${metadataResponse.title}". Use English only.`,
     }
 
-    const specialSlidesMessages = [
-      specialSlidesSystemMessage,
-      assistantMessage,
-      specialSlidesUserMessage,
-    ]
+    const specialSlidesMessages = assistantMessage
+      ? [specialSlidesSystemMessage, assistantMessage, specialSlidesUserMessage]
+      : [specialSlidesSystemMessage, specialSlidesUserMessage]
 
     const specialSlidesTextResponse = await generateText({
       model: ollama(selectedModel),
       messages: specialSlidesMessages,
       temperature: TEMPERATURE,
-      maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 4),
+      maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 4),
     })
 
     console.log(
@@ -288,52 +304,34 @@ CRITICAL: Your response MUST be valid JSON only. Do not include any text, markdo
         `Generating content slides batch ${batchIndex + 1}/${batches} (slides ${startSlideNum}-${endSlideNum})...`,
       )
 
-      const contentSlidesSystemPrompt = `You are generating content slides ${startSlideNum} through ${endSlideNum} of a total of ${totalContentSlidesNeeded} content slides. Ensure all slides are unique.
+      const contentSlidesSystemPrompt = getContentSlidesSystemPrompt(
+        startSlideNum,
+        endSlideNum,
+        totalContentSlidesNeeded,
+        language,
+        hasSourceMaterials,
+      )
 
-IMPORTANT INSTRUCTIONS:
-1. You MUST base your content ENTIRELY on the source materials provided.
-2. Extract key concepts, terminology, examples, and explanations directly from the source materials.
-3. Do not introduce concepts or information that is not present in the source materials.
-4. Create detailed teaching slides with substantial content on each slide.
-5. Focus ONLY on core teaching content slides.
-6. Each slide should have comprehensive speaker notes with additional details and examples.
-7. You are generating content slides ${startSlideNum} through ${endSlideNum} of a total of ${totalContentSlidesNeeded} content slides.
-8. DO NOT create introduction, agenda, assessment, or conclusion slides - these are handled separately.
-
-RESPONSE FORMAT:
-Your response MUST be a valid JSON object with EXACTLY these fields:
-{
-"contentSlides": [
-  {
-    "title": "Slide Title",
-    "content": [
-      "Include multiple detailed points with examples and context",
-      "Each array item represents a bullet point or paragraph on the slide"
-    ],
-    "notes": "Comprehensive speaker notes with additional details, examples, and teaching tips"
-  }
-]
-}
-
-CRITICAL: Your response MUST be valid JSON only. Do not include any text, markdown, explanations, or other content outside the JSON object. Do not include backticks or code block markers.`
-
-      const contentSlidesSystemMessage: CoreMessage = {
+      const contentSlidesSystemMessage: ModelMessage = {
         role: 'system',
-        content: contentSlidesSystemPrompt,
+        content: `${langDirective(language)}\n\n${contentSlidesSystemPrompt}`,
       }
 
-      const contentSlidesUserMessage: CoreMessage = {
+      const contentSlidesUserMessage: ModelMessage = {
         role: 'user',
-        content: `Generate content slides ${startSlideNum} through ${endSlideNum} for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based STRICTLY on the provided source materials above. 
-        
-DO NOT create introduction, agenda, assessment, or conclusion slides. Focus ONLY on core teaching content slides.`,
+        content:
+          language === 'id'
+            ? hasSourceMaterials
+              ? `Buat slide konten ${startSlideNum} hingga ${endSlideNum} untuk ${contentType} tingkat ${difficultyLevel} tentang "${effectiveTopic}" dengan judul "${metadataResponse.title}" SECARA KETAT berdasarkan materi sumber di atas.\n\nJANGAN membuat slide pengantar, agenda, penilaian, atau kesimpulan. Fokus HANYA pada slide konten instruksional inti. Gunakan Bahasa Indonesia.`
+              : `Buat slide konten ${startSlideNum} hingga ${endSlideNum} untuk ${contentType} tingkat ${difficultyLevel} tentang "${effectiveTopic}" dengan judul "${metadataResponse.title}".\n\nJANGAN membuat slide pengantar, agenda, penilaian, atau kesimpulan. Fokus HANYA pada slide konten instruksional inti. Gunakan Bahasa Indonesia.`
+            : hasSourceMaterials
+              ? `Create content slides ${startSlideNum} to ${endSlideNum} for a ${difficultyLevel} level ${contentType} on "${effectiveTopic}" with the title "${metadataResponse.title}" STRICTLY based on the source materials provided above.\n\nDO NOT create introduction, agenda, assessment, or conclusion slides. Focus ONLY on core instructional content slides. Use English only.`
+              : `Create content slides ${startSlideNum} to ${endSlideNum} for a ${difficultyLevel} level ${contentType} on "${effectiveTopic}" with the title "${metadataResponse.title}".\n\nDO NOT create introduction, agenda, assessment, or conclusion slides. Focus ONLY on core instructional content slides. Use English only.`,
       }
 
-      const contentSlidesMessages = [
-        contentSlidesSystemMessage,
-        assistantMessage,
-        contentSlidesUserMessage,
-      ]
+      const contentSlidesMessages = assistantMessage
+        ? [contentSlidesSystemMessage, assistantMessage, contentSlidesUserMessage]
+        : [contentSlidesSystemMessage, contentSlidesUserMessage]
 
       const contentSlidesTextResponse = await generateText({
         model: ollama(selectedModel),
@@ -347,7 +345,7 @@ DO NOT create introduction, agenda, assessment, or conclusion slides. Focus ONLY
         // ],
         messages: contentSlidesMessages,
         temperature: TEMPERATURE,
-        maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 2),
+        maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 2),
       })
 
       const contentSlidesResponse = extractAndParseJSON(contentSlidesTextResponse.text)
@@ -372,25 +370,38 @@ DO NOT create introduction, agenda, assessment, or conclusion slides. Focus ONLY
       contentTypePrompt,
       contentStylePrompt,
       difficultyLevelPrompt,
+      2,
+      specializedPrompt,
+      language,
+      hasSourceMaterials,
     )
 
-    const activitiesSystemMessage: CoreMessage = {
+    const activitiesSystemMessage: ModelMessage = {
       role: 'system',
-      content: activitiesSystemPrompt,
+      content: `${langDirective(language)}\n\n${activitiesSystemPrompt}`,
     }
 
-    const activitiesUserMessage: CoreMessage = {
+    const activitiesUserMessage: ModelMessage = {
       role: 'user',
-      content: `Generate the activities for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based STRICTLY on the provided source materials above.`,
+      content:
+        language === 'id'
+          ? hasSourceMaterials
+            ? `Buat aktivitas untuk ${contentType} tingkat ${difficultyLevel} tentang "${effectiveTopic}" dengan judul "${metadataResponse.title}" SECARA KETAT berdasarkan materi sumber di atas. Gunakan Bahasa Indonesia.`
+            : `Buat aktivitas untuk ${contentType} tingkat ${difficultyLevel} tentang "${effectiveTopic}" dengan judul "${metadataResponse.title}". Gunakan Bahasa Indonesia.`
+          : hasSourceMaterials
+            ? `Create activities for a ${difficultyLevel} level ${contentType} on "${effectiveTopic}" with the title "${metadataResponse.title}" STRICTLY based on the source materials provided above. Use English only.`
+            : `Create activities for a ${difficultyLevel} level ${contentType} on "${effectiveTopic}" with the title "${metadataResponse.title}". Use English only.`,
     }
 
-    const activitiesMessages = [activitiesSystemMessage, assistantMessage, activitiesUserMessage]
+    const activitiesMessages = assistantMessage
+      ? [activitiesSystemMessage, assistantMessage, activitiesUserMessage]
+      : [activitiesSystemMessage, activitiesUserMessage]
 
     const activitiesTextResponse = await generateText({
       model: ollama(selectedModel),
       messages: activitiesMessages,
       temperature: TEMPERATURE,
-      maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 4),
+      maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 4),
     })
 
     console.log('Raw activities response:', activitiesTextResponse.text.substring(0, 500) + '...')
@@ -406,27 +417,39 @@ DO NOT create introduction, agenda, assessment, or conclusion slides. Focus ONLY
     const assessmentSystemPrompt = getAssessmentSystemPrompt(
       difficultyLevel,
       contentType,
-      topicName,
+      effectiveTopic,
       sessionLength,
+      '',
+      language,
+      hasSourceMaterials,
     )
 
-    const assessmentSystemMessage: CoreMessage = {
+    const assessmentSystemMessage: ModelMessage = {
       role: 'system',
-      content: assessmentSystemPrompt,
+      content: `${langDirective(language)}\n\n${assessmentSystemPrompt}`,
     }
 
-    const assessmentUserMessage: CoreMessage = {
+    const assessmentUserMessage: ModelMessage = {
       role: 'user',
-      content: `Generate assessment ideas (without example questions) for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based STRICTLY on the provided source materials above.`,
+      content:
+        language === 'id'
+          ? hasSourceMaterials
+            ? `Buat ide penilaian (tanpa contoh pertanyaan) untuk ${contentType} tingkat ${difficultyLevel} tentang "${effectiveTopic}" dengan judul "${metadataResponse.title}" SECARA KETAT berdasarkan materi sumber di atas. Gunakan Bahasa Indonesia.`
+            : `Buat ide penilaian (tanpa contoh pertanyaan) untuk ${contentType} tingkat ${difficultyLevel} tentang "${effectiveTopic}" dengan judul "${metadataResponse.title}". Gunakan Bahasa Indonesia.`
+          : hasSourceMaterials
+            ? `Create assessment ideas (without example questions) for a ${difficultyLevel} level ${contentType} on "${effectiveTopic}" with the title "${metadataResponse.title}" STRICTLY based on the source materials provided above. Use English only.`
+            : `Create assessment ideas (without example questions) for a ${difficultyLevel} level ${contentType} on "${effectiveTopic}" with the title "${metadataResponse.title}". Use English only.`,
     }
 
-    const assessmentMessages = [assessmentSystemMessage, assistantMessage, assessmentUserMessage]
+    const assessmentMessages = assistantMessage
+      ? [assessmentSystemMessage, assistantMessage, assessmentUserMessage]
+      : [assessmentSystemMessage, assessmentUserMessage]
 
     const assessmentTextResponse = await generateText({
       model: ollama(selectedModel),
       messages: assessmentMessages,
       temperature: TEMPERATURE,
-      maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 6),
+      maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 6),
     })
 
     console.log('Raw assessment response:', assessmentTextResponse.text.substring(0, 500) + '...')
@@ -468,27 +491,39 @@ DO NOT create introduction, agenda, assessment, or conclusion slides. Focus ONLY
     const readingsSystemPrompt = getReadingsSystemPrompt(
       difficultyLevel,
       contentType,
-      topicName,
+      effectiveTopic,
       sessionLength,
+      '',
+      language,
+      hasSourceMaterials,
     )
 
-    const readingsSystemMessage: CoreMessage = {
+    const readingsSystemMessage: ModelMessage = {
       role: 'system',
-      content: readingsSystemPrompt,
+      content: `${langDirective(language)}\n\n${readingsSystemPrompt}`,
     }
 
-    const readingsUserMessage: CoreMessage = {
+    const readingsUserMessage: ModelMessage = {
       role: 'user',
-      content: `Generate further reading suggestions for a ${difficultyLevel} level ${contentType} on "${topicName}" with title "${metadataResponse.title}" based STRICTLY on the provided source materials above.`,
+      content:
+        language === 'id'
+          ? hasSourceMaterials
+            ? `Buat rekomendasi bacaan lanjutan untuk ${contentType} tingkat ${difficultyLevel} tentang "${effectiveTopic}" dengan judul "${metadataResponse.title}" SECARA KETAT berdasarkan materi sumber di atas. Gunakan Bahasa Indonesia.`
+            : `Buat rekomendasi bacaan lanjutan untuk ${contentType} tingkat ${difficultyLevel} tentang "${effectiveTopic}" dengan judul "${metadataResponse.title}". Gunakan Bahasa Indonesia.`
+          : hasSourceMaterials
+            ? `Create further reading suggestions for a ${difficultyLevel} level ${contentType} on "${effectiveTopic}" with the title "${metadataResponse.title}" STRICTLY based on the source materials provided above. Use English only.`
+            : `Create further reading suggestions for a ${difficultyLevel} level ${contentType} on "${effectiveTopic}" with the title "${metadataResponse.title}". Use English only.`,
     }
 
-    const readingsMessages = [readingsSystemMessage, assistantMessage, readingsUserMessage]
+    const readingsMessages = assistantMessage
+      ? [readingsSystemMessage, assistantMessage, readingsUserMessage]
+      : [readingsSystemMessage, readingsUserMessage]
 
     const readingsTextResponse = await generateText({
       model: ollama(selectedModel),
       messages: readingsMessages,
       temperature: TEMPERATURE,
-      maxTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 6),
+      maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 6),
     })
 
     console.log('Raw readings response:', readingsTextResponse.text.substring(0, 500) + '...')
@@ -520,14 +555,14 @@ DO NOT create introduction, agenda, assessment, or conclusion slides. Focus ONLY
 
       try {
         if (idea.type.toLowerCase().includes('quiz')) {
-          const prompt = getQuizQuestionPrompt(topicName, idea.description)
+          const prompt = `${langDirective(language)}\n\n${getQuizQuestionPrompt(topicName, idea.description, language)}`
 
           // Generate JSON-formatted questions for quiz
           const { text: questionsText } = await generateText({
             model: ollama(selectedModel),
             prompt: prompt,
             temperature: TEMPERATURE,
-            maxTokens: 1000,
+            maxOutputTokens: 1000,
           })
 
           console.log(
@@ -588,14 +623,14 @@ DO NOT create introduction, agenda, assessment, or conclusion slides. Focus ONLY
             })
           }
         } else if (idea.type.toLowerCase().includes('discussion')) {
-          const prompt = getDiscussionQuestionPrompt(topicName, idea.description)
+          const prompt = `${langDirective(language)}\n\n${getDiscussionQuestionPrompt(topicName, idea.description, language)}`
 
           // Generate JSON-formatted questions for discussion
           const { text: questionsText } = await generateText({
             model: ollama(selectedModel),
             prompt: prompt,
             temperature: TEMPERATURE,
-            maxTokens: 1500,
+            maxOutputTokens: 1500,
           })
 
           console.log(

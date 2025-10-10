@@ -102,12 +102,10 @@ export function ConfigView({
                       ))}
                     {selectedSources.filter((source) => source.selected).length === 0 && (
                       <div className="text-sm text-muted-foreground">
-                        <p>
-                          No sources selected. Please select at least one source document from the
-                          sidebar.
-                        </p>
+                        <p>No sources selected. Selecting sources is optional.</p>
                         <p className="mt-1 font-medium text-amber-500">
-                          The generated content will be based ONLY on your selected sources.
+                          If you select sources, the generated content will be based ONLY on them.
+                          If no sources are selected, it will use your course and topic context.
                         </p>
                       </div>
                     )}

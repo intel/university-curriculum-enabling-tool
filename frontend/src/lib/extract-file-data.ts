@@ -49,25 +49,72 @@ export async function extractFileData(file: {
     const formData = new FormData()
     formData.append('file', new Blob([new Uint8Array(data)], { type: mimetype }), file.name)
 
-    const parsefastApiUrl = new URL('/parse', process.env.FASTAPI_SERVER_URL).href
-    const fastApiResponse = await fetch(parsefastApiUrl, {
+    // Upload file and get response to confirm upload status
+
+    const url = new URL('/upload', process.env.FASTAPI_SERVER_URL)
+    const uploadResponse = await fetch(url, {
       method: 'POST',
       body: formData,
     })
-
-    if (!fastApiResponse.ok) {
-      throw new Error('Failed to parse PDF on FastAPI server')
+    if (!uploadResponse.ok) {
+      throw new Error('Failed to upload file to FastAPI server')
     }
 
-    const fastApiData = await fastApiResponse.json()
-    extractedText = fastApiData.text
-    extractedImages = fastApiData.images
+    const { jobID } = await uploadResponse.json()
+
+    // Poll /result/{jobID} until done with timeout and retry handling
+    const pollResult = async (retryCount: number = 0): Promise<ExtractedData> => {
+      const url = new URL(`/result/${encodeURIComponent(jobID)}`, process.env.FASTAPI_SERVER_URL)
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 60000) // 60s per poll request
+
+      try {
+        const pollRes = await fetch(url, { signal: controller.signal })
+        clearTimeout(timeoutId)
+
+        if (pollRes.status === 202) {
+          // Not ready yet, wait and retry
+          await new Promise<void>((resolve) => {
+            setTimeout(() => resolve(), 3000)
+          })
+          return pollResult(0) // Reset retry count on successful poll
+        }
+        if (!pollRes.ok) {
+          throw new Error('Failed to retrieve processed PDF result')
+        }
+        return pollRes.json()
+      } catch (error: unknown) {
+        clearTimeout(timeoutId)
+        const err = error as Error & { code?: string; cause?: { code?: string }; name?: string }
+
+        // Handle both ECONNRESET and AbortError (timeout)
+        const shouldRetry =
+          err.code === 'ECONNRESET' ||
+          err.cause?.code === 'ECONNRESET' ||
+          err.name === 'AbortError' ||
+          err.message.includes('ECONNRESET')
+
+        if (shouldRetry && retryCount < 3) {
+          const delay = 1000 * (retryCount + 1) // 1s, 2s, 3s
+          console.log(`Connection issue, retrying in ${delay}ms... (${retryCount + 1}/3)`)
+          await new Promise<void>((resolve) => setTimeout(() => resolve(), delay))
+          return pollResult(retryCount + 1)
+        }
+
+        throw error
+      }
+    }
+
+    const parsedData = await pollResult()
+    extractedText = parsedData.text
+    extractedImages = parsedData.images
   } else if (mimetype.includes('text') || ext === '.txt') {
     fileType = 'txt'
-    // contentSequence.push({ type: "text", content: data.toString("utf-8") });
+
+    // contentSequence.push({ type: 'text', content: data.toString('utf-8') });
   } else if (mimetype.includes('markdown') || ext === '.md') {
     fileType = 'md'
-    // contentSequence.push({ type: "text", content: data.toString("utf-8") });
+    // contentSequence.push({ type: 'text', content: data.toString('utf-8') });
   } else {
     throw new Error('Unsupported file type')
   }

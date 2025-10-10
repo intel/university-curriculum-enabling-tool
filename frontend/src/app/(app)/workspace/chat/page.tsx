@@ -11,7 +11,7 @@ import { generateUUID } from '@/lib/utils'
 import Chat from '@/components/chat/chat'
 import { useEffect, useState } from 'react'
 import { ContextRequirementMessage } from '@/components/context-requirement-message'
-import { Message } from '@ai-sdk/react'
+import { UIMessage } from '@ai-sdk/react'
 import { useContextAvailability } from '@/lib/hooks/use-context-availability'
 import { usePersonaStore } from '@/lib/store/persona-store'
 
@@ -20,7 +20,7 @@ export default function ChatPage() {
   const [, setIsMobile] = useState(false)
   const router = useRouter()
   const { getActiveContextModelName } = useContextAvailability()
-  const { activePersona, personas } = usePersonaStore()
+  const { activePersona, personas, getPersonaLanguage } = usePersonaStore()
 
   // get model name based on selected model or course
   const modelName = getActiveContextModelName()
@@ -43,12 +43,29 @@ export default function ChatPage() {
     ? personas.find((persona) => persona.id === activePersona)?.name
     : 'Academic Assistant'
 
-  const welcomeMessage: Message[] = [
+  // Localize welcome message based on selected response language (per persona)
+  const lang = getPersonaLanguage()
+  const greeting =
+    lang === 'id'
+      ? `Halo! Saya ${activePersonaName} bertenaga AI Anda. `
+      : `Hello! I'm your AI ${activePersonaName}. `
+  const prompts: Record<'en' | 'id', string> = {
+    id: 'Bagaimana saya dapat membantu Anda hari ini? ',
+    en: 'How can I help you today? ',
+  }
+  const prompt = (prompts[lang as 'en' | 'id'] ?? prompts.en) as string
+
+  const welcomeMessage: UIMessage[] = [
     {
       id: 'welcome-1',
       role: 'assistant',
-      content: `Hello! I'm your AI ${activePersonaName}. ` + `How can I help you today? `,
-      createdAt: new Date(),
+      parts: [
+        {
+          type: 'text',
+          text: greeting + prompt,
+        },
+      ],
+      metadata: { createdAt: Date.now() },
     },
   ]
 
