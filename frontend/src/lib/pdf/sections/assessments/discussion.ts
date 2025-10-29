@@ -29,11 +29,11 @@ export const renderDiscussionAssessments: SectionRenderer = (ctx, content) => {
 
     pdf.setFontSize(FONT_SIZES.subtitle)
     pdf.setTextColor(0, 0, 0)
-    pdf.setFont('helvetica', 'bold')
+    pdf.setFont('DejaVuSans', 'bold')
     pdf.text(idea.type, ctx.margin + 10, ctx.y + 13)
 
     pdf.setFontSize(FONT_SIZES.small)
-    pdf.setFont('helvetica', 'normal')
+    pdf.setFont('DejaVuSans', 'normal')
     pdf.text(
       `${LABELS[lang].duration}: ${idea.duration}`,
       ctx.margin + ctx.contentWidth - 70,
@@ -41,14 +41,14 @@ export const renderDiscussionAssessments: SectionRenderer = (ctx, content) => {
     )
 
     pdf.setFontSize(FONT_SIZES.standard)
-    pdf.setFont('helvetica', 'normal')
+    pdf.setFont('DejaVuSans', 'normal')
     pdf.text(descLines, ctx.margin + 10, ctx.y + 22)
 
     pdf.setFillColor(230, 240, 250)
     pdf.roundedRect(ctx.margin + 5, ctx.y + 22 + descHeight, ctx.contentWidth - 10, 10, 2, 2, 'F')
     pdf.setFontSize(FONT_SIZES.subtitle)
     pdf.setTextColor(14, 165, 233)
-    pdf.setFont('helvetica', 'bold')
+    pdf.setFont('DejaVuSans', 'bold')
     pdf.text(
       LABELS[lang].discussionTopics,
       ctx.margin + ctx.contentWidth / 2,
@@ -233,13 +233,13 @@ export const renderDiscussionAssessments: SectionRenderer = (ctx, content) => {
 
         pdf.setTextColor(0, 0, 0)
         pdf.setFontSize(FONT_SIZES.standard)
-        pdf.setFont('helvetica', 'normal')
+        pdf.setFont('DejaVuSans', 'normal')
         pdf.text(questionLines, ctx.margin + 30, ctx.y + 15)
         let innerY = ctx.y + 15 + questionLines.length * 6 + 5
 
         if (hasSimpleMarks) {
           pdf.setFontSize(FONT_SIZES.small)
-          pdf.setFont('helvetica', 'italic')
+          pdf.setFont('DejaVuSans', 'normal')
           pdf.setTextColor(90, 90, 90)
           pdf.text(
             `${questionWithMarks.markAllocation} ${LABELS[lang].points || 'points'}`,
@@ -247,7 +247,7 @@ export const renderDiscussionAssessments: SectionRenderer = (ctx, content) => {
             ctx.y + 15,
           )
           pdf.setTextColor(0, 0, 0)
-          pdf.setFont('helvetica', 'normal')
+          pdf.setFont('DejaVuSans', 'normal')
         }
 
         if (guidanceHeight) {
@@ -255,10 +255,10 @@ export const renderDiscussionAssessments: SectionRenderer = (ctx, content) => {
           pdf.roundedRect(ctx.margin + 10, innerY, ctx.contentWidth - 20, guidanceHeight, 2, 2, 'F')
           pdf.setTextColor(0, 100, 150)
           pdf.setFontSize(FONT_SIZES.small)
-          pdf.setFont('helvetica', 'bold')
+          pdf.setFont('DejaVuSans', 'bold')
           pdf.text(LABELS[lang].discussionGuidance, ctx.margin + 20, innerY + 7)
           pdf.setTextColor(0, 0, 0)
-          pdf.setFont('helvetica', 'normal')
+          pdf.setFont('DejaVuSans', 'normal')
           pdf.text(guidanceLines, ctx.margin + 20, innerY + 14, {
             maxWidth: ctx.contentWidth - 30,
           })
@@ -278,10 +278,10 @@ export const renderDiscussionAssessments: SectionRenderer = (ctx, content) => {
           )
           pdf.setTextColor(0, 100, 150)
           pdf.setFontSize(FONT_SIZES.small)
-          pdf.setFont('helvetica', 'bold')
+          pdf.setFont('DejaVuSans', 'bold')
           pdf.text(LABELS[lang].explanation, ctx.margin + 30, innerY + 7)
           pdf.setTextColor(0, 0, 0)
-          pdf.setFont('helvetica', 'normal')
+          pdf.setFont('DejaVuSans', 'normal')
           pdf.text(explanationLines, ctx.margin + 40, innerY + 14)
           innerY += simpleExplanationHeight + 5
         }
@@ -300,7 +300,7 @@ export const renderDiscussionAssessments: SectionRenderer = (ctx, content) => {
           )
           pdf.setTextColor(14, 165, 233)
           pdf.setFontSize(FONT_SIZES.small)
-          pdf.setFont('helvetica', 'bold')
+          pdf.setFont('DejaVuSans', 'bold')
           pdf.text(LABELS[lang].assessmentCriteria, ctx.margin + 30, innerY + 7)
 
           // Table header separator
@@ -312,7 +312,7 @@ export const renderDiscussionAssessments: SectionRenderer = (ctx, content) => {
           // Render criteria rows
           let rowY = tableY + tableHeaderSpacing
           pdf.setTextColor(0, 0, 0)
-          pdf.setFont('helvetica', 'normal')
+          pdf.setFont('DejaVuSans', 'normal')
           for (const row of criteriaRows) {
             pdf.text(row.name, ctx.margin + 35, rowY)
             pdf.text(row.weight, ctx.margin + ctx.contentWidth - 70, rowY)
@@ -341,7 +341,7 @@ export const renderDiscussionAssessments: SectionRenderer = (ctx, content) => {
           // Header
           pdf.setTextColor(150, 100, 0)
           pdf.setFontSize(FONT_SIZES.small)
-          pdf.setFont('helvetica', 'bold')
+          pdf.setFont('DejaVuSans', 'bold')
           pdf.text(LABELS[lang].pointAllocation, boxX + 10, ctx.y + 7)
 
           // Table separator
@@ -358,7 +358,7 @@ export const renderDiscussionAssessments: SectionRenderer = (ctx, content) => {
 
           let tableY = headerY + 2
           pdf.setTextColor(0, 0, 0)
-          pdf.setFont('helvetica', 'normal')
+          pdf.setFont('DejaVuSans', 'normal')
 
           for (let idx = 0; idx < pointAllocRows.length; idx++) {
             const row = pointAllocRows[idx]

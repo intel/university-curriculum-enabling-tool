@@ -3,6 +3,8 @@
 
 import { NextResponse, type NextRequest } from 'next/server'
 
+import { POST as handleAssessmentPost } from '../route'
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
@@ -10,20 +12,17 @@ export async function POST(req: NextRequest) {
     // Force assessmentType to 'project' for this route
     const payload = { ...body, assessmentType: 'project' }
 
-    const response = await fetch(new URL('/api/assessment', req.url).href, {
+    const headers = new Headers(req.headers)
+    headers.set('Content-Type', 'application/json')
+
+    const proxyRequest = new Request(new URL('/api/assessment', req.url).href, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(payload),
       cache: 'no-store',
     })
 
-    const buf = await response.arrayBuffer()
-    return new NextResponse(buf, {
-      status: response.status,
-      headers: {
-        'Content-Type': response.headers.get('Content-Type') || 'application/json',
-      },
-    })
+    return await handleAssessmentPost(proxyRequest)
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Unknown error'
     return NextResponse.json({ error: `Project generation failed: ${message}` }, { status: 500 })

@@ -18,7 +18,15 @@ export async function processSourceChunks(selectedSources: ClientSource[]) {
   const filteredSources = selectedSources.filter((source) => source.selected)
 
   if (filteredSources.length === 0) {
-    throw new Error('No sources selected. Please select at least one source document.')
+    return {
+      chunks: [],
+      metadata: {
+        sourceCount: 0,
+        chunkCount: 0,
+        tokenEstimate: 0,
+        sourceNames: [],
+      },
+    }
   }
 
   // Get chunks from the selected sources using the existing function

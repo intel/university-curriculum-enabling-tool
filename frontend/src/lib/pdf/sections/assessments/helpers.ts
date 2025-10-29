@@ -46,7 +46,7 @@ export function drawQuestionNumber(
   pdf.circle(ctx.margin + xOffset, ctx.y + yOffset, radius, 'F')
   pdf.setTextColor(...textColor)
   pdf.setFontSize(FONT_SIZES.small)
-  pdf.setFont('helvetica', 'bold')
+  pdf.setFont('DejaVuSans', 'bold')
   pdf.text(`${qIndex + 1}`, ctx.margin + xOffset, ctx.y + yOffset + 2, { align: 'center' })
 }
 
@@ -79,6 +79,6 @@ export function drawInlineStripeHeader(
   )
   pdf.setFontSize(FONT_SIZES.subtitle)
   pdf.setTextColor(...textColor)
-  pdf.setFont('helvetica', 'bold')
+  pdf.setFont('DejaVuSans', 'bold')
   pdf.text(title, ctx.margin + ctx.contentWidth / 2, ctx.y + yOffset + 7, { align: 'center' })
 }

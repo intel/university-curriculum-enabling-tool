@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { NextResponse, type NextRequest } from 'next/server'
+import { POST as baseAssessmentPOST } from '../route'
 
 export async function POST(req: NextRequest) {
   try {
@@ -10,21 +11,19 @@ export async function POST(req: NextRequest) {
     // Force assessmentType to 'exam' for this route
     const payload = { ...body, assessmentType: 'exam' }
 
-    const response = await fetch(new URL('/api/assessment', req.url).href, {
+    const reassessmentUrl = new URL(req.nextUrl.toString())
+    reassessmentUrl.pathname = '/api/assessment'
+
+    const clonedHeaders = new Headers(req.headers)
+    clonedHeaders.set('Content-Type', 'application/json')
+
+    const assessmentRequest = new Request(reassessmentUrl.toString(), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: clonedHeaders,
       body: JSON.stringify(payload),
-      cache: 'no-store',
     })
 
-    // Stream through the response as-is
-    const buf = await response.arrayBuffer()
-    return new NextResponse(buf, {
-      status: response.status,
-      headers: {
-        'Content-Type': response.headers.get('Content-Type') || 'application/json',
-      },
-    })
+    return await baseAssessmentPOST(assessmentRequest)
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Unknown error'
     return NextResponse.json({ error: `Exam generation failed: ${message}` }, { status: 500 })

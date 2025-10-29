@@ -12,6 +12,7 @@ export const langDirective = (lang: Lang) =>
 export interface CourseInfoLike {
   courseCode?: string
   courseName?: string
+  courseDescription?: string
   semester?: string
   academicYear?: string
   deadline?: string

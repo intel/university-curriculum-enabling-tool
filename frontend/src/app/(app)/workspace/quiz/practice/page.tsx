@@ -27,6 +27,8 @@ import { Badge } from '@/components/ui/badge'
 import { useContextAvailability } from '@/lib/hooks/use-context-availability'
 import { getSelectContextDescription } from '@/lib/utils/context-messages'
 import { ContextRequirementMessage } from '@/components/context-requirement-message'
+import { usePersonaStore } from '@/lib/store/persona-store'
+import { useCourses } from '@/lib/hooks/use-courses'
 
 interface Question {
   question: string
@@ -53,6 +55,8 @@ export default function QuizGenerator() {
   const selectedSources = useSourcesStore((state) => state.selectedSources)
   const { getActiveContextModelName, getContextTypeLabel } = useContextAvailability()
   const modelName = getActiveContextModelName()
+  const { data: coursesData } = useCourses()
+  const { selectedCourseId } = usePersonaStore()
 
   const [isQuitDialogOpen, setIsQuitDialogOpen] = useState(false)
 
@@ -75,8 +79,10 @@ export default function QuizGenerator() {
     }
     const selectedSourcesCount = selectedSources.filter((source) => source.selected).length
 
-    if (selectedSourcesCount === 0 || selectedSourcesCount >= 2) {
-      toast.error('Please select at least one source.')
+    if (selectedSourcesCount > 1) {
+      toast.error(
+        'Multiple sources selected. Please select only one source or none to use course context.',
+      )
       return
     }
     setIsLoading(true)
@@ -85,6 +91,15 @@ export default function QuizGenerator() {
     setCurrentQuestionIndex(0)
     setQuizStartTime(Date.now()) // Set the start time when quiz begins
     try {
+      // Get course information from context
+      const selectedCourse = coursesData?.docs.find((course) => course.id === selectedCourseId)
+      const courseDescription = selectedCourse?.description || ''
+      const courseInfo = selectedCourse
+        ? {
+            courseName: selectedCourse.name,
+            courseDescription: courseDescription,
+          }
+        : undefined
       const response = await fetch('/api/quiz/generate-quiz', {
         method: 'POST',
         headers: {
@@ -96,6 +111,7 @@ export default function QuizGenerator() {
           numQuestions,
           difficulty,
           questionType,
+          courseInfo,
         }),
       })
       const data = await response.json()
@@ -198,7 +214,8 @@ export default function QuizGenerator() {
               <h3 className="mb-2 font-medium">How it works:</h3>
               <ol className="list-inside list-decimal space-y-2 text-sm text-muted-foreground">
                 <li>
-                  Upload or select your document using the add/select source selector on the sidebar
+                  Optionally upload or select your document using the add/select source selector on
+                  the sidebar, or use course context without any sources
                 </li>
                 <li>
                   Configure your quiz settings including quiz type, difficulty, and number of

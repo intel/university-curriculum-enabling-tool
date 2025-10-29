@@ -42,14 +42,14 @@ export const renderSlides: SectionRenderer = (ctx, content) => {
     // title & number
     pdf.setFontSize(FONT_SIZES.title)
     pdf.setTextColor(94, 53, 177)
-    pdf.setFont('helvetica', 'normal')
+    pdf.setFont('DejaVuSans', 'normal')
     pdf.text(`${index + 1}. ${slide.title}`, ctx.margin + 10, ctx.y + 15)
     let slideY = ctx.y + 30
 
     // bullet content
     pdf.setFontSize(FONT_SIZES.standard)
     pdf.setTextColor(0, 0, 0)
-    pdf.setFont('helvetica', 'normal')
+    pdf.setFont('DejaVuSans', 'normal')
     for (const point of slide.content) {
       const pointLines = wrapText(ctx, point, ctx.contentWidth - 25)
       pdf.text('•', ctx.margin + 10, slideY)
@@ -64,11 +64,11 @@ export const renderSlides: SectionRenderer = (ctx, content) => {
     pdf.rect(ctx.margin + 8, slideY, speakerNotesBoxWidth, speakerNotesHeight, 'F')
 
     pdf.setFontSize(FONT_SIZES.small)
-    pdf.setFont('helvetica', 'bold')
+    pdf.setFont('DejaVuSans', 'bold')
     pdf.setTextColor(80, 80, 80)
     pdf.text(LABELS[lang].speakerNotes, ctx.margin + 12, slideY + 8)
 
-    pdf.setFont('helvetica', 'italic')
+    pdf.setFont('DejaVuSans', 'normal')
     pdf.text(speakerNotesLines, ctx.margin + 12, slideY + 14)
 
     ctx.y += totalSlideHeight + 2

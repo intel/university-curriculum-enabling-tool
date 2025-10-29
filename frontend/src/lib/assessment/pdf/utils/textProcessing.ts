@@ -85,7 +85,7 @@ export function renderFormattedText(
       if (!chunk) continue
 
       const fontStyle = i % 2 === 0 ? 'normal' : 'bold'
-      pdf.setFont('helvetica', fontStyle)
+      pdf.setFont('DejaVuSans', fontStyle)
 
       let remainingText = chunk
 

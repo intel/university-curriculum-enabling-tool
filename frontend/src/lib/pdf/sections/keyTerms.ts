@@ -12,19 +12,19 @@ export const renderKeyTerms: SectionRenderer = (ctx, content) => {
 
   for (const term of content.keyTerms) {
     // estimate space
-    pdf.setFont('helvetica', 'bold')
+    pdf.setFont('DejaVuSans', 'bold')
     pdf.setFontSize(11)
     const definitionLines = wrapText(ctx, term.definition, ctx.contentWidth - 10)
     const needed = LINE_HEIGHT + definitionLines.length * 5 + 9
     ensureSpace(ctx, needed)
 
-    pdf.setFont('helvetica', 'bold')
+    pdf.setFont('DejaVuSans', 'bold')
     pdf.setFontSize(11)
     pdf.setTextColor(0, 0, 0)
     pdf.text(term.term, ctx.margin, ctx.y)
     ctx.y += 6
 
-    pdf.setFont('helvetica', 'normal')
+    pdf.setFont('DejaVuSans', 'normal')
     pdf.setFontSize(10)
     pdf.text(definitionLines, ctx.margin + 10, ctx.y)
     ctx.y += definitionLines.length * 5 + 7

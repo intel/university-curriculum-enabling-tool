@@ -5,7 +5,62 @@ import type { PdfContext } from '../types'
 import { FONT_SIZES } from '../utils/constants'
 import { getPdfLabels } from '../utils/labels'
 import { addHeader } from '../components/header'
-import type { AssessmentIdea, AssessmentDocxContent } from '@/lib/types/assessment-types'
+import type {
+  AssessmentIdea,
+  AssessmentDocxContent,
+  ExplanationObject,
+} from '@/lib/types/assessment-types'
+
+const LINE_HEIGHT = 6
+
+function ensureLineSpace(
+  ctx: PdfContext,
+  yPosition: number,
+  requiredHeight: number = LINE_HEIGHT,
+): number {
+  const limit = ctx.pageHeight - ctx.margin
+  if (yPosition + requiredHeight > limit) {
+    ctx.pdf.addPage()
+    addHeader(ctx)
+    return ctx.margin
+  }
+  return yPosition
+}
+
+function addGap(ctx: PdfContext, yPosition: number, gap: number = 10): number {
+  const limit = ctx.pageHeight - ctx.margin
+  let nextY = yPosition + gap
+  if (nextY > limit) {
+    ctx.pdf.addPage()
+    addHeader(ctx)
+    nextY = ctx.margin + gap
+  }
+  return nextY
+}
+
+function writeWrappedLines(
+  ctx: PdfContext,
+  lines: string[],
+  indent: number,
+  startY: number,
+  lineHeight = LINE_HEIGHT,
+): number {
+  const limit = ctx.pageHeight - ctx.margin
+  let currentY = startY
+
+  for (const line of lines) {
+    if (currentY + lineHeight > limit) {
+      ctx.pdf.addPage()
+      addHeader(ctx)
+      currentY = ctx.margin
+    }
+
+    ctx.pdf.text(line, ctx.margin + indent, currentY)
+    currentY += lineHeight
+  }
+
+  return currentY
+}
 
 /**
  * Generate PDF for regular assessment types (quiz, exam, etc.)
@@ -48,7 +103,7 @@ function addInstructions(ctx: PdfContext, assessment: AssessmentIdea, yPosition:
 
   // Duration
   ctx.pdf.setFontSize(FONT_SIZES.standard)
-  ctx.pdf.setFont('helvetica', 'normal')
+  ctx.pdf.setFont('DejaVuSans', 'normal')
   ctx.pdf.text(`${labels.duration}: ${assessment.duration}`, ctx.pageWidth / 2, yPosition, {
     align: 'center',
   })
@@ -81,120 +136,143 @@ function addQuestion(
   const labels = getPdfLabels(ctx.language)
 
   // Question number
+  yPosition = ensureLineSpace(ctx, yPosition)
   ctx.pdf.setFontSize(FONT_SIZES.standard)
-  ctx.pdf.setFont('helvetica', 'bold')
+  ctx.pdf.setFont('DejaVuSans', 'bold')
   ctx.pdf.text(`${questionNumber}.`, ctx.margin, yPosition)
-  yPosition += 6
+  yPosition += LINE_HEIGHT
 
   // Question text
   ctx.pdf.setFontSize(FONT_SIZES.standard)
-  ctx.pdf.setFont('helvetica', 'normal')
-  const questionLines = ctx.pdf.splitTextToSize(question.question, ctx.contentWidth - 10)
-
-  // Check if we need a new page
-  if (yPosition + questionLines.length * 6 > ctx.pageHeight - ctx.margin) {
-    ctx.pdf.addPage()
-    yPosition = ctx.margin
-    addHeader(ctx)
+  ctx.pdf.setFont('DejaVuSans', 'normal')
+  const questionText = (question.question || '').trim()
+  if (questionText.length > 0) {
+    const questionLines = ctx.pdf.splitTextToSize(questionText, ctx.contentWidth - 10)
+    yPosition = writeWrappedLines(ctx, questionLines, 10, yPosition)
   }
-
-  ctx.pdf.text(questionLines, ctx.margin + 10, yPosition)
-  yPosition += questionLines.length * 6 + 5
+  yPosition += 5
 
   // Add options if available
   if (question.options && question.options.length > 0) {
-    yPosition += 5
-    ctx.pdf.setFont('helvetica', 'bold')
+    yPosition = ensureLineSpace(ctx, yPosition)
+    ctx.pdf.setFont('DejaVuSans', 'bold')
     ctx.pdf.text(labels.options, ctx.margin + 10, yPosition)
-    yPosition += 6
-    ctx.pdf.setFont('helvetica', 'normal')
+    yPosition += LINE_HEIGHT
+    ctx.pdf.setFont('DejaVuSans', 'normal')
 
     for (let j = 0; j < question.options.length; j++) {
+      yPosition = ensureLineSpace(ctx, yPosition)
       const optionLines = ctx.pdf.splitTextToSize(question.options[j], ctx.contentWidth - 20)
-
-      // Check if we need a new page
-      if (yPosition + optionLines.length * 6 > ctx.pageHeight - ctx.margin) {
-        ctx.pdf.addPage()
-        yPosition = ctx.margin
-        addHeader(ctx)
-      }
-
       ctx.pdf.text(`${String.fromCharCode(65 + j)}.`, ctx.margin + 10, yPosition)
-      ctx.pdf.text(optionLines, ctx.margin + 20, yPosition)
-      yPosition += optionLines.length * 6
+      yPosition = writeWrappedLines(ctx, optionLines, 20, yPosition)
     }
+    yPosition += 5
   }
 
   // Add model answer if in lecturer format
-  if (!isStudentFormat && question.correctAnswer) {
-    yPosition += 10
-    ctx.pdf.setFont('helvetica', 'bold')
-    ctx.pdf.text(`${labels.modelAnswer}:`, ctx.margin + 10, yPosition)
-    yPosition += 6
-    ctx.pdf.setFont('helvetica', 'normal')
+  if (!isStudentFormat) {
+    const answerText = (question.correctAnswer || '').trim()
+    if (answerText.length > 0) {
+      const answerLines = ctx.pdf.splitTextToSize(answerText, ctx.contentWidth - 20)
+      yPosition = addGap(ctx, yPosition, 10)
+      yPosition = ensureLineSpace(ctx, yPosition)
+      ctx.pdf.setFont('DejaVuSans', 'bold')
+      ctx.pdf.text(`${labels.modelAnswer}:`, ctx.margin + 10, yPosition)
+      yPosition += LINE_HEIGHT
+      ctx.pdf.setFont('DejaVuSans', 'normal')
 
-    const answerLines = ctx.pdf.splitTextToSize(question.correctAnswer, ctx.contentWidth - 20)
-
-    // Check if we need a new page
-    if (yPosition + answerLines.length * 6 > ctx.pageHeight - ctx.margin) {
-      ctx.pdf.addPage()
-      yPosition = ctx.margin
-      addHeader(ctx)
+      yPosition = writeWrappedLines(ctx, answerLines, 10, yPosition)
+      yPosition += 5
     }
-
-    ctx.pdf.text(answerLines, ctx.margin + 10, yPosition)
-    yPosition += answerLines.length * 6
   }
 
   // Add marking criteria if in lecturer format
   if (!isStudentFormat && question.explanation) {
-    yPosition += 10
-    ctx.pdf.setFont('helvetica', 'bold')
-    ctx.pdf.text(`${labels.markingCriteria}:`, ctx.margin + 10, yPosition)
-    yPosition += 6
-    ctx.pdf.setFont('helvetica', 'normal')
-
-    let explanationText = ''
+    let combinedExplanation = ''
 
     if (typeof question.explanation === 'string') {
-      explanationText = question.explanation
+      combinedExplanation = question.explanation.trim()
     } else if (typeof question.explanation === 'object') {
-      // Format criteria
-      if (Array.isArray(question.explanation.criteria)) {
-        explanationText += 'Criteria:\n'
-        for (const criterion of question.explanation.criteria) {
-          if (typeof criterion === 'object' && criterion !== null && 'name' in criterion) {
-            explanationText += `- ${criterion.name} (${criterion.weight || 0}%): ${
-              criterion.description || ''
-            }\n`
+      const explanationObj = question.explanation as ExplanationObject
+      const criteriaEntries: string[] = []
+      const criteriaMeta = new Map<string, { description?: string; weight?: number }>()
+      if (Array.isArray(explanationObj.criteria)) {
+        for (const criterion of explanationObj.criteria) {
+          if (
+            typeof criterion === 'object' &&
+            criterion !== null &&
+            'name' in criterion &&
+            typeof criterion.name === 'string'
+          ) {
+            const criterionName = criterion.name.trim()
+            criteriaEntries.push(
+              `- ${criterionName} (${criterion.weight || 0}%): ${criterion.description || ''}`,
+            )
+            criteriaMeta.set(criterionName.toLowerCase(), {
+              description: criterion.description?.trim(),
+              weight: typeof criterion.weight === 'number' ? criterion.weight : undefined,
+            })
           } else if (typeof criterion === 'string') {
-            explanationText += `- ${criterion}\n`
+            criteriaEntries.push(`- ${criterion}`)
           }
         }
       }
 
-      // Format mark allocation
-      if (Array.isArray(question.explanation.markAllocation)) {
-        explanationText += '\nMark Allocation:\n'
-        for (const item of question.explanation.markAllocation) {
-          explanationText += `- ${item.component} (${item.marks} marks): ${
-            item.description || ''
-          }\n`
+      const allocationEntries: string[] = []
+      if (Array.isArray(explanationObj.markAllocation)) {
+        let totalMarks = 0
+        for (const item of explanationObj.markAllocation) {
+          const componentName = (item.component || '').toString().trim()
+          const marks = typeof item.marks === 'number' ? item.marks : Number(item.marks) || 0
+          totalMarks += Number.isFinite(marks) ? marks : 0
+          const allocationKey = componentName.toLowerCase()
+          const criterionMeta = criteriaMeta.get(allocationKey)
+          const criterionDescription = criterionMeta?.description
+          const criterionWeight = criterionMeta?.weight
+          const hasDistinctDescription =
+            item.description &&
+            item.description.trim() &&
+            item.description.trim() !== criterionDescription
+
+          const baseLine = `- ${componentName} (${marks} marks${
+            typeof criterionWeight === 'number' ? ` / ${criterionWeight}%` : ''
+          })`
+          allocationEntries.push(
+            hasDistinctDescription ? `${baseLine}: ${item.description?.trim()}` : baseLine,
+          )
+        }
+
+        const explicitTotal =
+          typeof explanationObj.totalMarks === 'number' ? explanationObj.totalMarks : undefined
+        const summaryTotal = explicitTotal ?? totalMarks
+        if (summaryTotal > 0) {
+          allocationEntries.unshift(`Total marks: ${summaryTotal}`)
         }
       }
+
+      const sections: string[] = []
+      if (criteriaEntries.length > 0) {
+        sections.push(`Criteria:\n${criteriaEntries.join('\n\n')}`)
+      }
+      if (allocationEntries.length > 0) {
+        sections.push(`Mark Allocation:\n${allocationEntries.join('\n\n')}`)
+      }
+
+      combinedExplanation = sections.join('\n\n\n')
     }
 
-    const explanationLines = ctx.pdf.splitTextToSize(explanationText, ctx.contentWidth - 20)
+    if (combinedExplanation.length > 0) {
+      const explanationLines = ctx.pdf.splitTextToSize(combinedExplanation, ctx.contentWidth - 20)
+      yPosition = addGap(ctx, yPosition, 10)
+      yPosition = ensureLineSpace(ctx, yPosition)
+      ctx.pdf.setFont('DejaVuSans', 'bold')
+      ctx.pdf.text(`${labels.markingCriteria}:`, ctx.margin + 10, yPosition)
+      yPosition += LINE_HEIGHT
+      ctx.pdf.setFont('DejaVuSans', 'normal')
 
-    // Check if we need a new page
-    if (yPosition + explanationLines.length * 6 > ctx.pageHeight - ctx.margin) {
-      ctx.pdf.addPage()
-      yPosition = ctx.margin
-      addHeader(ctx)
+      yPosition = writeWrappedLines(ctx, explanationLines, 10, yPosition)
+      yPosition += 5
     }
-
-    ctx.pdf.text(explanationLines, ctx.margin + 10, yPosition)
-    yPosition += explanationLines.length * 6
   }
 
   return yPosition + 15

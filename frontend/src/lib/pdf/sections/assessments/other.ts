@@ -18,7 +18,7 @@ export const renderOtherAssessments: SectionRenderer = (ctx, content) => {
   // Section header handled externally (assessmentIdeas already added); we add specific label
   pdf.setFontSize(FONT_SIZES.sectionTitle)
   pdf.setTextColor(16, 185, 129)
-  pdf.setFont('helvetica', 'bold')
+  pdf.setFont('DejaVuSans', 'bold')
   pdf.text(LABELS[lang].otherAssessments, ctx.margin, ctx.y)
   ctx.y += 10
 
@@ -33,11 +33,11 @@ export const renderOtherAssessments: SectionRenderer = (ctx, content) => {
 
     pdf.setFontSize(FONT_SIZES.subtitle)
     pdf.setTextColor(0, 0, 0)
-    pdf.setFont('helvetica', 'bold')
+    pdf.setFont('DejaVuSans', 'bold')
     pdf.text(idea.type, ctx.margin + 10, ctx.y + 18)
 
     pdf.setFontSize(FONT_SIZES.small)
-    pdf.setFont('helvetica', 'normal')
+    pdf.setFont('DejaVuSans', 'normal')
     pdf.text(
       `${LABELS[lang].duration}: ${idea.duration}`,
       ctx.margin + ctx.contentWidth - 70,
@@ -47,7 +47,7 @@ export const renderOtherAssessments: SectionRenderer = (ctx, content) => {
     ctx.y += 35
     const descLines = wrapText(ctx, idea.description, ctx.contentWidth - 10)
     pdf.setFontSize(FONT_SIZES.standard)
-    pdf.setFont('helvetica', 'normal')
+    pdf.setFont('DejaVuSans', 'normal')
     pdf.text(descLines, ctx.margin + 5, ctx.y)
     ctx.y += descLines.length * 6 + 10
 
@@ -58,7 +58,7 @@ export const renderOtherAssessments: SectionRenderer = (ctx, content) => {
       pdf.roundedRect(ctx.margin, ctx.y, ctx.contentWidth, 10, 2, 2, 'F')
       pdf.setFontSize(FONT_SIZES.subtitle)
       pdf.setTextColor(16, 185, 129)
-      pdf.setFont('helvetica', 'bold')
+      pdf.setFont('DejaVuSans', 'bold')
       pdf.text(LABELS[lang].exampleQuestions, ctx.margin + ctx.contentWidth / 2, ctx.y + 7, {
         align: 'center',
       })
@@ -76,7 +76,7 @@ export const renderOtherAssessments: SectionRenderer = (ctx, content) => {
 
         pdf.setTextColor(0, 0, 0)
         pdf.setFontSize(FONT_SIZES.standard)
-        pdf.setFont('helvetica', 'normal')
+        pdf.setFont('DejaVuSans', 'normal')
         const questionLines = wrapText(ctx, question.question, ctx.contentWidth - 50)
         pdf.text(questionLines, ctx.margin + 30, ctx.y + 15)
         ctx.y += Math.max(questionLines.length * 6 + 10, 30)
@@ -87,11 +87,11 @@ export const renderOtherAssessments: SectionRenderer = (ctx, content) => {
           pdf.roundedRect(ctx.margin + 20, ctx.y, ctx.contentWidth - 40, 10, 2, 2, 'F')
           pdf.setTextColor(0, 130, 0)
           pdf.setFontSize(FONT_SIZES.small)
-          pdf.setFont('helvetica', 'bold')
+          pdf.setFont('DejaVuSans', 'bold')
           pdf.text(LABELS[lang].modelAnswer, ctx.margin + 30, ctx.y + 5)
 
           pdf.setTextColor(0, 0, 0)
-          pdf.setFont('helvetica', 'normal')
+          pdf.setFont('DejaVuSans', 'normal')
           const answerLines = wrapText(ctx, question.correctAnswer, ctx.contentWidth - 100)
           pdf.text(answerLines, ctx.margin + 80, ctx.y + 5)
           ctx.y += Math.max(answerLines.length * 6, 15) + 5

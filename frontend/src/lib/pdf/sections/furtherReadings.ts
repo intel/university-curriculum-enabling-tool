@@ -17,11 +17,11 @@ export const renderFurtherReadings: SectionRenderer = (ctx, content) => {
     pdf.setFontSize(11)
     pdf.setTextColor(0, 0, 0)
     pdf.text('•', ctx.margin, ctx.y)
-    pdf.setFont('helvetica', 'bold')
+    pdf.setFont('DejaVuSans', 'bold')
     pdf.text(reading.title, ctx.margin + 5, ctx.y)
     ctx.y += 7
 
-    pdf.setFont('helvetica', 'normal')
+    pdf.setFont('DejaVuSans', 'normal')
     pdf.text(`${LABELS[lang].author} ${reading.author}`, ctx.margin + 5, ctx.y)
     ctx.y += 8
 

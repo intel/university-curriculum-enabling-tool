@@ -45,13 +45,13 @@ export const renderActivities: SectionRenderer = (ctx, content) => {
 
     pdf.setFontSize(FONT_SIZES.title)
     pdf.setTextColor(94, 53, 177)
-    pdf.setFont('helvetica', 'bold')
+    pdf.setFont('DejaVuSans', 'bold')
     pdf.text(activity.title, ctx.margin + 10, ctx.y + 10)
     let y = ctx.y + 15
 
     pdf.setFontSize(FONT_SIZES.standard)
     pdf.setTextColor(0, 0, 0)
-    pdf.setFont('helvetica', 'normal')
+    pdf.setFont('DejaVuSans', 'normal')
     pdf.text(`${LABELS[lang].type}: ${activity.type}`, ctx.margin + 10, y)
     pdf.text(
       `${LABELS[lang].duration}: ${activity.duration}`,
@@ -65,12 +65,12 @@ export const renderActivities: SectionRenderer = (ctx, content) => {
 
     pdf.setFontSize(FONT_SIZES.subtitle)
     pdf.setTextColor(94, 53, 177)
-    pdf.setFont('helvetica', 'bold')
+    pdf.setFont('DejaVuSans', 'bold')
     pdf.text(LABELS[lang].instructions, ctx.margin + 10, y)
     y += 8
 
     pdf.setFontSize(FONT_SIZES.standard)
-    pdf.setFont('helvetica', 'normal')
+    pdf.setFont('DejaVuSans', 'normal')
     activity.instructions.forEach((ins, idx) => {
       const lines = wrapText(ctx, ins, ctx.contentWidth - 30)
       pdf.text(`${idx + 1}.`, ctx.margin + 10, y)
@@ -80,12 +80,12 @@ export const renderActivities: SectionRenderer = (ctx, content) => {
 
     pdf.setFontSize(FONT_SIZES.subtitle)
     pdf.setTextColor(94, 53, 177)
-    pdf.setFont('helvetica', 'bold')
+    pdf.setFont('DejaVuSans', 'bold')
     pdf.text(LABELS[lang].materialsNeeded, ctx.margin + 10, y + 6)
     y += 12
 
     pdf.setFontSize(FONT_SIZES.standard)
-    pdf.setFont('helvetica', 'normal')
+    pdf.setFont('DejaVuSans', 'normal')
     activity.materials.forEach((m) => {
       const lines = wrapText(ctx, m, ctx.contentWidth - 30)
       pdf.text('•', ctx.margin + 10, y)
