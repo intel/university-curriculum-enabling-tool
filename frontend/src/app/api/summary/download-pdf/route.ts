@@ -3,6 +3,8 @@
 
 import { NextResponse, type NextRequest } from 'next/server'
 import jsPDF from 'jspdf'
+import '@/lib/fonts/DejaVuSans'
+import '@/lib/fonts/DejaVuSans-Bold'
 
 // Helper to fetch image and convert to base64
 async function fetchImageAsBase64(url: string): Promise<string | null> {
@@ -42,20 +44,20 @@ function renderInlineMarkdown(
   let cursor = 0
   let match
   const regex = /(\*\*(.*?)\*\*)|(`([^`]+)`)|(\[([^\]]+)\]\([^)]+\))/g
-  pdf.setFont('helvetica', isBold ? 'bold' : 'normal')
+  pdf.setFont('DejaVuSans', isBold ? 'bold' : 'normal')
   pdf.setFontSize(fontSize)
   let currentX = x
 
   while ((match = regex.exec(text))) {
     if (match.index > cursor) {
       const normalText = text.slice(cursor, match.index)
-      pdf.setFont('helvetica', isBold ? 'bold' : 'normal')
+      pdf.setFont('DejaVuSans', isBold ? 'bold' : 'normal')
       pdf.text(normalText, currentX, y, { baseline: 'top' })
       currentX += pdf.getTextWidth(normalText)
     }
     if (match[1]) {
       // Render bold text
-      pdf.setFont('helvetica', 'bold')
+      pdf.setFont('DejaVuSans', 'bold')
       pdf.text(match[2], currentX, y, { baseline: 'top' })
       currentX += pdf.getTextWidth(match[2])
     } else if (match[3]) {
@@ -65,14 +67,14 @@ function renderInlineMarkdown(
       currentX += pdf.getTextWidth(match[4])
     } else if (match[5]) {
       // Render link text as normal text
-      pdf.setFont('helvetica', isBold ? 'bold' : 'normal')
+      pdf.setFont('DejaVuSans', isBold ? 'bold' : 'normal')
       pdf.text(match[6], currentX, y, { baseline: 'top' })
       currentX += pdf.getTextWidth(match[6])
     }
     cursor = regex.lastIndex
   }
   if (cursor < text.length) {
-    pdf.setFont('helvetica', isBold ? 'bold' : 'normal')
+    pdf.setFont('DejaVuSans', isBold ? 'bold' : 'normal')
     pdf.text(text.slice(cursor), currentX, y, { baseline: 'top' })
   }
 }
@@ -83,6 +85,49 @@ async function generatePDF(content: string): Promise<Buffer> {
     unit: 'mm',
     format: 'a4',
   })
+
+  let customFontsAvailable = true
+  const originalSetFont = pdf.setFont.bind(pdf)
+
+  try {
+    originalSetFont('DejaVuSans', 'normal')
+    console.log('Custom fonts loaded successfully')
+  } catch (error) {
+    customFontsAvailable = false
+    console.error('Error setting custom fonts:', error)
+    originalSetFont('helvetica', 'normal')
+  }
+
+  const setFontStyle = (style: 'normal' | 'bold') => {
+    if (customFontsAvailable) {
+      try {
+        if (style === 'bold') {
+          originalSetFont('DejaVuSans-Bold', 'normal')
+        } else {
+          originalSetFont('DejaVuSans', 'normal')
+        }
+        return
+      } catch (fontError) {
+        customFontsAvailable = false
+        console.error('Error setting custom fonts:', fontError)
+      }
+    }
+    originalSetFont('helvetica', style)
+  }
+
+  pdf.setFont = function (fontName: string, fontStyle?: string, fontWeight?: string) {
+    if (fontName === 'DejaVuSans' || fontName === 'DejaVuSans-Bold') {
+      setFontStyle(fontStyle === 'bold' || fontName === 'DejaVuSans-Bold' ? 'bold' : 'normal')
+      return this
+    }
+    try {
+      return originalSetFont(fontName, fontStyle, fontWeight)
+    } catch (fallbackError) {
+      console.error('Error setting font, falling back to Helvetica:', fallbackError)
+      return originalSetFont('helvetica', fontStyle, fontWeight)
+    }
+  }
+
   const pageWidth = 210
   const margin = 20
   const contentWidth = pageWidth - margin * 2
@@ -90,7 +135,7 @@ async function generatePDF(content: string): Promise<Buffer> {
 
   pdf.setFontSize(12)
   pdf.setTextColor(34, 34, 34)
-  pdf.setFont('helvetica', 'normal')
+  pdf.setFont('DejaVuSans', 'normal')
 
   // Remove markdown bold/italic from headings for PDF
   const cleanHeadingLine = (line: string) => {
@@ -141,10 +186,10 @@ async function generatePDF(content: string): Promise<Buffer> {
       // Render the heading with appropriate font size and style
       y += 10 // Use a larger and consistent blank space before every heading
       pdf.setFontSize(level === 1 ? 16 : level === 2 ? 14 : 12)
-      pdf.setFont('helvetica', 'bold')
+      pdf.setFont('DejaVuSans', 'bold')
       pdf.text(headingWrapped, margin, y)
       y += headingWrapped.length * 8
-      pdf.setFont('helvetica', 'normal')
+      pdf.setFont('DejaVuSans', 'normal')
       pdf.setFontSize(12)
 
       // Render the block content (lists and paragraphs) with correct indentation and wrapping
@@ -156,10 +201,10 @@ async function generatePDF(content: string): Promise<Buffer> {
           const wrapped = pdf.splitTextToSize(ulMatch[2], contentWidth - 8)
           for (let w = 0; w < wrapped.length; w++) {
             // Always use the same font size and baseline for marker and text
-            pdf.setFont('helvetica', 'bold')
+            pdf.setFont('DejaVuSans', 'bold')
             pdf.setFontSize(12)
             if (w === 0) pdf.text('•', margin, y, { baseline: 'top' })
-            pdf.setFont('helvetica', 'normal')
+            pdf.setFont('DejaVuSans', 'normal')
             pdf.setFontSize(12)
             renderInlineMarkdown(pdf, wrapped[w], margin + 8, y, 12)
             y += 7
@@ -173,10 +218,10 @@ async function generatePDF(content: string): Promise<Buffer> {
           const itemText = olMatch[3]
           const wrapped = pdf.splitTextToSize(itemText, contentWidth - 12)
           for (let w = 0; w < wrapped.length; w++) {
-            pdf.setFont('helvetica', 'bold')
+            pdf.setFont('DejaVuSans', 'bold')
             pdf.setFontSize(12)
             if (w === 0) pdf.text(number + '.', margin, y, { baseline: 'top' })
-            pdf.setFont('helvetica', 'normal')
+            pdf.setFont('DejaVuSans', 'normal')
             pdf.setFontSize(12)
             renderInlineMarkdown(pdf, wrapped[w], margin + 12, y, 12)
             y += 7
@@ -224,10 +269,10 @@ async function generatePDF(content: string): Promise<Buffer> {
       const wrapped = pdf.splitTextToSize(ulMatch[2], contentWidth - 8)
       for (let w = 0; w < wrapped.length; w++) {
         // Always use the same font size and baseline for marker and text
-        pdf.setFont('helvetica', 'bold')
+        pdf.setFont('DejaVuSans', 'bold')
         pdf.setFontSize(12)
         if (w === 0) pdf.text('•', margin, y, { baseline: 'top' })
-        pdf.setFont('helvetica', 'normal')
+        pdf.setFont('DejaVuSans', 'normal')
         pdf.setFontSize(12)
         renderInlineMarkdown(pdf, wrapped[w], margin + 8, y, 12)
         y += 7
@@ -243,10 +288,10 @@ async function generatePDF(content: string): Promise<Buffer> {
       const itemText = olMatch[3]
       const wrapped = pdf.splitTextToSize(itemText, contentWidth - 12)
       for (let w = 0; w < wrapped.length; w++) {
-        pdf.setFont('helvetica', 'bold')
+        pdf.setFont('DejaVuSans', 'bold')
         pdf.setFontSize(12)
         if (w === 0) pdf.text(number + '.', margin, y, { baseline: 'top' })
-        pdf.setFont('helvetica', 'normal')
+        pdf.setFont('DejaVuSans', 'normal')
         pdf.setFontSize(12)
         renderInlineMarkdown(pdf, wrapped[w], margin + 12, y, 12)
         y += 7

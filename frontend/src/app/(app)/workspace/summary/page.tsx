@@ -131,8 +131,14 @@ export default function SummaryPage() {
           }
         : undefined
 
+      if (!selectedSources.length && !courseInfo) {
+        toast.error('Select at least one reference source or choose a course before generating.')
+        stopGenerating()
+        return
+      }
+
       // Fallback: if no sources selected, use course description as a pseudo-source
-      const sourcesToUse = selectedSources?.length
+      const sourcesToUse = selectedSources.length
         ? selectedSources
         : courseInfo?.courseDescription
           ? [{ content: courseInfo.courseDescription, name: 'Course Description' }]
@@ -149,7 +155,16 @@ export default function SummaryPage() {
         }),
       })
 
-      if (!response.ok) throw new Error('Failed to generate summary')
+      if (!response.ok) {
+        let message = 'Failed to generate summary'
+        try {
+          const errorBody = await response.json()
+          message = errorBody?.message || errorBody?.error?.details || message
+        } catch {
+          // Ignore JSON parsing errors and keep default message
+        }
+        throw new Error(message)
+      }
 
       const data = await response.json()
       setSummary(id, data.summary)
@@ -158,7 +173,12 @@ export default function SummaryPage() {
       console.log('DEBUG: Received citations:', data.citations)
     } catch (error) {
       console.error('Error generating summary:', error)
-      setError('An error occurred while generating the summary.')
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : 'An error occurred while generating the summary.'
+      setError(message)
+      toast.error(message)
     }
 
     stopGenerating()

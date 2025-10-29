@@ -4,10 +4,56 @@ import jsPDF from 'jspdf'
 import { PAGE, FONT_SIZES, COLORS, LINE_HEIGHT } from './constants'
 import { PdfContext, SpaceCheckOptions } from './types'
 import { LABELS } from './labels'
+import '@/lib/fonts/DejaVuSans'
+import '@/lib/fonts/DejaVuSans-Bold'
 
 export function createPdfContext(lang: PdfContext['lang']): PdfContext {
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-  pdf.setFont('helvetica')
+
+  let customFontsAvailable = true
+  const originalSetFont = pdf.setFont.bind(pdf)
+
+  try {
+    originalSetFont('DejaVuSans', 'normal')
+    console.log('Custom fonts loaded successfully')
+  } catch (error) {
+    customFontsAvailable = false
+    console.error('Error setting custom fonts:', error)
+    originalSetFont('helvetica', 'normal')
+  }
+
+  const setFontStyle = (style: 'normal' | 'bold') => {
+    if (customFontsAvailable) {
+      try {
+        if (style === 'bold') {
+          originalSetFont('DejaVuSans-Bold', 'normal')
+        } else {
+          originalSetFont('DejaVuSans', 'normal')
+        }
+        return
+      } catch (fontError) {
+        customFontsAvailable = false
+        console.error('Error setting custom fonts:', fontError)
+      }
+    }
+    originalSetFont('helvetica', style)
+  }
+
+  pdf.setFont = function (fontName: string, fontStyle?: string, fontWeight?: string) {
+    if (fontName === 'DejaVuSans' || fontName === 'DejaVuSans-Bold') {
+      setFontStyle(fontStyle === 'bold' || fontName === 'DejaVuSans-Bold' ? 'bold' : 'normal')
+      return this
+    }
+    try {
+      return originalSetFont(fontName, fontStyle, fontWeight)
+    } catch (fallbackError) {
+      console.error('Error setting font, falling back to Helvetica:', fallbackError)
+      return originalSetFont('helvetica', fontStyle, fontWeight)
+    }
+  }
+
+  setFontStyle('normal')
+
   return {
     pdf,
     lang,
@@ -23,7 +69,7 @@ export function addFooter(ctx: PdfContext) {
   const { pdf, pageWidth, pageHeight, lang } = ctx
   pdf.setFontSize(FONT_SIZES.footer)
   pdf.setTextColor(...COLORS.footer)
-  pdf.setFont('helvetica', 'normal')
+  pdf.setFont('DejaVuSans', 'normal')
   pdf.text(
     `${LABELS[lang].generatedOn} ${new Date().toLocaleDateString()}`,
     pageWidth / 2,
@@ -42,7 +88,7 @@ export function addSectionHeader(ctx: PdfContext, title: string) {
   const { pdf, margin, pageWidth } = ctx
   pdf.setFontSize(FONT_SIZES.sectionTitle)
   pdf.setTextColor(...COLORS.purple)
-  pdf.setFont('helvetica', 'bold')
+  pdf.setFont('DejaVuSans', 'bold')
   pdf.text(title, margin, ctx.y)
   ctx.y += 5
   pdf.setDrawColor(...COLORS.gray)

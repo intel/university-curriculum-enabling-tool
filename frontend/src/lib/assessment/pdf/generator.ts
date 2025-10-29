@@ -8,6 +8,8 @@ import { localizeTitle } from './utils/labels'
 import { addHeader, addFooter, addTitleSection } from './components/header'
 import { generateProjectAssessment } from './generators/projectAssessment'
 import { generateRegularAssessment } from './generators/regularAssessment'
+import '@/lib/fonts/DejaVuSans'
+import '@/lib/fonts/DejaVuSans-Bold'
 
 /**
  * Main PDF generator orchestrator
@@ -22,7 +24,47 @@ export async function generateAssessmentPDF(options: PdfGenerationOptions): Prom
     format: 'a4',
   })
 
-  pdf.setFont('helvetica')
+  let customFontsAvailable = true
+  const originalSetFont = pdf.setFont.bind(pdf)
+
+  try {
+    originalSetFont('DejaVuSans', 'normal')
+    console.log('Custom fonts loaded successfully')
+  } catch (error) {
+    customFontsAvailable = false
+    console.error('Error setting custom fonts:', error)
+    originalSetFont('helvetica', 'normal')
+  }
+
+  const setFontStyle = (style: 'normal' | 'bold') => {
+    if (customFontsAvailable) {
+      try {
+        if (style === 'bold') {
+          originalSetFont('DejaVuSans-Bold', 'normal')
+        } else {
+          originalSetFont('DejaVuSans', 'normal')
+        }
+        return
+      } catch (fontError) {
+        customFontsAvailable = false
+        console.error('Error setting custom fonts:', fontError)
+      }
+    }
+    originalSetFont('helvetica', style)
+  }
+
+  pdf.setFont = function (fontName: string, fontStyle?: string, fontWeight?: string) {
+    if (fontName === 'DejaVuSans' || fontName === 'DejaVuSans-Bold') {
+      setFontStyle(fontStyle === 'bold' || fontName === 'DejaVuSans-Bold' ? 'bold' : 'normal')
+      return this
+    }
+    try {
+      return originalSetFont(fontName, fontStyle, fontWeight)
+    } catch (fallbackError) {
+      console.error('Error setting font, falling back to Helvetica:', fallbackError)
+      return originalSetFont('helvetica', fontStyle, fontWeight)
+    }
+  }
 
   // Create context
   const ctx: PdfContext = {

@@ -30,11 +30,11 @@ export const renderQuizAssessments: SectionRenderer = (ctx, content) => {
     // Title & meta
     pdf.setFontSize(FONT_SIZES.subtitle)
     pdf.setTextColor(0, 0, 0)
-    pdf.setFont('helvetica', 'bold')
+    pdf.setFont('DejaVuSans', 'bold')
     pdf.text(idea.type, ctx.margin + 10, ctx.y + 13)
 
     pdf.setFontSize(FONT_SIZES.small)
-    pdf.setFont('helvetica', 'normal')
+    pdf.setFont('DejaVuSans', 'normal')
     pdf.text(
       `⏱ ${LABELS[lang].duration}: ${idea.duration}`,
       ctx.margin + ctx.contentWidth - 70,
@@ -43,7 +43,7 @@ export const renderQuizAssessments: SectionRenderer = (ctx, content) => {
 
     // Description
     pdf.setFontSize(FONT_SIZES.standard)
-    pdf.setFont('helvetica', 'normal')
+    pdf.setFont('DejaVuSans', 'normal')
     pdf.text(descLines, ctx.margin + 10, ctx.y + 22)
 
     // Example Questions header (using helper stripe)
@@ -104,7 +104,7 @@ export const renderQuizAssessments: SectionRenderer = (ctx, content) => {
       // Question text
       pdf.setTextColor(0, 0, 0)
       pdf.setFontSize(FONT_SIZES.standard)
-      pdf.setFont('helvetica', 'normal')
+      pdf.setFont('DejaVuSans', 'normal')
       pdf.text(questionLines, ctx.margin + 40, ctx.y + 15)
       let qBoxY = ctx.y + 15 + questionLines.length * 6 + 5
 
@@ -118,10 +118,10 @@ export const renderQuizAssessments: SectionRenderer = (ctx, content) => {
           pdf.circle(ctx.margin + 40, qBoxY + 5, 5, 'F')
           pdf.setTextColor(0, 0, 0)
           pdf.setFontSize(FONT_SIZES.small)
-          pdf.setFont('helvetica', 'bold')
+          pdf.setFont('DejaVuSans', 'bold')
           pdf.text(String.fromCharCode(65 + o), ctx.margin + 40, qBoxY + 7, { align: 'center' })
 
-          pdf.setFont('helvetica', 'normal')
+          pdf.setFont('DejaVuSans', 'normal')
           const optionLines = wrapText(ctx, question.options[o], ctx.contentWidth - 80)
           pdf.text(optionLines, ctx.margin + 50, qBoxY + 5)
           qBoxY += Math.max(optionLines.length * 6, 15)
@@ -136,11 +136,11 @@ export const renderQuizAssessments: SectionRenderer = (ctx, content) => {
 
         pdf.setTextColor(0, 130, 0)
         pdf.setFontSize(FONT_SIZES.small)
-        pdf.setFont('helvetica', 'bold')
+        pdf.setFont('DejaVuSans', 'bold')
         pdf.text(LABELS[lang].correctAnswer, ctx.margin + 40, qBoxY + 5)
 
         pdf.setTextColor(0, 0, 0)
-        pdf.setFont('helvetica', 'normal')
+        pdf.setFont('DejaVuSans', 'normal')
         pdf.text(answerLines, ctx.margin + 90, qBoxY + 5)
         qBoxY += answerHeight
       }
@@ -153,11 +153,11 @@ export const renderQuizAssessments: SectionRenderer = (ctx, content) => {
 
         pdf.setTextColor(0, 0, 150)
         pdf.setFontSize(FONT_SIZES.small)
-        pdf.setFont('helvetica', 'bold')
+        pdf.setFont('DejaVuSans', 'bold')
         pdf.text(LABELS[lang].explanation, ctx.margin + 40, qBoxY + 5)
 
         pdf.setTextColor(0, 0, 0)
-        pdf.setFont('helvetica', 'normal')
+        pdf.setFont('DejaVuSans', 'normal')
         pdf.text(explanationLines, ctx.margin + 90, qBoxY + 5)
         qBoxY += explanationHeight
 

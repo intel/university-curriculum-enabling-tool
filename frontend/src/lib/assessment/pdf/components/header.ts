@@ -35,14 +35,14 @@ export function addFooter(ctx: PdfContext, pageNum: number, totalPages: number):
 export function addTitleSection(ctx: PdfContext, title: string, courseInfo: string): number {
   // Title
   ctx.pdf.setFontSize(FONT_SIZES.title)
-  ctx.pdf.setFont('helvetica', 'bold')
+  ctx.pdf.setFont('DejaVuSans', 'bold')
   ctx.pdf.text(title, ctx.pageWidth / 2, ctx.currentY, {
     align: 'center',
   })
 
   // Course information
   ctx.pdf.setFontSize(FONT_SIZES.subtitle)
-  ctx.pdf.setFont('helvetica', 'bold')
+  ctx.pdf.setFont('DejaVuSans', 'bold')
   ctx.pdf.text(courseInfo, ctx.pageWidth / 2, ctx.currentY + 10, {
     align: 'center',
   })

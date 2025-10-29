@@ -13,6 +13,12 @@ export function buildExamQuestionsSystemPrompt(
   hasSourceMaterials: boolean,
   numQuestions: number,
 ): string {
+  const courseTitle =
+    `${(courseInfo?.courseCode || '').trim()} ${(courseInfo?.courseName || (language === 'id' ? 'mata kuliah ini' : 'this course')).trim()}`
+      .replace(/\s+/g, ' ')
+      .trim()
+  const courseDescription = courseInfo?.courseDescription?.trim()
+
   if (language === 'id') {
     return `${langDirective(language)}\n\nAnda adalah pengembang asesmen pendidikan ahli dalam bidang ${
       courseInfo?.courseName || 'mata kuliah ini'
@@ -27,14 +33,10 @@ ${
 4. Abaikan judul mata kuliah atau pengetahuan eksternal di luar materi sumber.
 5. Seluruh keluaran HARUS menggunakan bahasa target yang diminta tanpa mencampur bahasa.
 Catatan: Jangan menyalin atau mengutip teks dari materi sumber yang bukan dalam bahasa target.`
-    : `1. Karena tidak ada materi sumber, dasarkan pertanyaan HANYA pada judul mata kuliah "${(
-        courseInfo?.courseCode || ''
-      ).trim()} ${(
-        courseInfo?.courseName || 'mata kuliah ini'
-      ).trim()}". Jangan gunakan kurikulum standar atau sumber eksternal.
-2. Fokus pada konsep inti, teori, dan aplikasi umum.
-3. Pastikan tingkat akademik sesuai konteks universitas.
-4. SANGAT PENTING: Seluruh keluaran HARUS dalam Bahasa Indonesia yang jelas dan alami, tanpa mencampur bahasa apa pun. Abaikan bahasa asli nama mata kuliah - tetap gunakan Bahasa Indonesia untuk semua respons.`
+    : `1. Karena tidak ada materi sumber, dasarkan pertanyaan HANYA pada judul mata kuliah "${courseTitle}". Jangan gunakan kurikulum standar atau sumber eksternal.
+${courseDescription ? `2. Gunakan deskripsi mata kuliah berikut sebagai konteks:\n   "${courseDescription}".\n` : ''}${courseDescription ? '3' : '2'}. Fokus pada konsep inti, teori, dan aplikasi umum.
+${courseDescription ? '4' : '3'}. Pastikan tingkat akademik sesuai konteks universitas.
+${courseDescription ? '5' : '4'}. SANGAT PENTING: Seluruh keluaran HARUS dalam Bahasa Indonesia yang jelas dan alami, tanpa mencampur bahasa apa pun. Abaikan bahasa asli nama mata kuliah - tetap gunakan Bahasa Indonesia untuk semua respons.`
 }
 4. Pertanyaan harus beragam dan mencakup berbagai topik.
 5. Respons HARUS berupa array JSON string.
@@ -61,14 +63,10 @@ ${
 4. Ignore the course title and any outside knowledge beyond the source materials.
 5. The output MUST be entirely in the requested target language with no language mixing.
 Note: Do not copy or quote any text from the source materials that is not in the target language.`
-    : `1. Since there are no source materials, base the questions ONLY on the course title "${(
-        courseInfo?.courseCode || ''
-      ).trim()} ${(
-        courseInfo?.courseName || 'this course'
-      ).trim()}". Do not use standard curriculum or external sources.
-2. Focus on core concepts, theories, and common applications.
-3. Ensure the academic level fits a university context.
-4. CRITICAL: All output MUST be in clear, natural English without mixing any languages. Ignore the original language of the course name - always use English for all responses.`
+    : `1. Since there are no source materials, base the questions ONLY on the course title "${courseTitle}". Do not use standard curriculum or external sources.
+${courseDescription ? `2. Use the following course description as context:\n   "${courseDescription}".\n` : ''}${courseDescription ? '3' : '2'}. Focus on core concepts, theories, and common applications.
+${courseDescription ? '4' : '3'}. Ensure the academic level fits a university context.
+${courseDescription ? '5' : '4'}. CRITICAL: All output MUST be in clear, natural English without mixing any languages. Ignore the original language of the course name—always use English for all responses.`
 }
 4. Questions should be diverse and cover multiple topics.
 5. The response MUST be a JSON array of strings.
@@ -94,13 +92,21 @@ export function buildExamQuestionsUserPrompt(
       ? `Hasilkan ${numQuestions} pertanyaan unik untuk asesmen ${assessmentType}. Ikuti format yang diminta.`
       : `Hasilkan ${numQuestions} pertanyaan unik untuk asesmen ${assessmentType} pada mata kuliah ${
           courseInfo?.courseCode || ''
-        } ${courseInfo?.courseName || 'mata kuliah ini'}. Jawab dalam format yang diminta.`
+        } ${courseInfo?.courseName || 'mata kuliah ini'}. ${
+          courseInfo?.courseDescription
+            ? `Gunakan deskripsi mata kuliah berikut sebagai konteks: "${courseInfo.courseDescription.trim()}". `
+            : ''
+        }Jawab dalam format yang diminta.`
   }
   return hasSourceMaterials
     ? `Generate ${numQuestions} unique questions for the ${assessmentType} assessment. Follow the requested output format.`
     : `Generate ${numQuestions} unique questions for the ${assessmentType} assessment in the course ${
         courseInfo?.courseCode || ''
-      } ${courseInfo?.courseName || 'this course'}. Follow the requested output format.`
+      } ${courseInfo?.courseName || 'this course'}. ${
+        courseInfo?.courseDescription
+          ? `Use this course description as context: "${courseInfo.courseDescription.trim()}". `
+          : ''
+      }Follow the requested output format.`
 }
 
 // Model Answer
@@ -111,6 +117,8 @@ export function buildExamModelAnswerSystemPrompt(
   hasSourceMaterials: boolean,
   question: string,
 ): string {
+  const courseDescription = courseInfo?.courseDescription?.trim()
+
   if (language === 'id') {
     return `${langDirective(language)}\n\nAnda adalah pengembang asesmen pendidikan ahli. Buat jawaban model untuk pertanyaan berikut ${
       hasSourceMaterials
@@ -128,9 +136,9 @@ ${
 5. Seluruh keluaran HARUS menggunakan bahasa target yang diminta tanpa mencampur bahasa.
 Catatan: Jangan menyalin atau mengutip teks dari materi sumber yang bukan dalam bahasa target.`
     : `1. Gunakan pengetahuan standar kurikulum.
-2. Fokus pada konsep inti, teori, dan aplikasi relevan.
-3. Pastikan akademik dan tepat.
-4. Seluruh keluaran HARUS menggunakan bahasa target yang diminta tanpa mencampur bahasa.`
+${courseDescription ? `2. Gunakan deskripsi mata kuliah berikut sebagai konteks:\n   "${courseDescription}".\n` : ''}${courseDescription ? '3' : '2'}. Fokus pada konsep inti, teori, dan aplikasi relevan.
+${courseDescription ? '4' : '3'}. Pastikan akademik dan tepat.
+${courseDescription ? '5' : '4'}. Seluruh keluaran HARUS menggunakan bahasa target yang diminta tanpa mencampur bahasa.`
 }
 4. Jawaban harus komprehensif dan akurat.
 5. Respons HARUS berupa teks polos saja.
@@ -156,9 +164,9 @@ ${
 5. The output MUST be entirely in the requested target language with no language mixing.
 Note: Do not copy or quote any text from the source materials that is not in the target language.`
     : `1. Use standard curriculum knowledge.
-2. Focus on core concepts, theory, and relevant applications.
-3. Keep it academic and precise.
-4. The output MUST be entirely in the requested target language with no language mixing.`
+${courseDescription ? `2. Use the following course description as context:\n   "${courseDescription}".\n` : ''}${courseDescription ? '3' : '2'}. Focus on core concepts, theory, and relevant applications.
+${courseDescription ? '4' : '3'}. Keep it academic and precise.
+${courseDescription ? '5' : '4'}. The output MUST be entirely in the requested target language with no language mixing.`
 }
 4. The answer must be comprehensive and accurate.
 5. The response MUST be plain text only.
@@ -178,13 +186,21 @@ export function buildExamModelAnswerUserPrompt(
       ? `Buat jawaban model untuk pertanyaan tersebut.`
       : `Buat jawaban model untuk pertanyaan tersebut pada ${courseInfo?.courseCode || ''} ${
           courseInfo?.courseName || 'mata kuliah ini'
-        }.`
+        }. ${
+          courseInfo?.courseDescription
+            ? `Gunakan deskripsi mata kuliah berikut sebagai konteks: "${courseInfo.courseDescription.trim()}".`
+            : ''
+        }`
   }
   return hasSourceMaterials
     ? `Create a model answer for the question.`
     : `Create a model answer for the question in ${courseInfo?.courseCode || ''} ${
         courseInfo?.courseName || 'this course'
-      }.`
+      }. ${
+        courseInfo?.courseDescription
+          ? `Use this course description as context: "${courseInfo.courseDescription.trim()}".`
+          : ''
+      }`
 }
 
 // Marking Criteria
@@ -196,6 +212,8 @@ export function buildExamMarkingCriteriaSystemPrompt(
   question: string,
   modelAnswer: string,
 ): string {
+  const courseDescription = courseInfo?.courseDescription?.trim()
+
   if (language === 'id') {
     return `${langDirective(language)}\n\nAnda adalah pengembang asesmen pendidikan ahli. Buat kriteria penilaian untuk pertanyaan berikut berdasarkan jawaban model ${
       hasSourceMaterials
@@ -212,11 +230,15 @@ ${
 4. Seluruh keluaran HARUS menggunakan bahasa target yang diminta tanpa mencampur bahasa.
 Catatan: Jangan menyalin atau mengutip teks dari materi sumber yang bukan dalam bahasa target.`
     : `1. Gunakan prinsip penilaian akademik standar.
-2. Fokus pada pemahaman, aplikasi, dan analisis kritis.
-3. Seluruh keluaran HARUS menggunakan bahasa target yang diminta tanpa mencampur bahasa.`
+${courseDescription ? `2. Gunakan deskripsi mata kuliah berikut sebagai konteks:\n   "${courseDescription}".\n` : ''}${courseDescription ? '3' : '2'}. Fokus pada pemahaman, aplikasi, dan analisis kritis.
+${courseDescription ? '4' : '3'}. Seluruh keluaran HARUS menggunakan bahasa target yang diminta tanpa mencampur bahasa.`
 }
-3. Berikan rubrik terstruktur dengan bobot jelas.
-4. Respons HARUS berupa JSON valid.
+3. Buat TEPAT 3 atau 4 kriteria yang berbeda dan relevan dengan pertanyaan dan jawaban model (mis. akurasi konsep, analisis, penerapan teknis, komunikasi).
+4. Deskripsikan setiap kriteria secara spesifik dengan menyebutkan detail dari jawaban model/pertanyaan; hindari frasa generik.
+5. Bobot kriteria harus dalam persen dan totalnya 100.
+6. Bagian markAllocation harus memuat komponen dengan nama yang sama persis seperti kriteria, dengan jumlah nilai (marks) yang sama dengan bobot persen.
+7. Sertakan bidang totalMarks yang menunjukkan jumlah nilai maksimum (biasanya 100).
+8. Respons HARUS berupa JSON valid tanpa teks tambahan.
 
 PERTANYAAN: ${question}
 
@@ -233,11 +255,12 @@ FORMAT:
   ],
   "markAllocation": [
     {
-      "component": "Komponen 1",
-      "marks": 5,
-      "description": "Deskripsi komponen 1"
+      "component": "Kriteria 1",
+      "marks": 40,
+      "description": "Deskripsi penilaian untuk kriteria 1"
     }
-  ]
+  ],
+  "totalMarks": 100
 }
 
 JANGAN sertakan teks di luar objek JSON.`
@@ -258,11 +281,15 @@ ${
 4. The output MUST be entirely in the requested target language with no language mixing.
 Note: Do not copy or quote any text from the source materials that is not in the target language.`
     : `1. Use standard academic assessment principles.
-2. Focus on understanding, application, and critical analysis.
-3. The output MUST be entirely in the requested target language with no language mixing.`
+${courseDescription ? `2. Use the following course description as context:\n   "${courseDescription}".\n` : ''}${courseDescription ? '3' : '2'}. Focus on understanding, application, and critical analysis.
+${courseDescription ? '4' : '3'}. The output MUST be entirely in the requested target language with no language mixing.`
 }
-3. Provide a structured rubric with clear weights.
-4. The response MUST be valid JSON.
+3. Produce exactly 3 or 4 distinct criteria that tie directly to the question and model answer (e.g., conceptual accuracy, analytical depth, practical application, communication quality).
+4. Write rich, specific descriptions for each criterion that reference key elements from the model answer; avoid generic boilerplate.
+5. Assign criterion weights as percentages that sum to 100.
+6. In the markAllocation section, use component names that MATCH the criterion names and set marks equal to the corresponding percentage weight.
+7. Include a totalMarks field indicating the maximum score (typically 100).
+8. The response MUST be valid JSON with no extra commentary.
 
 QUESTION: ${question}
 
@@ -279,11 +306,12 @@ FORMAT:
   ],
   "markAllocation": [
     {
-      "component": "Component 1",
-      "marks": 5,
-      "description": "Description of component 1"
+      "component": "Criterion 1",
+      "marks": 40,
+      "description": "Description of how marks are awarded for criterion 1"
     }
-  ]
+  ],
+  "totalMarks": 100
 }
 
 DO NOT include any text outside the JSON object.`
@@ -299,11 +327,19 @@ export function buildExamMarkingCriteriaUserPrompt(
       ? `Buat kriteria penilaian (rubrik) untuk pertanyaan ini berdasarkan jawaban model.`
       : `Buat kriteria penilaian (rubrik) untuk pertanyaan ini berdasarkan jawaban model pada ${
           courseInfo?.courseCode || ''
-        } ${courseInfo?.courseName || 'mata kuliah ini'}.`
+        } ${courseInfo?.courseName || 'mata kuliah ini'}. ${
+          courseInfo?.courseDescription
+            ? `Gunakan deskripsi mata kuliah berikut sebagai konteks: "${courseInfo.courseDescription.trim()}".`
+            : ''
+        }`
   }
   return hasSourceMaterials
     ? `Create marking criteria (rubric) for this question based on the model answer.`
     : `Create marking criteria (rubric) for this question based on the model answer in ${
         courseInfo?.courseCode || ''
-      } ${courseInfo?.courseName || 'this course'}.`
+      } ${courseInfo?.courseName || 'this course'}. ${
+        courseInfo?.courseDescription
+          ? `Use this course description as context: "${courseInfo.courseDescription.trim()}".`
+          : ''
+      }`
 }

@@ -40,7 +40,7 @@ export function renderAssessmentCriteria(
   pdf.roundedRect(ctx.margin, ctx.y, ctx.contentWidth, 10, 2, 2, 'F')
   pdf.setFontSize(FONT_SIZES.subtitle)
   pdf.setTextColor(headingColor[0], headingColor[1], headingColor[2])
-  pdf.setFont('helvetica', 'bold')
+  pdf.setFont('DejaVuSans', 'bold')
   pdf.text(LABELS[lang].assessmentCriteria, ctx.margin + ctx.contentWidth / 2, ctx.y + 7, {
     align: 'center',
   })
@@ -52,12 +52,12 @@ export function renderAssessmentCriteria(
     const titleLines = wrapText(ctx, title, ctx.contentWidth - 50)
     pdf.setTextColor(0, 0, 0)
     pdf.setFontSize(FONT_SIZES.standard)
-    pdf.setFont('helvetica', 'bold')
+    pdf.setFont('DejaVuSans', 'bold')
     pdf.text(titleLines, ctx.margin + 10, ctx.y)
     ctx.y += Math.max(titleLines.length * 6, 10) + 2
 
     if (c.description) {
-      pdf.setFont('helvetica', 'normal')
+      pdf.setFont('DejaVuSans', 'normal')
       const descLines = wrapText(ctx, c.description, ctx.contentWidth - 60)
       pdf.text(descLines, ctx.margin + 20, ctx.y)
       ctx.y += descLines.length * 6 + 2

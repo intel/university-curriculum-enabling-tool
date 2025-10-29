@@ -58,11 +58,11 @@ function addProjectInfo(
   if (!hasAnyMeta) return y
 
   ctx.pdf.setFontSize(FONT_SIZES.subtitle)
-  ctx.pdf.setFont('helvetica', 'bold')
+  ctx.pdf.setFont('DejaVuSans', 'bold')
   ctx.pdf.text(labels.projectInformation, ctx.margin, y)
   y += 8
   ctx.pdf.setFontSize(FONT_SIZES.standard)
-  ctx.pdf.setFont('helvetica', 'normal')
+  ctx.pdf.setFont('DejaVuSans', 'normal')
 
   if (metadata?.semester) y = writeMetaLine(ctx, `${labels.semester}: `, metadata.semester, y)
   if (metadata?.academicYear)
@@ -93,10 +93,10 @@ function writeMetaLine(
   y: number,
   lineHeight = 6,
 ): number {
-  ctx.pdf.setFont('helvetica', 'bold')
+  ctx.pdf.setFont('DejaVuSans', 'bold')
   ctx.pdf.text(prefix, ctx.margin, y)
   const prefixWidth = ctx.pdf.getTextWidth(prefix)
-  ctx.pdf.setFont('helvetica', 'normal')
+  ctx.pdf.setFont('DejaVuSans', 'normal')
   const wrapped = ctx.pdf.splitTextToSize(value, ctx.contentWidth - prefixWidth - 2)
   wrapped.forEach((ln: string, idx: number) => {
     ctx.pdf.text(ln, ctx.margin + (idx === 0 ? prefixWidth + 2 : 0), y + idx * lineHeight)
@@ -109,11 +109,11 @@ function addProjectDescription(ctx: PdfContext, assessment: AssessmentIdea, y: n
   const description = assessment.exampleQuestions?.[0]?.question || ''
   if (!description.trim()) return y
   ctx.pdf.setFontSize(FONT_SIZES.subtitle)
-  ctx.pdf.setFont('helvetica', 'bold')
+  ctx.pdf.setFont('DejaVuSans', 'bold')
   ctx.pdf.text(labels.projectDescription, ctx.margin, y)
   y += 8
   ctx.pdf.setFontSize(FONT_SIZES.standard)
-  ctx.pdf.setFont('helvetica', 'normal')
+  ctx.pdf.setFont('DejaVuSans', 'normal')
 
   const lines = description.split(/\n/)
   const lineHeight = 6
@@ -139,53 +139,64 @@ function addProjectDescription(ctx: PdfContext, assessment: AssessmentIdea, y: n
 
     // Inline header **Header:** value
     if (typeof content !== 'string') content = ''
-    const inlineHeader = content.match(/^\*\*(.+?):\*\*\s*(.+)$/)
-    if (inlineHeader) {
-      const label = inlineHeader[1].trim() + ': '
-      const value = inlineHeader[2].trim()
-      y = renderLineWithBold(ctx, label + value, y, {
-        boldRanges: [[0, label.length - 1]],
-        indentLevel,
-        bulletSymbol,
-      })
-      continue
+    if (content && !content.includes('**')) {
+      const colonMatch = content.match(/^([^:]+):\s*(.*)$/)
+      if (colonMatch) {
+        const prefix = colonMatch[1].trim()
+        const rest = colonMatch[2]
+        content = `**${prefix}**${rest ? `: ${rest}` : ':'}`
+      } else {
+        const parenMatch = content.match(/^([^()]+)\s*\(([^)]+)\)\s*$/)
+        if (parenMatch) {
+          content = `**${parenMatch[1].trim()}** (${parenMatch[2].trim()})`
+        }
+      }
     }
-
     // Section header **Header** (alone)
     const headerAlone = content.match(/^\*\*(.+)\*\*:?$/)
     if (headerAlone) {
       y = ensurePageSpace(ctx, y, lineHeight)
-      ctx.pdf.setFont('helvetica', 'bold')
+      ctx.pdf.setFont('DejaVuSans', 'bold')
       ctx.pdf.setFontSize(FONT_SIZES.subtitle)
-      ctx.pdf.text(headerAlone[1].trim(), ctx.margin + indentLevel * 8, y)
-      ctx.pdf.setFont('helvetica', 'normal')
+      const headerText = headerAlone[1].trim()
+      ctx.pdf.text(headerText, ctx.margin + indentLevel * 8, y)
+      ctx.pdf.setFont('DejaVuSans', 'normal')
       ctx.pdf.setFontSize(FONT_SIZES.standard)
       y += lineHeight + 2
       continue
     }
 
     // Bullet / numbered line normal content (render with bold segments)
-    y = renderLineWithBold(ctx, content, y, { indentLevel, bulletSymbol })
+    y = renderLineWithBold(ctx, content, y, {
+      indentLevel,
+      bulletSymbol,
+    })
   }
   return y + 4
-}
-
-interface RenderOptions {
-  indentLevel?: number
-  bulletSymbol?: string
-  boldRanges?: Array<[number, number]>
 }
 
 function renderLineWithBold(
   ctx: PdfContext,
   text: string,
   y: number,
-  opts: RenderOptions = {},
+  opts: { indentLevel?: number; bulletSymbol?: string } = {},
 ): number {
   const { indentLevel = 0, bulletSymbol = '' } = opts
   const lineHeight = 6
   const maxWidth = ctx.contentWidth
   const baseX = ctx.margin + indentLevel * 8
+  const bulletOffset = bulletSymbol ? 6 : 0
+  const maxLineWidth = Math.max(1, maxWidth - indentLevel * 8 - bulletOffset)
+
+  const separatorCandidate = text.replace(/\s+/g, '')
+  if (
+    !bulletSymbol &&
+    separatorCandidate.length > 0 &&
+    (/^=+$/.test(separatorCandidate) || /^-+$/.test(separatorCandidate))
+  ) {
+    return y
+  }
+
   // Parse **bold** segments
   const segments: Array<{ text: string; bold: boolean }> = []
   const regex = /\*\*(.+?)\*\*/g
@@ -209,18 +220,66 @@ function renderLineWithBold(
 
   let currentLine: Array<{ w: string; bold: boolean }> = []
   let currentWidth = 0
-  const bulletOffset = bulletSymbol ? 6 : 0
   const renderedLines: Array<Array<{ w: string; bold: boolean }>> = []
-  // spaceWidth / lineWidth removed (unused)
 
-  words.forEach((wordObj) => {
-    const wWidth = ctx.pdf.getTextWidth(wordObj.w)
+  const getFontState = () => {
+    const fontInfo = ctx.pdf.getFont()
+    return {
+      name: (fontInfo as unknown as { fontName?: string }).fontName || 'DejaVuSans',
+      style: fontInfo.fontStyle || 'normal',
+    }
+  }
+
+  const measure = (token: string, bold: boolean) => {
+    if (!token) return 0
+    const prev = getFontState()
+    ctx.pdf.setFont('DejaVuSans', bold ? 'bold' : 'normal')
+    const width = ctx.pdf.getTextWidth(token)
+    ctx.pdf.setFont(prev.name, prev.style)
+    return width
+  }
+
+  const splitTokenToFit = (token: string, bold: boolean) => {
+    // Keep whitespace tokens untouched to preserve spacing
+    if (!token.trim()) return [token]
+    const pieces: string[] = []
+    let buffer = ''
+    for (const ch of token) {
+      const candidate = buffer + ch
+      if (measure(candidate, bold) > maxLineWidth) {
+        if (buffer) {
+          pieces.push(buffer)
+          buffer = ch
+        } else {
+          // Single character exceeds width (very rare); push as-is to avoid infinite loop
+          pieces.push(ch)
+          buffer = ''
+        }
+      } else {
+        buffer = candidate
+      }
+    }
+    if (buffer) pieces.push(buffer)
+    return pieces.length > 0 ? pieces : [token]
+  }
+
+  const normalizedWords = words.flatMap((wordObj) => {
+    const tokenWidth = measure(wordObj.w, wordObj.bold)
+    if (tokenWidth <= maxLineWidth || !wordObj.w.trim()) return [wordObj]
+    return splitTokenToFit(wordObj.w, wordObj.bold).map((part) => ({
+      w: part,
+      bold: wordObj.bold,
+    }))
+  })
+
+  normalizedWords.forEach((wordObj) => {
+    const wWidth = measure(wordObj.w, wordObj.bold)
     if (currentLine.length === 0) {
       currentLine.push(wordObj)
       currentWidth = wWidth
       return
     }
-    if (currentWidth + wWidth > maxWidth - indentLevel * 8 - bulletOffset) {
+    if (currentWidth + wWidth > maxLineWidth) {
       renderedLines.push(currentLine)
       currentLine = [wordObj]
       currentWidth = wWidth
@@ -234,13 +293,14 @@ function renderLineWithBold(
   renderedLines.forEach((line, idx) => {
     y = ensurePageSpace(ctx, y, lineHeight)
     let x = baseX
+
     if (idx === 0 && bulletSymbol) {
-      ctx.pdf.setFont('helvetica', 'bold')
+      ctx.pdf.setFont('DejaVuSans', 'bold')
       ctx.pdf.text(bulletSymbol, x, y)
       x += bulletOffset
     }
     line.forEach((part) => {
-      ctx.pdf.setFont('helvetica', part.bold ? 'bold' : 'normal')
+      ctx.pdf.setFont('DejaVuSans', part.bold ? 'bold' : 'normal')
       ctx.pdf.text(part.w, x, y)
       x += ctx.pdf.getTextWidth(part.w)
     })
@@ -272,10 +332,10 @@ function addGuidelinesSection(ctx: PdfContext, assessment: AssessmentIdea, y: nu
   addHeader(ctx)
   y = ctx.margin
   ctx.pdf.setFontSize(FONT_SIZES.subtitle)
-  ctx.pdf.setFont('helvetica', 'bold')
+  ctx.pdf.setFont('DejaVuSans', 'bold')
   ctx.pdf.text(labels.modelAnswerGuidelines, ctx.margin, y)
   y += 8
-  ctx.pdf.setFont('helvetica', 'normal')
+  ctx.pdf.setFont('DejaVuSans', 'normal')
   ctx.pdf.setFontSize(FONT_SIZES.standard)
   const lines = text.split(/\n/)
   for (const line of lines) {
@@ -305,11 +365,11 @@ function addRubrics(ctx: PdfContext, explanation: unknown, y: number): number {
   addHeader(ctx)
   y = ctx.margin
   ctx.pdf.setFontSize(FONT_SIZES.rubricTitle)
-  ctx.pdf.setFont('helvetica', 'bold')
+  ctx.pdf.setFont('DejaVuSans', 'bold')
   ctx.pdf.text(labels.rubricTitle, ctx.pageWidth / 2, y, { align: 'center' })
   y += 10
   ctx.pdf.setFontSize(FONT_SIZES.standard)
-  ctx.pdf.setFont('helvetica', 'normal')
+  ctx.pdf.setFont('DejaVuSans', 'normal')
   ctx.pdf.text(labels.gradingScale, ctx.margin, y)
   y += 10
 
@@ -352,11 +412,11 @@ function addRubrics(ctx: PdfContext, explanation: unknown, y: number): number {
 
   function renderCategory(label: string, cat: RubricCriterion[]) {
     if (!cat.length) return
-    ctx.pdf.setFont('helvetica', 'bold')
+    ctx.pdf.setFont('DejaVuSans', 'bold')
     ctx.pdf.setFontSize(FONT_SIZES.subtitle)
     ctx.pdf.text(label, ctx.margin, y)
     y += 8
-    ctx.pdf.setFont('helvetica', 'normal')
+    ctx.pdf.setFont('DejaVuSans', 'normal')
     ctx.pdf.setFontSize(FONT_SIZES.standard)
     autoTable(ctx.pdf, {
       head: [
@@ -377,7 +437,7 @@ function addRubrics(ctx: PdfContext, explanation: unknown, y: number): number {
         overflow: 'linebreak',
         cellPadding: 2,
         fontSize: FONT_SIZES.rubricContent,
-        font: 'helvetica',
+        font: 'DejaVuSans',
         halign: 'left',
         valign: 'top',
       },
@@ -451,7 +511,7 @@ function addRubrics(ctx: PdfContext, explanation: unknown, y: number): number {
         overflow: 'linebreak',
         cellPadding: 2,
         fontSize: FONT_SIZES.rubricContent,
-        font: 'helvetica',
+        font: 'DejaVuSans',
         halign: 'left',
         valign: 'top',
       },

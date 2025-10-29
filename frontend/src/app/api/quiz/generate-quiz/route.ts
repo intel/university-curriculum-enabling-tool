@@ -7,6 +7,8 @@ import { NextResponse } from 'next/server'
 import { getStoredChunks } from '@/lib/chunk/get-stored-chunks'
 import { effectiveTokenCountForText } from '@/lib/utils'
 import { errorResponse } from '@/lib/api-response'
+import type { ClientSource } from '@/lib/types/client-source'
+import type { ContextChunk } from '@/lib/types/context-chunk'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,8 +20,16 @@ const TOKEN_CONTEXT_BUDGET = 1024
 
 export async function POST(req: Request) {
   try {
-    const { selectedModel, selectedSources, difficulty, numQuestions, questionType, language } =
-      await req.json()
+    const {
+      selectedModel,
+      selectedSources,
+      difficulty,
+      numQuestions,
+      questionType,
+      language,
+      courseInfo,
+      searchKeywords,
+    } = await req.json()
 
     console.log('Data from request:', {
       selectedModel,
@@ -27,6 +37,8 @@ export async function POST(req: Request) {
       difficulty,
       numQuestions,
       questionType,
+      courseInfo,
+      searchKeywords,
     })
 
     const ollamaUrl = process.env.OLLAMA_URL
@@ -321,9 +333,49 @@ IMPORTANT:
     let chunksAdded = 0
     let assistantContent = ''
 
+    const keywordQuery =
+      searchKeywords && typeof searchKeywords === 'string' ? searchKeywords.trim() : ''
+
+    let effectiveSources: ClientSource[] = []
+    if (Array.isArray(selectedSources)) {
+      const sources = selectedSources as ClientSource[]
+      const anyHasSelectedFlag = sources.some((source) => typeof source?.selected === 'boolean')
+      effectiveSources = anyHasSelectedFlag ? sources.filter((source) => source?.selected) : sources
+    }
+    const hasSelectedSources = effectiveSources.length > 0
+
+    const courseName =
+      typeof courseInfo?.courseName === 'string' ? courseInfo.courseName.trim() : ''
+    const courseCode =
+      typeof courseInfo?.courseCode === 'string' ? courseInfo.courseCode.trim() : ''
+    const courseDescription =
+      typeof courseInfo?.courseDescription === 'string' ? courseInfo.courseDescription.trim() : ''
+
+    const courseContextSegments: string[] = []
+    const primaryCourseLabel = [courseCode, courseName].filter(Boolean).join(' ').trim()
+    if (primaryCourseLabel) {
+      courseContextSegments.push(
+        `${language === 'id' ? 'Mata kuliah' : 'Course'}: ${primaryCourseLabel}`,
+      )
+    }
+    if (courseDescription) {
+      courseContextSegments.push(
+        language === 'id'
+          ? `Deskripsi mata kuliah:\n${courseDescription}`
+          : `Course description:\n${courseDescription}`,
+      )
+    }
+    const courseContext = courseContextSegments.join('\n\n')
+
     try {
-      const retrievedChunks = await getStoredChunks(selectedSources)
-      console.log('Retrieved chunks:', retrievedChunks.length)
+      let retrievedChunks: ContextChunk[] = []
+
+      if (hasSelectedSources) {
+        retrievedChunks = await getStoredChunks(effectiveSources)
+        console.log('Retrieved chunks:', retrievedChunks.length)
+      } else {
+        console.log('No sources selected; using course description context.')
+      }
 
       for (const chunk of retrievedChunks) {
         const chunkTokens = effectiveTokenCountForText(chunk.chunk)
@@ -336,7 +388,22 @@ IMPORTANT:
         }
       }
 
-      assistantContent = chunkContent || 'No relevant knowledge found.'
+      if (chunkContent) {
+        assistantContent = keywordQuery
+          ? `${chunkContent}\n\nFocus on these user-provided topics and keywords:\n${keywordQuery}`
+          : chunkContent
+      } else if (courseContext) {
+        assistantContent = keywordQuery
+          ? `${courseContext}\n\nAdditional user-provided topics and keywords:\n${keywordQuery}`
+          : courseContext
+      } else if (keywordQuery) {
+        assistantContent = `Focus the quiz on the following topics and keywords:\n${keywordQuery}`
+      } else {
+        assistantContent =
+          language === 'id'
+            ? 'Tidak ada konteks khusus yang ditemukan. Gunakan pengetahuan umum akademik untuk menyusun kuis.'
+            : 'No specific context provided. Use general academic knowledge to craft the quiz.'
+      }
       console.log(
         `Total Chunks: ${chunksAdded}/${retrievedChunks.length} | ` +
           `Prompt tokens: ` +
@@ -350,7 +417,11 @@ IMPORTANT:
       )
     } catch (error) {
       console.error('Error retrieving knowledge:', error)
-      assistantContent = 'An error occurred while retrieving knowledge.'
+      assistantContent =
+        courseContext ||
+        (language === 'id'
+          ? 'Terjadi kesalahan saat mengambil konteks. Gunakan pengetahuan umum akademik untuk menyusun kuis.'
+          : 'An error occurred while retrieving context. Use general academic knowledge to craft the quiz.')
     }
 
     const assistantMessage: ModelMessage = {

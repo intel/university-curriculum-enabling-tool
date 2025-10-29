@@ -34,6 +34,7 @@ import { useSourcesStore } from '@/lib/store/sources-store'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { useContextAvailability } from '@/lib/hooks/use-context-availability'
+import { useCourses } from '@/lib/hooks/use-courses'
 import { getSelectContextDescription } from '@/lib/utils/context-messages'
 import { ContextRequirementMessage } from '@/components/context-requirement-message'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -92,9 +93,21 @@ export default function QuizGeneratorLecturer() {
   const [searchKeywords, setSearchKeywords] = useState('')
 
   const selectedSources = useSourcesStore((state) => state.selectedSources)
-  const { getActiveContextModelName, getContextTypeLabel } = useContextAvailability()
+  const { getActiveContextModelName, getContextTypeLabel, selectedCourseId } =
+    useContextAvailability()
   const modelName = getActiveContextModelName()
   const { activePersona, getPersonaLanguage } = usePersonaStore()
+  const { data: coursesData } = useCourses()
+  const selectedCourse = coursesData?.docs?.find((course) => course.id === selectedCourseId)
+  const courseDescription =
+    typeof selectedCourse?.description === 'string' ? selectedCourse.description : undefined
+  const courseInfoPayload = selectedCourse
+    ? {
+        courseCode: selectedCourse.code ?? '',
+        courseName: selectedCourse.name ?? '',
+        ...(courseDescription ? { courseDescription } : {}),
+      }
+    : undefined
 
   const generateQuiz = async () => {
     if (!getActiveContextModelName()) {
@@ -104,8 +117,10 @@ export default function QuizGeneratorLecturer() {
       return
     }
     const selectedSourcesCount = selectedSources.filter((source) => source.selected).length
-    if (selectedSourcesCount === 0) {
-      toast.error('Please select at least one source.')
+    if (selectedSourcesCount > 1) {
+      toast.error(
+        'Multiple sources selected. Please select only one source or none to use course context.',
+      )
       return
     }
     if (quizTitle.trim() === '') {
@@ -114,20 +129,23 @@ export default function QuizGeneratorLecturer() {
     }
     setIsLoading(true)
     try {
+      const payload = {
+        selectedModel: modelName,
+        selectedSources,
+        numQuestions,
+        difficulty,
+        questionType,
+        searchKeywords,
+        language: getPersonaLanguage(activePersona),
+        ...(courseInfoPayload ? { courseInfo: courseInfoPayload } : {}),
+      }
+
       const response = await fetch('/api/quiz/generate-quiz', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          selectedModel: modelName,
-          selectedSources,
-          numQuestions,
-          difficulty,
-          questionType,
-          searchKeywords, // Add searchKeywords to the request body
-          language: getPersonaLanguage(activePersona),
-        }),
+        body: JSON.stringify(payload),
       })
       const data = await response.json()
 

@@ -184,6 +184,7 @@ export default function AssessmentPage() {
   const [metadata, setMetadata] = useState<{
     courseCode: string
     courseName: string
+    courseDescription: string
     examTitle: string
     semester?: string
     academicYear?: string
@@ -194,7 +195,13 @@ export default function AssessmentPage() {
   }>({
     courseCode: '',
     courseName: '',
+    courseDescription: '',
     examTitle: '',
+    semester: '',
+    academicYear: '',
+    deadline: '',
+    groupSize: undefined,
+    projectDuration: '',
     difficultyLevel: '',
   })
 
@@ -221,29 +228,40 @@ export default function AssessmentPage() {
     if (selectedCourse) {
       const code = selectedCourse.code || ''
       const name = selectedCourse.name || ''
+      const description = selectedCourse.description || ''
       const title = `${code} ${name} Assessment`
 
       // Completely replace metadata with fresh values
       setMetadata({
         courseCode: code,
         courseName: name,
+        courseDescription: description,
         examTitle: title,
+        semester: '',
         academicYear: currentAcademicYear,
-        difficultyLevel: difficultyLevel,
+        deadline: '',
+        groupSize: undefined,
+        projectDuration: '',
+        difficultyLevel: '',
       })
     } else {
       // If no course is selected, use empty values
       setMetadata({
         courseCode: '',
         courseName: '',
+        courseDescription: '',
         examTitle: '',
         difficultyLevel: '',
         academicYear: currentAcademicYear,
+        semester: '',
+        deadline: '',
+        groupSize: undefined,
+        projectDuration: '',
       })
     }
 
     console.log('Form fields have been reset')
-  }, [coursesData?.docs, selectedCourseId, difficultyLevel])
+  }, [coursesData?.docs, selectedCourseId])
 
   const handleCancelEdit = () => {
     setIsDialogOpen(true) // Open the confirmation dialog
@@ -274,18 +292,22 @@ export default function AssessmentPage() {
       if (selectedCourse) {
         const code = selectedCourse.code || ''
         const name = selectedCourse.name || ''
+        const description = selectedCourse.description || ''
         const title = `${code} ${name} Assessment`
 
-        setDifficultyLevel(difficultyLevel)
-
         // Completely replace metadata instead of updating it
-        setMetadata({
+        setMetadata((prev) => ({
           courseCode: code,
           courseName: name,
+          courseDescription: description,
           examTitle: title,
-          difficultyLevel: difficultyLevel,
+          difficultyLevel: prev.difficultyLevel,
+          semester: '',
+          deadline: '',
+          groupSize: undefined,
+          projectDuration: '',
           academicYear: getCurrentAcademicYear(),
-        })
+        }))
       }
 
       toast.info('Course changed. Assessment configuration has been reset.')
@@ -293,7 +315,7 @@ export default function AssessmentPage() {
 
     // Update previous course ID
     setPreviousCourseId(selectedCourseId)
-  }, [selectedCourseId, coursesData?.docs, previousCourseId, difficultyLevel, resetFormFields])
+  }, [selectedCourseId, coursesData?.docs, previousCourseId, resetFormFields])
 
   // Extract course information from context
   useEffect(() => {
@@ -304,21 +326,25 @@ export default function AssessmentPage() {
       if (selectedCourse) {
         const code = selectedCourse.code || ''
         const name = selectedCourse.name || ''
+        const description = selectedCourse.description || ''
         const title = `${code} ${name} Assessment`
-
-        setDifficultyLevel(difficultyLevel)
 
         // Update metadata state
         setMetadata({
           courseCode: code,
           courseName: name,
+          courseDescription: description,
           examTitle: title,
           academicYear: getCurrentAcademicYear(),
-          difficultyLevel: difficultyLevel,
+          semester: '',
+          deadline: '',
+          groupSize: undefined,
+          projectDuration: '',
+          difficultyLevel: '',
         })
       }
     }
-  }, [selectedCourseId, coursesData?.docs, difficultyLevel])
+  }, [selectedCourseId, coursesData?.docs])
 
   // Add a validation function after the handleSemesterChange function
   const validateForm = () => {
@@ -418,8 +444,12 @@ export default function AssessmentPage() {
   }
 
   // For groupSize
-  const handleGroupSizeChange = (value: number) => {
-    setMetadata((prev) => ({ ...prev, groupSize: value }))
+  const handleGroupSizeChange = (value: string) => {
+    const parsed = Number.parseInt(value, 10)
+    setMetadata((prev) => ({
+      ...prev,
+      groupSize: Number.isNaN(parsed) ? undefined : parsed,
+    }))
     setTimeout(() => validateForm(), 0)
   }
 
@@ -427,6 +457,10 @@ export default function AssessmentPage() {
   const handleDifficultyLevelChange = (level: string) => {
     const newLevel = difficultyLevel === level ? '' : level
     setDifficultyLevel(newLevel)
+    setMetadata((prev) => ({
+      ...prev,
+      difficultyLevel: newLevel,
+    }))
     // Validate using the new value
     setTimeout(() => {
       validateFormWithLevel(newLevel)
@@ -465,6 +499,7 @@ export default function AssessmentPage() {
           ? {
               courseCode: metadata.courseCode,
               courseName: metadata.courseName,
+              courseDescription: metadata.courseDescription,
               semester: metadata.semester,
               academicYear: metadata.academicYear,
               deadline: metadata.deadline,
@@ -478,6 +513,7 @@ export default function AssessmentPage() {
           : {
               courseCode: metadata.courseCode,
               courseName: metadata.courseName,
+              courseDescription: metadata.courseDescription,
               // Use a clean title without duplication
               examTitle: `${metadata.courseCode} ${metadata.courseName} ${assessmentType.charAt(0).toUpperCase() + assessmentType.slice(1)} Assessment`,
               duration: getDefaultDuration(assessmentType),
@@ -995,7 +1031,7 @@ export default function AssessmentPage() {
                   <Label htmlFor="projectDuration">Project Duration *</Label>
                   <Input
                     id="projectDuration"
-                    value={metadata.projectDuration}
+                    value={metadata.projectDuration ?? ''}
                     onChange={(e) => handleProjectDurationChange(e.target.value)}
                     placeholder="e.g., 2 weeks"
                     className="mt-1"
@@ -1009,7 +1045,7 @@ export default function AssessmentPage() {
                   <Label htmlFor="semester">Semester *</Label>
                   <Input
                     id="semester"
-                    value={metadata.semester}
+                    value={metadata.semester ?? ''}
                     onChange={(e) => handleSemesterChange(e.target.value)}
                     placeholder="e.g., 1 (for Semester 1)"
                     className="mt-1"
@@ -1023,7 +1059,7 @@ export default function AssessmentPage() {
                   <Label htmlFor="deadline">Submission Deadline *</Label>
                   <Input
                     id="deadline"
-                    value={metadata.deadline}
+                    value={metadata.deadline ?? ''}
                     onChange={(e) => handleDeadlineChange(e.target.value)}
                     placeholder="Auto-calculated from duration"
                     className="mt-1"
@@ -1052,8 +1088,8 @@ export default function AssessmentPage() {
                     type="number"
                     min="1"
                     max="10"
-                    value={metadata.groupSize}
-                    onChange={(e) => handleGroupSizeChange(Number.parseInt(e.target.value))}
+                    value={metadata.groupSize ?? ''}
+                    onChange={(e) => handleGroupSizeChange(e.target.value)}
                     placeholder="e.g., 4"
                     className="mt-1"
                     required
