@@ -121,6 +121,8 @@
   },
   "overrides": {
     "esbuild": "^0.25.10",
+    "glob": "^11.1.0",
+    "js-yaml": "^4.1.1",
     "pino": "^9.13.0",
     "prismjs": "^1.30.0",
     "@esbuild-kit/core-utils": {
