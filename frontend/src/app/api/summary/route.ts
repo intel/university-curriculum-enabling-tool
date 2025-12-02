@@ -1,7 +1,7 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { createOllama } from 'ollama-ai-provider-v2'
+import { getProvider } from '@/lib/providers'
 import { generateObject, ModelMessage } from 'ai'
 import { errorResponse } from '@/lib/api-response'
 import { hybridSearch } from '@/lib/chunk/hybrid-search'
@@ -9,6 +9,38 @@ import { generateEmbeddings } from '@/lib/embedding/generate-embedding'
 import { cosineSimilarity } from 'ai'
 import { ClientSource } from '@/lib/types/client-source'
 import { ContextChunk } from '@/lib/types/context-chunk'
+import { z } from 'zod'
+
+// Zod schemas for summary generation using discriminated union for proper validation
+const headingBlockSchema = z.object({
+  type: z.literal('heading'),
+  level: z.number().min(1).max(3),
+  text: z.string().min(1),
+})
+
+const paragraphBlockSchema = z.object({
+  type: z.literal('paragraph'),
+  text: z.string().min(1),
+})
+
+const listBlockSchema = z.object({
+  type: z.literal('list'),
+  ordered: z.boolean(),
+  items: z.array(z.string()).min(1), // items is REQUIRED and must have at least 1 item
+})
+
+// Discriminated union of all block types
+const contentBlockSchema = z.discriminatedUnion('type', [
+  headingBlockSchema,
+  paragraphBlockSchema,
+  listBlockSchema,
+])
+
+const summaryResponseSchema = z.object({
+  title: z.string().min(1),
+  content: z.array(contentBlockSchema).min(1),
+  conclusion: z.string().optional(),
+})
 
 // Type definitions for summary content
 interface ContentBlock {
@@ -57,13 +89,14 @@ interface ContextChunkWithEmbedding extends ContextChunk {
 const TEMPERATURE = parseFloat(process.env.RAG_TEMPERATURE || '0.1')
 const chunkSizeToken = Number(process.env.RAG_EMBEDDING_CHUNK_SIZE_TOKEN) || 200
 const chunkOverlapToken = Number(process.env.RAG_EMBEDDING_CHUNK_OVERLAP_TOKEN) || 50
-const TOKEN_RESPONSE_BUDGET = 2048
+const TOKEN_RESPONSE_BUDGET = 4096 // Increased from 2048 to handle larger summaries
 const semanticWeight = 0.5
 const keywordWeight = 0.5
 const topK = 5
 const topN = 3
 const useReranker = false
 const similarityThreshold = 0.8
+const provider = getProvider()
 
 export async function POST(req: Request) {
   const { selectedModel, selectedSources, courseInfo, language } = await req.json()
@@ -81,13 +114,6 @@ export async function POST(req: Request) {
     console.warn('DEBUG: No sources or course information provided in POST /api/summary')
     return errorResponse('Either sources or course information must be provided.', null, 400)
   }
-
-  const ollamaUrl = process.env.OLLAMA_URL
-  if (!ollamaUrl) {
-    console.error('DEBUG: OLLAMA_URL is not defined in environment variables.')
-    throw new Error('OLLAMA_URL is not defined in environment variables.')
-  }
-  const ollama = createOllama({ baseURL: ollamaUrl + '/api' })
 
   try {
     // Use hybrid search to get top chunks for summary generation (only if source is selected)
@@ -172,32 +198,41 @@ Return your response as a JSON object with this structure:
     // Array of content blocks, each block is one of:
     { "type": "heading", "level": 1|2|3, "text": string },
     { "type": "paragraph", "text": string },
-    { "type": "list", "ordered": true|false, "items": [string, ...] }
+    { "type": "list", "ordered": true|false, "items": [string, string, ...] } // items array is REQUIRED for lists
   ],
-  "conclusion": string // Short conclusion
+  "conclusion": string // Short conclusion (optional)
 }
+
+IMPORTANT SCHEMA RULES:
+- For "list" type blocks, the "items" field is REQUIRED and must contain at least one string item
+- Do NOT create list blocks without items
+- Keep the summary focused and concise to ensure it fits within token limits
+- Aim for 5-10 key sections maximum
+
 CRITICAL: Your response MUST be valid JSON only. Do not include any text, markdown, explanations, or other content outside the JSON object. Do not include backticks or code block markers.`
 
     const UserPrompt = hasValidSources
-      ? `Generate a highly detailed, structured, and interesting summary of the provided academic content. Use the format and instructions above. The summary should:
+      ? `Generate a focused, structured summary of the provided academic content. Use the format and instructions above. The summary should:
 - Start with a clear, descriptive title (no markdown)
 - Use multiple heading levels (1, 2, 3) for sections and subsections
 - Include both paragraphs and lists (ordered and unordered)
+- For EVERY list block, you MUST include the "items" array with actual list items - do not create empty lists
 - Do NOT use any markdown or bold/italic formatting (such as **, __, *, _ or similar) in any field.
-- Be comprehensive, but concise and easy to scan
-- Include as much technical detail, facts, and examples as possible from the context. Do not omit any important information.
+- Be comprehensive but focused - aim for 5-10 main sections
+- Include technical detail, facts, and examples from the context
 - End with a short, insightful conclusion
 STRICTNESS: Only use the provided context. Do not invent facts or add content from outside the provided context.
-If you do not use at least two heading levels and at least one list, your answer will be considered incomplete.`
-      : `Generate a highly detailed, structured, and interesting summary${courseInfo?.courseName ? ` for students in ${courseInfo.courseName}` : ''}. ${courseInfo?.courseDescription ? `Use this course context to guide your summary: ${courseInfo.courseDescription}. ` : ''}The summary should:
+CRITICAL: Every list MUST have items. If you cannot provide items for a list, use a paragraph instead.`
+      : `Generate a focused, structured summary${courseInfo?.courseName ? ` for students in ${courseInfo.courseName}` : ''}. ${courseInfo?.courseDescription ? `Use this course context to guide your summary: ${courseInfo.courseDescription}. ` : ''}The summary should:
 - Start with a clear, descriptive title (no markdown)
 - Use multiple heading levels (1, 2, 3) for sections and subsections
 - Include both paragraphs and lists (ordered and unordered)
+- For EVERY list block, you MUST include the "items" array with actual list items - do not create empty lists
 - Do NOT use any markdown or bold/italic formatting (such as **, __, *, _ or similar) in any field.
-- Be comprehensive, but concise and easy to scan
-- Include as much technical detail, facts, and examples as possible from general academic knowledge. Do not omit any important information.
+- Be comprehensive but focused - aim for 5-10 main sections
+- Include technical detail, facts, and examples from general academic knowledge
 - End with a short, insightful conclusion
-If you do not use at least two heading levels and at least one list, your answer will be considered incomplete.`
+CRITICAL: Every list MUST have items. If you cannot provide items for a list, use a paragraph instead.`
 
     const systemMessage: ModelMessage = { role: 'system', content: SystemPrompt }
     const userMessage: ModelMessage = { role: 'user', content: UserPrompt }
@@ -212,21 +247,24 @@ If you do not use at least two heading levels and at least one list, your answer
       : [systemMessage, userMessage]
 
     const startFinalSummarizeTime = Date.now()
-    const { object: summaryObj, usage: finalUsage } = await generateObject({
-      model: ollama(selectedModel),
-      output: 'no-schema',
+
+    // Both OVMS and Ollama use the same approach with schema validation
+    // OVMS is OpenAI-compatible and supports structured outputs via json_schema
+    const result = await generateObject({
+      model: provider(selectedModel),
+      schema: summaryResponseSchema,
       messages: fullMessages,
       temperature: TEMPERATURE,
       maxOutputTokens: TOKEN_RESPONSE_BUDGET,
       providerOptions: {
-        ollama: {
-          mode: 'json',
-          options: {
-            numCtx: TOKEN_RESPONSE_BUDGET,
-          },
+        openaiCompatible: {
+          numCtx: TOKEN_RESPONSE_BUDGET,
         },
       },
     })
+
+    const summaryObj = result.object
+    const finalUsage = result.usage
     const endFinalSummarizeTime = Date.now()
     const finalTimeTakenMs = endFinalSummarizeTime - startFinalSummarizeTime
     const finalTimeTakenSeconds = finalTimeTakenMs / 1000

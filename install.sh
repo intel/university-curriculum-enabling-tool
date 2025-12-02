@@ -6,6 +6,46 @@
 # install.sh: Install application components
 # This script installs application dependencies and builds the application
 
+# Prompt user to choose between Ollama and OVMS installation, or use PROVIDER env var
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NODE_BIN="$SCRIPT_DIR/thirdparty/node/bin/node"
+
+# Prompt for PROVIDER if not set
+if [ -z "$PROVIDER" ]; then
+  echo "Which backend do you want to install?"
+  echo "  [1] Ollama (default)"
+  echo "  [2] OVMS"
+  if ! read -r -t 15 -p "Enter 1 for Ollama or 2 for OVMS (auto-selects Ollama after 15s): " SERVICE_CHOICE; then
+    echo -e "\nNo response after 15 seconds. Defaulting to Ollama."
+    SERVICE_CHOICE=""
+  fi
+  case "$SERVICE_CHOICE" in
+    2|ovms|OVMS)
+      PROVIDER=ovms
+      ;;
+    ""|1|ollama|OLLAMA)
+      PROVIDER=ollama
+      ;;
+    *)
+      echo "Invalid selection. Defaulting to Ollama."
+      PROVIDER=ollama
+      ;;
+  esac
+fi
+
+if [ -n "$PROVIDER" ]; then
+  if [ "$PROVIDER" = "ovms" ]; then
+    echo "PROVIDER=ovms detected. Installing OVMS..."
+    INSTALL_SERVICE=setup-ovms
+  elif [ "$PROVIDER" = "ollama" ]; then
+    echo "PROVIDER=ollama detected. Installing Ollama..."
+    INSTALL_SERVICE=setup-ollama
+  else
+    echo "Unknown PROVIDER value: $PROVIDER. Supported: ollama, ovms."
+    exit 1
+  fi
+fi
+
 echo "Installing application components..."
 
 # Default persona is faculty if not specified
@@ -91,19 +131,30 @@ fi
 mkdir -p scripts
 mkdir -p thirdparty/node
 mkdir -p thirdparty/ollama
+mkdir -p thirdparty/ovms
 mkdir -p thirdparty/jq
 mkdir -p thirdparty/pm2
 mkdir -p node_modules
 
-# Create root .env file from template if it doesn't exist
+
+# Create or update root .env file
 if [ ! -f "$SCRIPT_DIR/.env" ] && [ -f "$SCRIPT_DIR/.env.template" ]; then
   echo "Creating root .env file from template..."
   cp "$SCRIPT_DIR/.env.template" "$SCRIPT_DIR/.env"
   echo "Root .env file created successfully."
-elif [ ! -f "$SCRIPT_DIR/.env" ] && [ ! -f "$SCRIPT_DIR/.env.template" ]; then
-  echo "Warning: No .env.template found in root directory. Skipping .env creation."
+fi
+
+# Always update PROVIDER in .env to match current PROVIDER value
+if [ -f "$SCRIPT_DIR/.env" ]; then
+  if grep -q '^PROVIDER=' "$SCRIPT_DIR/.env"; then
+    sed -i "s/^PROVIDER=.*/PROVIDER=$PROVIDER                 # AI model server (ollama or ovms)/" "$SCRIPT_DIR/.env"
+    echo "Updated PROVIDER in .env to: $PROVIDER"
+  else
+    echo "PROVIDER=$PROVIDER                 # AI model server (ollama or ovms)" >> "$SCRIPT_DIR/.env"
+    echo "Appended PROVIDER to .env: $PROVIDER"
+  fi
 else
-  echo "Root .env file already exists."
+  echo "Warning: .env file not found, PROVIDER not set."
 fi
 
 # Check for local Node.js installation
@@ -259,6 +310,7 @@ export PATH=\"$NODE_DIR/bin:$JQ_DIR:$SCRIPT_DIR/node_modules/.bin:\$PATH\"
 export THIRDPARTY_DIR=\"$SCRIPT_DIR/thirdparty\"
 export IS_DIST_PACKAGE=false
 export DEV_MODE=true
+export PROVIDER=\"$PROVIDER\"
 " > "$SCRIPT_DIR/node_env.sh"
     chmod +x "$SCRIPT_DIR/node_env.sh"
     echo "node_env.sh created successfully at: $SCRIPT_DIR/node_env.sh"
@@ -270,20 +322,33 @@ export DEV_MODE=true
     cd "$SCRIPT_DIR" || exit 1
     "$NODE_BIN" scripts/utils.mjs setup-backend $FORCE_FLAG
     
-    # Setup Ollama - ensure we're in the root directory
+    # Setup Ollama or OVMS - ensure we're in the root directory
     cd "$SCRIPT_DIR" || exit 1
-    "$NODE_BIN" scripts/utils.mjs setup-ollama
+    "$NODE_BIN" scripts/utils.mjs "$INSTALL_SERVICE"
 
-    echo "Development environment installation completed."
-    echo ""
-    echo "To start development:"
-    echo "1. Start Ollama with required environment variables:"
-    echo "   cd thirdparty/ollama"
-    echo "   source ../../.env"
-    echo "   ./ollama serve"
-    echo "2. In one terminal - Start frontend: cd frontend && npm run dev"
-    echo "3. In another terminal - Start backend: cd backend && python main.py --debug"
-    exit 0
+    if [ "$INSTALL_SERVICE" = "setup-ollama" ]; then
+      echo "Development environment installation completed."
+      echo ""
+      echo "To start development:"
+      echo "1. Start Ollama with required environment variables:"
+      echo "   cd thirdparty/ollama"
+      echo "   source ../../.env"
+      echo "   ./ollama serve"
+      echo "2. In one terminal - Start frontend: cd frontend && npm run dev"
+      echo "3. In another terminal - Start backend: cd backend && python main.py --debug"
+      exit 0
+    else
+      echo "Development environment installation completed."
+      echo ""
+      echo "To start development with OVMS:"
+      echo "1. Start OVMS with required environment variables:"
+      echo "   cd backend/ovms_service"
+      echo "   source venv/bin/activate"
+      echo "   python ovms_start.py"
+      echo "2. In one terminal - Start frontend: cd frontend && npm run dev"
+      echo "3. In another terminal - Start backend: cd backend && python main.py --debug"
+      exit 0
+    fi
   fi
 
   # If we're running from the root repo, always build the application
@@ -333,6 +398,7 @@ export PATH=\"$DIST_PACKAGE/thirdparty/node/bin:$DIST_PACKAGE/thirdparty/jq:$DIS
 export THIRDPARTY_DIR=\"$DIST_PACKAGE/thirdparty\"
 export IS_DIST_PACKAGE=true
 export DEV_MODE=false
+export PROVIDER=\"$PROVIDER\"
 " > "$DIST_PACKAGE/node_env.sh"
     chmod +x "$DIST_PACKAGE/node_env.sh"
     echo "node_env.sh created successfully at: $DIST_PACKAGE/node_env.sh"
@@ -341,7 +407,7 @@ export DEV_MODE=false
     echo "To continue installation on this system, run the following commands:"
     echo "-----------------------------------------------------------------------"
     echo "cd \"$DIST_PACKAGE\""
-    echo "./install.sh"
+    echo "PROVIDER=$PROVIDER ./install.sh"
     echo ""
     echo ""
     echo "Or, if you want to install this distribution package on another system:"
@@ -373,9 +439,9 @@ export DEV_MODE=false
           echo "Setting up backend environment..."
           "$NODE_BIN" scripts/utils.mjs setup-backend $FORCE_FLAG
           
-          # Setup Ollama
-          echo "Setting up Ollama..."
-          "$NODE_BIN" scripts/utils.mjs setup-ollama
+          # Setup Ollama or OVMS
+          echo "Setting up $INSTALL_SERVICE..."
+          "$NODE_BIN" scripts/utils.mjs "$INSTALL_SERVICE"
         else
           echo "Skipping backend and Ollama setup in root repository (not in dev mode)."
         fi
@@ -414,9 +480,9 @@ else
   echo "Setting up backend environment..."
   "$NODE_BIN" scripts/utils.mjs setup-backend $FORCE_FLAG
   
-  # Setup Ollama
-  echo "Setting up Ollama..."
-  "$NODE_BIN" scripts/utils.mjs setup-ollama
+  # Setup Ollama or OVMS
+  echo "Setting up $INSTALL_SERVICE..."
+  "$NODE_BIN" scripts/utils.mjs "$INSTALL_SERVICE"
   
   # Add Node.js bin, jq, and PM2 to local path file for other scripts
   echo "Creating node_env.sh script for distribution package environment..."
@@ -425,6 +491,7 @@ export PATH=\"$NODE_DIR/bin:$JQ_DIR:$SCRIPT_DIR/node_modules/.bin:\$PATH\"
 export THIRDPARTY_DIR=\"$SCRIPT_DIR/thirdparty\"
 export IS_DIST_PACKAGE=true
 export DEV_MODE=false
+export PROVIDER=\"$PROVIDER\"
 " > "$SCRIPT_DIR/node_env.sh"
   chmod +x "$SCRIPT_DIR/node_env.sh"
   echo "node_env.sh created successfully at: $SCRIPT_DIR/node_env.sh"

@@ -115,7 +115,7 @@ if exist "scripts\win\stop.ps1" (
 REM Final cleanup
 echo.
 echo [INFO] Freeing processes on application ports...
-for %%p in (8080 8016 11434) do (
+for %%p in (8080 8016 5950) do (
     for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":%%p "') do (
         taskkill /f /pid %%a >nul 2>&1
     )

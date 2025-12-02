@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { NextResponse } from 'next/server'
-import { createOllama } from 'ollama-ai-provider-v2'
+import { getProvider } from '@/lib/providers'
 import type { ModelMessage } from 'ai'
 import type { AssessmentQuestion } from '@/lib/types/assessment-types'
 
@@ -40,14 +40,8 @@ export async function POST(req: Request) {
     console.log('Selected Sources Type:', typeof selectedSources)
     console.log('Selected Sources Array?:', Array.isArray(selectedSources))
 
-    // Get the Ollama URL from environment variables
-    const ollamaUrl = process.env.OLLAMA_URL
-    if (!ollamaUrl) {
-      throw new Error('OLLAMA_URL is not defined in environment variables.')
-    }
-
-    // Create Ollama client
-    const ollama = createOllama({ baseURL: ollamaUrl + '/api' })
+    // Get the provider instance (supports both Ollama and OVMS)
+    const provider = getProvider()
 
     // Prepare source content using the modularized service
     const assistantContent = await prepareSourceContent(selectedSources, courseInfo, language)
@@ -68,7 +62,7 @@ export async function POST(req: Request) {
     const assessmentMetadata = await generateAssessmentMetadata(
       assessmentType,
       difficultyLevel,
-      ollama,
+      provider,
       selectedModel,
       assistantMessage,
       courseInfo,
@@ -82,7 +76,7 @@ export async function POST(req: Request) {
       assessmentType,
       difficultyLevel,
       numQuestions,
-      ollama,
+      provider,
       selectedModel,
       assistantMessage,
       courseInfo,
@@ -100,7 +94,7 @@ export async function POST(req: Request) {
           q,
           assessmentType,
           difficultyLevel,
-          ollama,
+          provider,
           selectedModel,
           assistantMessage,
           i,

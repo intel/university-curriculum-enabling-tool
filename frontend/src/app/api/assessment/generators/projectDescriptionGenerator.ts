@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { generateText, type ModelMessage } from 'ai'
-import type { OllamaFn } from '../types/assessment.types'
+import type { ProviderFn } from '../types/assessment.types'
 import type { CourseInfo } from '@/lib/types/course-info-types'
 import {
   TEMPERATURE,
@@ -15,7 +15,7 @@ import { detectLikelyLanguage, ensureTargetLanguageText } from '../utils/languag
 // Generate project description based on course information and source materials
 export async function generateProjectDescription(
   difficultyLevel: string,
-  ollama: OllamaFn,
+  provider: ProviderFn,
   selectedModel: string,
   assistantMessage: ModelMessage,
   courseInfo: CourseInfo,
@@ -56,7 +56,7 @@ export async function generateProjectDescription(
 
   try {
     const response = await generateText({
-      model: ollama(selectedModel),
+      model: provider(selectedModel),
       messages: [systemMessage, assistantMessage, userMessage],
       temperature: TEMPERATURE + PROJECT_DESCRIPTION_TEMPERATURE_INCREASE,
       maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET),
@@ -81,12 +81,12 @@ export async function generateProjectDescription(
           `Language mismatch detected (${detected} vs ${language}), enforcing target language`,
         )
         // Always enforce language, even for source-based content
-        cleaned = await ensureTargetLanguageText(cleaned, language, ollama, selectedModel, {
+        cleaned = await ensureTargetLanguageText(cleaned, language, provider, selectedModel, {
           force: true,
         })
       }
     } else {
-      cleaned = await ensureTargetLanguageText(cleaned, language, ollama, selectedModel, {
+      cleaned = await ensureTargetLanguageText(cleaned, language, provider, selectedModel, {
         force: true,
       })
       console.log('Applied language enforcement for course-based content')

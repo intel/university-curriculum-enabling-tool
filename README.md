@@ -40,7 +40,7 @@ Powered by Intel CPUs and GPUs, the tool ensures accurate, contextually relevant
 |-------------|---------------------------|---------------------------------|
 | 8080        | Web Interface             | Application UI access           |
 | 8016        | Backend                   | Internal REST API               |
-| 11434       | Ollama Model Serving      | LLM inference and embeddings    |
+| 5950       | Ollama Model Serving      | LLM inference and embeddings    |
 
 ## Disclaimer
 
@@ -58,10 +58,19 @@ Powered by Intel CPUs and GPUs, the tool ensures accurate, contextually relevant
    sudo ./setup.sh
    ```
 
-2. **Install** - Install the application from sources to build and package the application
+2. **Install** - Install the application from sources to build and package the application. From here, running below will prompt you to enter select either `ollama` or `ovms`:
    ```bash
    ./install.sh
    ```
+   However, you can also directly select an AI provider to install via command:
+   -  OpenVINO Model Server (OVMS)
+      ```bash
+      PROVIDER=ovms ./install.sh
+      ```
+   -  Ollama
+      ```bash
+      PROVIDER=ollama ./install.sh
+      ```
 
 3. **Continue Installation** - Go to the generated distribution package directory (follow the instruction from previous command):
 
@@ -131,7 +140,13 @@ Powered by Intel CPUs and GPUs, the tool ensures accurate, contextually relevant
 
 ## Limitations
 
+1. Startup application on Windows
+
 On Windows, when running `run_win.bat`, PM2 launches several command prompt windows during operation. These windows can be minimized, but they will remain open. To stop the application, run `stop_win.bat` and manually close the command prompt windows to properly shut down all services.
+
+2. Running OVMS on Windows
+
+When running any workloads in Windows (e.g. Summary generation), additional command prompts may pop-up repeatingly until the workload has successfully completed.
 
 ## Troubleshooting
 

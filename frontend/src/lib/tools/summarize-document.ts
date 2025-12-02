@@ -4,8 +4,10 @@
 import { z } from 'zod'
 import { tool, generateText } from 'ai'
 import { getStoredEmbeddings } from '../embedding/get-stored-embeddings'
-import { createOllama } from 'ollama-ai-provider-v2'
+import { getProvider, getProviderInfo } from '@/lib/providers'
 import { verifyModel } from '../model/model-manager'
+
+const provider = getProvider()
 
 export const summarizeDocument = tool({
   description:
@@ -23,7 +25,9 @@ export const summarizeDocument = tool({
   execute: async (args) => {
     const { selectedSources, query, approach, selectedModel } = args
     // Ensure the model exists before generating text.
-    await verifyModel(selectedModel)
+    const { baseURL } = getProviderInfo()
+
+    await verifyModel(baseURL, selectedModel)
 
     const validJsonString = selectedSources
       .replace(/'/g, '"') // Replace single quotes with double quotes
@@ -42,10 +46,8 @@ export const summarizeDocument = tool({
     } else {
       summaryPrompt = `Using only the provided document content, summarize the following document. Do not infer or add any information beyond what is provided. Structure the summary in a ${approach} format:\n\n${fullDocument}`
     }
-    const ollamaUrl = process.env.OLLAMA_URL
-    const ollama = createOllama({ baseURL: ollamaUrl + '/api' })
     const summary = await generateText({
-      model: ollama(selectedModel),
+      model: provider(selectedModel),
       prompt: summaryPrompt,
     })
     return summary

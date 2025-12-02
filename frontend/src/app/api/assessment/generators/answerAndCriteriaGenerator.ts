@@ -3,7 +3,8 @@
 
 import { generateText, generateObject, type ModelMessage } from 'ai'
 import { jsonrepair } from 'jsonrepair'
-import type { OllamaFn } from '../types/assessment.types'
+import { z } from 'zod'
+import type { ProviderFn } from '../types/assessment.types'
 import type { CourseInfo } from '@/lib/types/course-info-types'
 import type { ExplanationObject } from '@/lib/types/assessment-types'
 import {
@@ -15,11 +16,29 @@ import { extractJsonFromText } from '../utils/jsonHelpers'
 import { stripThinkTags, stripCodeFences } from '../utils/generalHelpers'
 import { ensureTargetLanguageText } from '../utils/languageHelpers'
 
+// Zod schema for marking criteria (inline for OVMS compatibility)
+const explanationObjectSchema = z.object({
+  criteria: z.array(
+    z.object({
+      name: z.string(),
+      weight: z.number(),
+      description: z.string().optional(),
+    }),
+  ),
+  markAllocation: z.array(
+    z.object({
+      component: z.string(),
+      marks: z.number(),
+      description: z.string().optional(),
+    }),
+  ),
+})
+
 export async function generateModelAnswer(
   question: string,
   assessmentType: string,
   difficultyLevel: string,
-  ollama: OllamaFn,
+  provider: ProviderFn,
   selectedModel: string,
   assistantMessage: ModelMessage,
   courseInfo?: CourseInfo,
@@ -79,7 +98,7 @@ export async function generateModelAnswer(
     // First attempt with full context
     try {
       const response = await generateText({
-        model: ollama(selectedModel),
+        model: provider(selectedModel),
         messages: [systemMessage, assistantMessage, userMessage],
         temperature: TEMPERATURE,
         maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET),
@@ -89,7 +108,7 @@ export async function generateModelAnswer(
 
       // Always ensure the language matches the selected language for both exam and project assessments
       // Use force: true to ensure enforcement even if detection is uncertain
-      cleaned = await ensureTargetLanguageText(cleaned, language, ollama, selectedModel, {
+      cleaned = await ensureTargetLanguageText(cleaned, language, provider, selectedModel, {
         force: true,
       })
       console.log('Model answer language enforced to', language)
@@ -114,7 +133,7 @@ export async function generateModelAnswer(
       }
 
       const response = await generateText({
-        model: ollama(selectedModel),
+        model: provider(selectedModel),
         messages: [systemMessage, reducedAssistantMessage, userMessage],
         temperature: TEMPERATURE,
         maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET * 0.8), // Reduce output budget
@@ -124,7 +143,7 @@ export async function generateModelAnswer(
 
       // Always ensure the language matches the selected language for both exam and project assessments
       // Use force: true to ensure enforcement even if detection is uncertain
-      cleaned = await ensureTargetLanguageText(cleaned, language, ollama, selectedModel, {
+      cleaned = await ensureTargetLanguageText(cleaned, language, provider, selectedModel, {
         force: true,
       })
       console.log('Model answer language enforced to', language, '(retry)')
@@ -152,7 +171,7 @@ export async function generateModelAnswer(
 async function enforceLanguageOnMarkingCriteria(
   criteria: ExplanationObject,
   language: 'en' | 'id',
-  ollama: OllamaFn,
+  provider: ProviderFn,
   selectedModel: string,
 ): Promise<ExplanationObject> {
   try {
@@ -161,11 +180,11 @@ async function enforceLanguageOnMarkingCriteria(
       criteria.criteria = await Promise.all(
         criteria.criteria.map(async (c) => ({
           ...c,
-          name: await ensureTargetLanguageText(c.name, language, ollama, selectedModel, {
+          name: await ensureTargetLanguageText(c.name, language, provider, selectedModel, {
             force: true,
           }),
           description: c.description
-            ? await ensureTargetLanguageText(c.description, language, ollama, selectedModel, {
+            ? await ensureTargetLanguageText(c.description, language, provider, selectedModel, {
                 force: true,
               })
             : c.description,
@@ -178,11 +197,17 @@ async function enforceLanguageOnMarkingCriteria(
       criteria.markAllocation = await Promise.all(
         criteria.markAllocation.map(async (m) => ({
           ...m,
-          component: await ensureTargetLanguageText(m.component, language, ollama, selectedModel, {
-            force: true,
-          }),
+          component: await ensureTargetLanguageText(
+            m.component,
+            language,
+            provider,
+            selectedModel,
+            {
+              force: true,
+            },
+          ),
           description: m.description
-            ? await ensureTargetLanguageText(m.description, language, ollama, selectedModel, {
+            ? await ensureTargetLanguageText(m.description, language, provider, selectedModel, {
                 force: true,
               })
             : m.description,
@@ -203,7 +228,7 @@ export async function generateMarkingCriteria(
   modelAnswer: string,
   assessmentType: string,
   difficultyLevel: string,
-  ollama: OllamaFn,
+  provider: ProviderFn,
   selectedModel: string,
   assistantMessage: ModelMessage,
   courseInfo?: CourseInfo,
@@ -246,19 +271,11 @@ export async function generateMarkingCriteria(
 
     try {
       const result = await generateObject({
-        model: ollama(selectedModel),
-        output: 'no-schema',
+        model: provider(selectedModel),
+        schema: explanationObjectSchema,
         messages: [systemMessage, assistantMessage, userMessage],
         temperature: TEMPERATURE,
         maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET),
-        providerOptions: {
-          ollama: {
-            mode: 'json',
-            options: {
-              numCtx: TOKEN_RESPONSE_BUDGET,
-            },
-          },
-        },
       })
       object = result.object
     } catch (e) {
@@ -285,19 +302,11 @@ export async function generateMarkingCriteria(
         }
 
         const result = await generateObject({
-          model: ollama(selectedModel),
-          output: 'no-schema',
+          model: provider(selectedModel),
+          schema: explanationObjectSchema,
           messages: [systemMessage, reducedAssistantMessage, userMessage],
           temperature: TEMPERATURE,
           maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET * 0.8),
-          providerOptions: {
-            ollama: {
-              mode: 'json',
-              options: {
-                numCtx: Math.floor(TOKEN_RESPONSE_BUDGET * 0.8),
-              },
-            },
-          },
         })
         object = result.object
         console.log('Successfully generated marking criteria with reduced context')
@@ -324,7 +333,7 @@ export async function generateMarkingCriteria(
     let response
     try {
       response = await generateText({
-        model: ollama(selectedModel),
+        model: provider(selectedModel),
         messages: [systemMessage, assistantMessage, userMessage],
         temperature: TEMPERATURE,
         maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET),
@@ -346,7 +355,7 @@ export async function generateMarkingCriteria(
       }
 
       response = await generateText({
-        model: ollama(selectedModel),
+        model: provider(selectedModel),
         messages: [systemMessage, reducedAssistantMessage, userMessage],
         temperature: TEMPERATURE,
         maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET * 0.8),
@@ -364,7 +373,7 @@ export async function generateMarkingCriteria(
       const enforced = await enforceLanguageOnMarkingCriteria(
         markingCriteria,
         language,
-        ollama,
+        provider,
         selectedModel,
       )
       return enforced
@@ -381,7 +390,7 @@ export async function generateMarkingCriteria(
         const enforced = await enforceLanguageOnMarkingCriteria(
           markingCriteria,
           language,
-          ollama,
+          provider,
           selectedModel,
         )
         return enforced
@@ -405,7 +414,7 @@ export async function generateMarkingCriteria(
       const enforced = await enforceLanguageOnMarkingCriteria(
         repairedObj,
         language,
-        ollama,
+        provider,
         selectedModel,
       )
       return enforced

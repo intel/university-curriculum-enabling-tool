@@ -1,7 +1,7 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { createOllama } from 'ollama-ai-provider-v2'
+import { getProvider } from '@/lib/providers'
 import { type ModelMessage, generateObject } from 'ai'
 import { NextResponse } from 'next/server'
 import { getStoredChunks } from '@/lib/chunk/get-stored-chunks'
@@ -20,9 +20,11 @@ const TOKEN_MAX = Number.parseInt(process.env.RAG_TOKEN_MAX ?? '2048')
 const TOKEN_RESPONSE_RATIO = Number.parseFloat(process.env.RESPONSE_TOKEN_PERCENTAGE || '0.7')
 const TOKEN_RESPONSE_BUDGET = Math.floor(TOKEN_MAX * TOKEN_RESPONSE_RATIO)
 const TOKEN_CONTEXT_BUDGET = Math.floor(TOKEN_MAX * (1 - TOKEN_RESPONSE_RATIO))
+const provider = getProvider()
 
-// Zod schema for study plan validation
-const studyPlanSchema = z.object({
+// Zod schemas for chunked study plan generation
+// Chunk 1: Core structure - overview, topics, and strategies
+const studyPlanCoreSchema = z.object({
   executiveSummary: z.string().min(1),
   topicBreakdown: z
     .array(
@@ -34,6 +36,21 @@ const studyPlanSchema = z.object({
       }),
     )
     .min(1),
+  practiceStrategy: z.object({
+    approach: z.string(),
+    frequency: z.string(),
+    questionTypes: z.array(z.string()),
+    selfAssessment: z.string(),
+  }),
+  examPreparation: z.object({
+    finalWeekPlan: z.string(),
+    dayBeforeExam: z.string(),
+    examDayTips: z.string(),
+  }),
+})
+
+// Chunk 2: Weekly schedule only
+const studyPlanWeeklySchema = z.object({
   weeklySchedule: z
     .array(
       z.object({
@@ -45,13 +62,17 @@ const studyPlanSchema = z.object({
             type: z.string(),
             description: z.string(),
             duration: z.string(),
-            resources: z.string(),
+            resources: z.union([z.string(), z.array(z.string())]),
           }),
         ),
         milestones: z.array(z.string()),
       }),
     )
     .min(1),
+})
+
+// Chunk 3: Supporting materials - techniques and resources
+const studyPlanSupportSchema = z.object({
   studyTechniques: z
     .array(
       z.object({
@@ -72,17 +93,6 @@ const studyPlanSchema = z.object({
       }),
     )
     .min(1),
-  practiceStrategy: z.object({
-    approach: z.string(),
-    frequency: z.string(),
-    questionTypes: z.array(z.string()),
-    selfAssessment: z.string(),
-  }),
-  examPreparation: z.object({
-    finalWeekPlan: z.string(),
-    dayBeforeExam: z.string(),
-    examDayTips: z.string(),
-  }),
 })
 
 // Helper function to count tokens (simple approximation)
@@ -96,21 +106,90 @@ function truncateToTokenLimit(text: string, maxTokens: number): string {
     return text
   }
 
-  // Simple truncation approach - could be improved with smarter summarization
-  const words = text.split(' ')
-  let result = ''
+  // Better truncation: preserve original substring boundaries so we don't break
+  // escapes or split mid-escape/quote sequences. Use a regex to find non-whitespace
+  // tokens and track the last character index included from the original text.
+  const tokenRegExp = /\S+/g
   let currentTokens = 0
+  let lastIncludedIndex = 0
 
-  for (const word of words) {
-    const wordTokens = countTokens(word + ' ')
-    if (currentTokens + wordTokens > maxTokens) {
+  while (tokenRegExp.exec(text) !== null) {
+    // Each matched non-whitespace chunk counts as 1 token in our approximation
+    if (currentTokens + 1 > maxTokens) {
       break
     }
-    result += word + ' '
-    currentTokens += wordTokens
+    currentTokens += 1
+    // regExp.lastIndex points to the position after the match
+    lastIncludedIndex = tokenRegExp.lastIndex
   }
 
-  return result.trim() + '...'
+  // If no tokens fit, return only an ellipsis
+  if (lastIncludedIndex === 0) return '...'
+
+  // Use the original substring so escapes and spacing are preserved
+  const truncated = text.slice(0, lastIncludedIndex).trim()
+
+  // Ensure balanced brackets/parentheses/quotes to avoid leaving unterminated structures
+  const openStack: string[] = []
+  let inDouble = false
+  let inSingle = false
+  let escaped = false
+
+  for (let i = 0; i < truncated.length; i++) {
+    const ch = truncated[i]
+
+    if (escaped) {
+      escaped = false
+      continue
+    }
+
+    if (ch === '\\') {
+      escaped = true
+      continue
+    }
+
+    if (!inSingle && ch === '"') {
+      inDouble = !inDouble
+      continue
+    }
+
+    if (!inDouble && ch === "'") {
+      inSingle = !inSingle
+      continue
+    }
+
+    // Only consider bracket balancing when not inside a string
+    if (!inDouble && !inSingle) {
+      if (ch === '{' || ch === '[' || ch === '(') {
+        openStack.push(ch)
+      } else if (ch === '}' || ch === ']' || ch === ')') {
+        const last = openStack[openStack.length - 1]
+        if (
+          (ch === '}' && last === '{') ||
+          (ch === ']' && last === '[') ||
+          (ch === ')' && last === '(')
+        ) {
+          openStack.pop()
+        } else {
+          // mismatched closing - ignore
+        }
+      }
+    }
+  }
+
+  // Build required closing characters (reverse order)
+  let closers = ''
+  if (inDouble) closers += '"'
+  if (inSingle) closers += "'"
+
+  while (openStack.length > 0) {
+    const last = openStack.pop()
+    if (last === '{') closers += '}'
+    else if (last === '[') closers += ']'
+    else if (last === '(') closers += ')'
+  }
+
+  return truncated + '...' + closers
 }
 
 // Helper function to get learning style prompt
@@ -207,12 +286,6 @@ export async function POST(req: Request) {
       courseCode,
       courseName,
     })
-
-    const ollamaUrl = process.env.OLLAMA_URL
-    if (!ollamaUrl) {
-      throw new Error('OLLAMA_URL is not defined in environment variables.')
-    }
-    const ollama = createOllama({ baseURL: ollamaUrl + '/api' })
 
     // Get specific prompts for learning style and difficulty level
     const learningStylePrompt = getLearningStylePrompt(learningStyle)
@@ -315,8 +388,12 @@ The study plan should reflect standard academic expectations for a course with t
       content: assistantContent,
     }
 
-    // Enhanced system prompt with detailed instructions
-    const studyPlanSystemPrompt = `You are a professional educational consultant specializing in creating personalized study plans. Create a comprehensive study plan based on the provided content.
+    console.log('Generating study plan in chunks to avoid token limits...')
+    const startTime = Date.now()
+    try {
+      // CHUNK 1: Generate core structure (executive summary, topics, strategies)
+      console.log('Chunk 1/3: Generating core structure...')
+      const corePrompt = `You are a professional educational consultant. Generate the CORE STRUCTURE of a study plan.
 
 LEARNING STYLE: ${learningStyle.toUpperCase()}
 ${learningStylePrompt}
@@ -327,57 +404,16 @@ ${difficultyLevelPrompt}
 STUDY PARAMETERS:
 - Study period: ${studyPeriodWeeks} weeks
 - Available study time: ${studyHoursPerWeek} hours per week
-${examDate ? `- Target exam date: ${examDate}` : '- No specific exam date'}
 
-${
-  assistantContent.includes('SOURCE MATERIALS:')
-    ? `IMPORTANT: Base your study plan ENTIRELY on the provided source materials. Extract key concepts, terminology, examples, and explanations directly from the source materials. Do not introduce concepts or information that is not present in the source materials.`
-    : `Note: No specific source materials were provided. Create a general study plan based on standard curriculum for this subject.`
-}
-
-CRITICAL INSTRUCTIONS FOR JSON RESPONSE:
-You MUST return a valid JSON object with EXACTLY this structure and no additional fields:
-
+Return ONLY a JSON object with these fields:
 {
-  "executiveSummary": "Brief overview of the study plan that mentions the learning style, difficulty level, and key focus areas",
+  "executiveSummary": "Brief overview mentioning learning style, difficulty level, and key focus areas",
   "topicBreakdown": [
     {
       "topic": "Topic name",
       "subtopics": ["Subtopic 1", "Subtopic 2"],
       "importance": "High/Medium/Low",
       "estimatedStudyHours": 10
-    }
-  ],
-  "weeklySchedule": [
-    {
-      "week": 1,
-      "focus": "Week's focus",
-      "topics": ["Topic 1", "Topic 2"],
-      "activities": [
-        {
-          "type": "Reading/Practice/Review/Quiz",
-          "description": "Detailed activity description",
-          "duration": "2 hours",
-          "resources": "Specific resources for this activity"
-        }
-      ],
-      "milestones": ["Specific achievement to reach by end of week", "Another milestone"]
-    }
-  ],
-  "studyTechniques": [
-    {
-      "technique": "Technique name",
-      "description": "Detailed technique description",
-      "bestFor": ["Specific use case", "Another use case"],
-      "example": "Concrete example of how to apply this technique"
-    }
-  ],
-  "additionalResources": [
-    {
-      "type": "Book/Video/Website/Tool",
-      "name": "Resource name",
-      "description": "Description of the resource and how it helps",
-      "relevantTopics": ["Topic 1", "Topic 2"]
     }
   ],
   "practiceStrategy": {
@@ -387,10 +423,83 @@ You MUST return a valid JSON object with EXACTLY this structure and no additiona
     "selfAssessment": "Methods to assess progress"
   },
   "examPreparation": {
-    "finalWeekPlan": "Detailed plan for the final week of study",
-    "dayBeforeExam": "Specific recommendations for the day before",
-    "examDayTips": "Tips for exam day performance"
+    "finalWeekPlan": "Detailed plan for the final week",
+    "dayBeforeExam": "Recommendations for day before exam",
+    "examDayTips": "Tips for exam day"
   }
+}
+
+IMPORTANT RULES:
+1. Your response MUST be ONLY the JSON object with no additional text, markdown, or explanations
+2. All fields in the JSON structure are REQUIRED - do not omit any fields
+3. All arrays must be properly formatted with square brackets and comma-separated values
+4. All strings must be properly quoted
+5. Ensure activities align with the ${learningStyle} learning style
+6. Match content difficulty to ${difficultyLevel} level
+7. Make all explanations clear and actionable
+8. Provide concrete, specific information based on the source materials
+9. Do not add any fields that are not in the template above
+10. Do not include any comments or explanations outside the JSON structure`
+
+      const { object: coreData } = await generateObject({
+        model: provider(selectedModel),
+        schema: studyPlanCoreSchema,
+        messages: [
+          { role: 'system', content: corePrompt },
+          assistantMessage,
+          {
+            role: 'user',
+            content: `Generate the core structure for a ${difficultyLevel} level ${courseName} study plan.`,
+          },
+        ],
+        temperature: TEMPERATURE,
+        maxOutputTokens: TOKEN_RESPONSE_BUDGET,
+        providerOptions: {
+          openaiCompatible: {
+            numCtx: TOKEN_MAX,
+          },
+        },
+      })
+
+      console.log('Chunk 1 complete:', coreData)
+
+      // CHUNK 2: Generate weekly schedule
+      console.log('Chunk 2/3: Generating weekly schedule...')
+      const weeklyPrompt = `You are a professional educational consultant. Generate a WEEKLY SCHEDULE for a study plan.
+
+CONTEXT FROM CORE PLAN:
+${coreData.executiveSummary}
+
+TOPICS TO COVER:
+${coreData.topicBreakdown.map((t) => `- ${t.topic}: ${t.subtopics.join(', ')} (${t.estimatedStudyHours}h)`).join('\n')}
+
+LEARNING STYLE: ${learningStyle.toUpperCase()}
+${learningStylePrompt}
+
+REQUIREMENTS:
+- Generate exactly ${studyPeriodWeeks} weeks
+- Distribute ${studyHoursPerWeek} hours per week across activities
+- Align activities with ${learningStyle} learning style
+- Match difficulty to ${difficultyLevel} level
+
+Return ONLY a JSON object:
+{
+  "weeklySchedule": [
+    {
+      "week": 1,
+      "focus": "Week's main focus",
+      "topics": ["Topic 1", "Topic 2"],
+      "activities": [
+        {
+          "type": "Reading/Practice/Review/Quiz",
+          "description": "Detailed activity description",
+          "duration": "2 hours",
+          "resources": "Specific resources"
+        }
+      ],
+      "milestones": ["Achievement 1", "Achievement 2"]
+    }
+  ]
 }
 
 IMPORTANT RULES:
@@ -402,42 +511,132 @@ IMPORTANT RULES:
 6. Distribute ${studyHoursPerWeek} hours per week across activities
 7. Ensure activities align with the ${learningStyle} learning style
 8. Match content difficulty to ${difficultyLevel} level
-9. Make all explanations clear and actionable
-10. Ensure milestones are measurable and achievable
-11. Provide concrete examples for all study techniques
-12. Do not add any fields that are not in the template above
-13. Do not include any comments or explanations outside the JSON structure`
+9. Ensure milestones are measurable and achievable
+10. Do not add any fields that are not in the template above
+11. Do not include any comments or explanations outside the JSON structure`
 
-    const systemMessage: ModelMessage = {
-      role: 'system',
-      content: studyPlanSystemPrompt,
-    }
-
-    const userMessage: ModelMessage = {
-      role: 'user',
-      content: `Generate a comprehensive study plan based on the provided content. Tailor it for a ${difficultyLevel} level student with a ${learningStyle} learning style preference, spanning ${studyPeriodWeeks} weeks with ${studyHoursPerWeek} hours available per week.`,
-    }
-
-    console.log('Generating study plan with Ollama...')
-    const startTime = Date.now()
-    try {
-      // Use generateObject with increased context window to avoid timeouts
-      // The num_ctx option gives Ollama more memory to work with complex schemas
-      const { object: studyPlan } = await generateObject({
-        model: ollama(selectedModel),
-        schema: studyPlanSchema,
-        messages: [systemMessage, assistantMessage, userMessage],
+      const { object: weeklyData } = await generateObject({
+        model: provider(selectedModel),
+        schema: studyPlanWeeklySchema,
+        messages: [
+          { role: 'system', content: weeklyPrompt },
+          assistantMessage,
+          {
+            role: 'user',
+            content: `Generate ${studyPeriodWeeks} weeks of detailed schedule with ${studyHoursPerWeek} hours per week.`,
+          },
+        ],
         temperature: TEMPERATURE,
         maxOutputTokens: TOKEN_RESPONSE_BUDGET,
         providerOptions: {
-          ollama: {
+          openaiCompatible: {
             numCtx: TOKEN_MAX,
           },
         },
       })
 
-      console.log('Checking on the raw studyPlan')
-      console.log(studyPlan)
+      console.log('Chunk 2 complete:', weeklyData.weeklySchedule.length, 'weeks generated')
+
+      // CHUNK 3: Generate supporting materials
+      console.log('Chunk 3/3: Generating study techniques and resources...')
+      const supportPrompt = `You are a professional educational consultant. Generate STUDY TECHNIQUES and ADDITIONAL RESOURCES.
+
+CONTEXT:
+${coreData.executiveSummary}
+
+TOPICS:
+${coreData.topicBreakdown.map((t) => t.topic).join(', ')}
+
+LEARNING STYLE: ${learningStyle.toUpperCase()}
+${learningStylePrompt}
+
+Return ONLY a JSON object:
+{
+  "studyTechniques": [
+    {
+      "technique": "Technique name",
+      "description": "Detailed description",
+      "bestFor": ["Use case 1", "Use case 2"],
+      "example": "Concrete example of application"
+    }
+  ],
+  "additionalResources": [
+    {
+      "type": "Book/Video/Website/Tool",
+      "name": "Resource name",
+      "description": "How it helps",
+      "relevantTopics": ["Topic 1", "Topic 2"]
+    }
+  ]
+}
+
+IMPORTANT RULES:
+1. Your response MUST be ONLY the JSON object with no additional text, markdown, or explanations
+2. All fields in the JSON structure are REQUIRED - do not omit any fields
+3. All arrays must be properly formatted with square brackets and comma-separated values
+4. All strings must be properly quoted
+5. Provide concrete examples for all study techniques
+6. Ensure techniques align with the ${learningStyle} learning style
+7. Make all explanations clear and actionable
+8. Do not add any fields that are not in the template above
+9. Do not include any comments or explanations outside the JSON structure`
+
+      const { object: supportData } = await generateObject({
+        model: provider(selectedModel),
+        schema: studyPlanSupportSchema,
+        messages: [
+          { role: 'system', content: supportPrompt },
+          assistantMessage,
+          {
+            role: 'user',
+            content: `Generate study techniques and resources for ${learningStyle} learners studying ${courseName}.`,
+          },
+        ],
+        temperature: TEMPERATURE,
+        maxOutputTokens: TOKEN_RESPONSE_BUDGET,
+        providerOptions: {
+          openaiCompatible: {
+            numCtx: TOKEN_MAX,
+          },
+        },
+      })
+
+      console.log('Chunk 3 complete')
+
+      // Normalize weekly schedule: ensure activity.resources is always a string
+      type WeeklyActivity = {
+        type: string
+        description: string
+        duration: string
+        resources: string | string[] | undefined
+      }
+
+      type WeeklyWeek = {
+        week: number
+        focus: string
+        topics: string[]
+        activities: WeeklyActivity[]
+        milestones: string[]
+      }
+
+      const normalizedWeekly = (weeklyData.weeklySchedule as WeeklyWeek[]).map((week) => ({
+        ...week,
+        activities: (week.activities as WeeklyActivity[]).map((act) => ({
+          ...act,
+          resources: Array.isArray(act.resources) ? act.resources.join(', ') : act.resources || '',
+        })),
+      }))
+
+      // Combine all chunks into final study plan
+      const studyPlan: StudyPlan = {
+        executiveSummary: coreData.executiveSummary,
+        topicBreakdown: coreData.topicBreakdown,
+        weeklySchedule: normalizedWeekly,
+        studyTechniques: supportData.studyTechniques,
+        additionalResources: supportData.additionalResources,
+        practiceStrategy: coreData.practiceStrategy,
+        examPreparation: coreData.examPreparation,
+      }
 
       // End timing and calculate the time taken
       const endTime = Date.now()

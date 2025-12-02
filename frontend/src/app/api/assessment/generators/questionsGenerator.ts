@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { generateText, type ModelMessage } from 'ai'
-import type { OllamaFn, GeneratedQuestion } from '../types/assessment.types'
+import type { ProviderFn, GeneratedQuestion } from '../types/assessment.types'
 import type { CourseInfo } from '@/lib/types/course-info-types'
 import { TEMPERATURE, TOKEN_MAX, langDirective } from '../config/constants'
 import { extractJsonFromText } from '../utils/jsonHelpers'
@@ -14,7 +14,7 @@ export async function generateQuestions(
   assessmentType: string,
   difficultyLevel: string,
   numQuestions: number,
-  ollama: OllamaFn,
+  provider: ProviderFn,
   selectedModel: string,
   assistantMessage: ModelMessage,
   courseInfo?: CourseInfo,
@@ -38,7 +38,7 @@ export async function generateQuestions(
     try {
       const projectDescription = await generateProjectDescription(
         difficultyLevel,
-        ollama,
+        provider,
         selectedModel,
         assistantMessage,
         courseInfo,
@@ -197,7 +197,7 @@ DO NOT include any text outside the JSON array.`
 
   try {
     const response = await generateText({
-      model: ollama(selectedModel),
+      model: provider(selectedModel),
       messages: [systemMessage, assistantMessage, userMessage],
       temperature: TEMPERATURE,
       maxOutputTokens: Math.floor(TOKEN_MAX / 2),
@@ -214,7 +214,7 @@ DO NOT include any text outside the JSON array.`
         const languageEnforcedQuestions = await Promise.all(
           questions.map(async (q) => {
             if (typeof q === 'string') {
-              return await ensureTargetLanguageText(q, language, ollama, selectedModel, {
+              return await ensureTargetLanguageText(q, language, provider, selectedModel, {
                 force: true,
               })
             } else if (typeof q === 'object' && q.question) {
@@ -223,7 +223,7 @@ DO NOT include any text outside the JSON array.`
                 question: await ensureTargetLanguageText(
                   q.question,
                   language,
-                  ollama,
+                  provider,
                   selectedModel,
                   { force: true },
                 ),
@@ -249,7 +249,7 @@ DO NOT include any text outside the JSON array.`
           const languageEnforcedQuestions = await Promise.all(
             questions.map(async (q) => {
               if (typeof q === 'string') {
-                return await ensureTargetLanguageText(q, language, ollama, selectedModel, {
+                return await ensureTargetLanguageText(q, language, provider, selectedModel, {
                   force: true,
                 })
               } else if (typeof q === 'object' && q.question) {
@@ -258,7 +258,7 @@ DO NOT include any text outside the JSON array.`
                   question: await ensureTargetLanguageText(
                     q.question,
                     language,
-                    ollama,
+                    provider,
                     selectedModel,
                     { force: true },
                   ),
