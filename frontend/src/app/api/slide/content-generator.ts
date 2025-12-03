@@ -1,7 +1,7 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { createOllama } from 'ollama-ai-provider-v2'
+import { getProvider } from '@/lib/providers'
 import { languageDirective, type Lang } from '@/lib/utils/lang'
 import { type ModelMessage, generateText } from 'ai'
 import type { ClientSource } from '@/lib/types/client-source'
@@ -37,6 +37,8 @@ import {
 import { validateAndSanitizeContent } from './content-validator'
 import { createFallbackContent } from './fallback-content'
 
+const provider = getProvider()
+
 // Define the AssessmentQuestion type
 
 export async function generateCourseContent(
@@ -51,15 +53,6 @@ export async function generateCourseContent(
   courseInfo?: CourseInfo,
 ): Promise<LectureContent> {
   try {
-    // Check for required environment variables
-    const ollamaUrl = process.env.OLLAMA_URL
-    if (!ollamaUrl) {
-      throw new Error('OLLAMA_URL is not defined in environment variables.')
-    }
-
-    // Create Ollama client
-    const ollama = createOllama({ baseURL: ollamaUrl + '/api' })
-
     // Prepare source content
     console.log('Preparing source content...')
     const hasSelectedSources = Array.isArray(selectedSources) && selectedSources.length > 0
@@ -96,7 +89,7 @@ export async function generateCourseContent(
     console.log('effectiveTopic:', effectiveTopic)
     console.log('=== END TOPIC DEBUG ===')
 
-    console.log('Generating course content with Ollama in sequential steps...')
+    console.log('Generating course content in sequential steps...')
 
     const langDirective = languageDirective
 
@@ -163,7 +156,7 @@ export async function generateCourseContent(
       : [metadataSystemMessage, metadataUserMessage]
 
     const metadataTextResponse = await generateText({
-      model: ollama(selectedModel),
+      model: provider(selectedModel),
       messages: metadataMessages,
       temperature: TEMPERATURE,
       maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 4),
@@ -210,7 +203,7 @@ export async function generateCourseContent(
       : [introSystemMessage, introUserMessage]
 
     const introTextResponse = await generateText({
-      model: ollama(selectedModel),
+      model: provider(selectedModel),
       messages: introMessages,
       temperature: TEMPERATURE,
       maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 6),
@@ -254,7 +247,7 @@ export async function generateCourseContent(
       : [specialSlidesSystemMessage, specialSlidesUserMessage]
 
     const specialSlidesTextResponse = await generateText({
-      model: ollama(selectedModel),
+      model: provider(selectedModel),
       messages: specialSlidesMessages,
       temperature: TEMPERATURE,
       maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 4),
@@ -334,7 +327,7 @@ export async function generateCourseContent(
         : [contentSlidesSystemMessage, contentSlidesUserMessage]
 
       const contentSlidesTextResponse = await generateText({
-        model: ollama(selectedModel),
+        model: provider(selectedModel),
         // messages: [
         //   { role: 'system', content: contentSlidesSystemPrompt },
         //   assistantMessage,
@@ -398,7 +391,7 @@ export async function generateCourseContent(
       : [activitiesSystemMessage, activitiesUserMessage]
 
     const activitiesTextResponse = await generateText({
-      model: ollama(selectedModel),
+      model: provider(selectedModel),
       messages: activitiesMessages,
       temperature: TEMPERATURE,
       maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 4),
@@ -446,7 +439,7 @@ export async function generateCourseContent(
       : [assessmentSystemMessage, assessmentUserMessage]
 
     const assessmentTextResponse = await generateText({
-      model: ollama(selectedModel),
+      model: provider(selectedModel),
       messages: assessmentMessages,
       temperature: TEMPERATURE,
       maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 6),
@@ -520,7 +513,7 @@ export async function generateCourseContent(
       : [readingsSystemMessage, readingsUserMessage]
 
     const readingsTextResponse = await generateText({
-      model: ollama(selectedModel),
+      model: provider(selectedModel),
       messages: readingsMessages,
       temperature: TEMPERATURE,
       maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 6),
@@ -559,7 +552,7 @@ export async function generateCourseContent(
 
           // Generate JSON-formatted questions for quiz
           const { text: questionsText } = await generateText({
-            model: ollama(selectedModel),
+            model: provider(selectedModel),
             prompt: prompt,
             temperature: TEMPERATURE,
             maxOutputTokens: 1000,
@@ -627,7 +620,7 @@ export async function generateCourseContent(
 
           // Generate JSON-formatted questions for discussion
           const { text: questionsText } = await generateText({
-            model: ollama(selectedModel),
+            model: provider(selectedModel),
             prompt: prompt,
             temperature: TEMPERATURE,
             maxOutputTokens: 1500,

@@ -159,6 +159,12 @@ if [ "$REMOVE_COMPONENTS" = "true" ]; then
     echo "Removing backend virtual environment..."
     rm -rf backend/venv
   fi
+
+  # Remove backend virtual environment for ovms service
+  if [ -d "backend/ovms_service/venv" ]; then
+    echo "Removing backend virtual environment for ovms service..."
+    rm -rf backend/ovms_service/venv
+  fi
   
   # Remove frontend build and node_modules
   if [ -d "frontend/.next" ]; then

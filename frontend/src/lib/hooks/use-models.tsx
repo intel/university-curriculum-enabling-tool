@@ -1,6 +1,17 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ * useModels Hook - Provider-Agnostic Model Management
+ *
+ * This hook manages model fetching and caching for both Ollama and OVMS providers.
+ * It uses TanStack Query for efficient data fetching and caching, and automatically
+ * updates the Zustand store when new model data is available.
+ *
+ * The /api/tags endpoint automatically detects the configured provider (Ollama or OVMS)
+ * and returns the appropriate model list in a unified format.
+ */
+
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import useChatStore from '@/lib/store/chat-store'
 import { useModelStore } from '../store/model-store'
@@ -8,19 +19,17 @@ import { toast } from 'sonner'
 import { useRef, useEffect } from 'react'
 import { OllamaModel } from '../types/ollama-model'
 
-interface ModelsResponse {
-  data: OllamaModel[]
-}
-
 /**
  * Fetcher function for TanStack Query.
  *
- * This function fetches data from the given URL and throws an error if the response is not OK.
+ * Fetches models from /api/tags which handles both Ollama and OVMS providers.
+ * The endpoint automatically detects the configured provider and returns models
+ * in a unified format.
  *
- * @returns A promise that resolves to the JSON response.
- * @throws An error if the response is not OK.
+ * @returns A promise that resolves to the models response
+ * @throws An error if the response is not OK
  */
-const fetchModels = async (): Promise<{ models: ModelsResponse }> => {
+const fetchModels = async (): Promise<{ models: OllamaModel[] }> => {
   const fetcherUrl = new URL(`/api/tags`, window.location.origin).href
   const response = await fetch(fetcherUrl)
   if (!response.ok) {
@@ -74,7 +83,7 @@ export function useModels() {
 
   // Function to manually update model in cache
   const updateModelInCache = (modelName: string, updatedData: Partial<OllamaModel>) => {
-    queryClient.setQueryData(['models'], (old: { models: ModelsResponse } | undefined) => {
+    queryClient.setQueryData(['models'], (old: { models: OllamaModel[] } | undefined) => {
       if (!old || !Array.isArray(old.models)) return old
 
       return {
@@ -86,7 +95,11 @@ export function useModels() {
     })
   }
 
-  // Function to manually invalidate models cache
+  /**
+   * Invalidate the models cache and trigger a refetch.
+   * This is useful when you know the model list has changed on the server
+   * (e.g., after downloading a new model).
+   */
   const refreshModels = () => {
     queryClient.invalidateQueries({ queryKey: ['models'] })
   }

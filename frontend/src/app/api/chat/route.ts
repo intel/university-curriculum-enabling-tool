@@ -1,7 +1,7 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { createOllama } from 'ollama-ai-provider-v2'
+import { getProvider, getProviderInfo } from '@/lib/providers'
 import { streamText, ModelMessage } from 'ai'
 import { errorHandler } from '@/lib/handler/error-handler'
 import { retrieveContextByEmbedding } from '@/lib/assistant/retrieve-context-by-embedding'
@@ -35,18 +35,13 @@ const TOKEN_CONTEXT_BUDGET = TOKEN_MAX - TOKEN_RESPONSE_BUDGET
  */
 export async function POST(req: Request) {
   const { messages, selectedModel, selectedSources, data, language } = await req.json()
+  const provider = getProvider()
+
   console.log('DEBUG: CHAT API selectedModel:', selectedModel)
 
   // Handle legacy image data for backward compatibility
   const legacyImages = data?.images || []
   console.log('DEBUG: Legacy images count:', legacyImages.length)
-
-  // Prepare: Ollama provider
-  const ollamaUrl = process.env.OLLAMA_URL
-  if (!ollamaUrl) {
-    throw new Error('OLLAMA_URL is not defined in environment variables.')
-  }
-  const ollama = createOllama({ baseURL: ollamaUrl + '/api' })
 
   // Prepare: Calculate the total number of selected sources
   // const totalSelectedSources = selectedSources.filter(
@@ -429,21 +424,37 @@ Keep it to 2–3 bullets. Do not reveal internal chain-of-thought or hidden step
     JSON.stringify(validatedFullMessages, null, 2),
   )
 
-  // Step 6: Stream AI response using Ollama
+  // Step 6: Prepare messages based on provider type
+  const { service } = getProviderInfo()
+  let messagesToSend: ModelMessage[]
+
+  if (service === 'ovms') {
+    // RAG mode
+    if (hasSelectedSources && assistantContent !== 'No relevant knowledge found.') {
+      messagesToSend = validatedFullMessages
+      console.log('DEBUG: OVMS RAG mode - sending full message history with context chunks')
+      console.log('DEBUG: Assistant content length:', assistantContent.length, 'characters')
+      console.log('DEBUG: Chunks added:', chunksAdded)
+    } else {
+      // No RAG context: Send system + user messages only (skip empty assistant message)
+      messagesToSend = validatedFullMessages.filter(
+        (msg) => msg.role === 'system' || msg.role === 'user',
+      )
+    }
+  } else {
+    // Ollama: Send full conversation history
+    messagesToSend = validatedFullMessages
+    console.log('DEBUG: Ollama mode - sending full message history')
+  }
+  console.log('DEBUG: Messages to send:', JSON.stringify(messagesToSend, null, 2))
+
+  // Step 7: Stream AI response using the selected provider
   const startTime = Date.now()
   const result = streamText({
-    model: ollama(selectedModel),
-    messages: validatedFullMessages,
+    model: provider(selectedModel),
+    messages: messagesToSend,
     temperature: TEMPERATURE,
     maxOutputTokens: TOKEN_RESPONSE_BUDGET,
-    providerOptions: {
-      ollama: {
-        mode: 'json',
-        options: {
-          numCtx: TOKEN_RESPONSE_BUDGET,
-        },
-      },
-    },
     onError: (error) => {
       console.error(error)
     },

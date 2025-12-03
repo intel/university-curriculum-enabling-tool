@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { EmbeddingChunk } from '../types/embedding-chunk'
-import { verifyModel } from '../model/model-manager'
 import { detokenize, effectiveTokenCount, tokenize } from '../utils'
 import { randomInt } from 'crypto'
+import { getProviderInfo } from '../providers'
+import { verifyModel } from '../model/model-manager'
 
 interface OllamaEmbedResponse {
   embeddings?: number[][]
@@ -14,12 +15,31 @@ interface OllamaEmbedResponse {
   load_duration?: number
   prompt_eval_count?: number
 }
+
+interface OVMSEmbedResponse {
+  object: string
+  data: Array<{
+    object: string
+    embedding: number[]
+    index: number
+  }>
+  model?: string
+  usage?: {
+    prompt_tokens: number
+    total_tokens: number
+  }
+}
+
 /**
- * Generates embeddings for a given text using a specified model via direct Ollama API calls.
+ * Generates embeddings for a given text using a specified model via provider-aware API calls.
  *
- * This implementation bypasses the ollama-ai-provider-v2 which was causing "Invalid JSON response"
- * errors and uses direct HTTP calls to Ollama's /api/embed endpoint with support for both
- * response formats (embeddings[] and embedding[]).
+ * This implementation supports both Ollama and OVMS providers:
+ * - Ollama: Uses /api/embed endpoint (OpenAI-compatible at /v1/embeddings)
+ * - OVMS: Uses /v3/embeddings endpoint (OpenAI-compatible)
+ *
+ * Both providers use OpenAI-compatible embedding API format:
+ * - Request: { model: string, input: string | string[] }
+ * - Response: { data: [{ embedding: number[], index: number }] }
  *
  * @param text - The text to generate embeddings for.
  * @param chunkSizeToken - The size of each chunk in tokens for embedding generation.
@@ -48,23 +68,48 @@ export async function generateEmbeddings(
   text: string,
   chunkSizeToken: number,
   chunkOverlapToken: number,
-  modelName: string = process.env.RAG_EMBEDDING_MODEL || 'all-minilm:latest',
+  modelName?: string,
 ): Promise<EmbeddingChunk[]> {
-  const ollamaUrl = process.env.OLLAMA_URL
+  // Get provider info (Ollama or OVMS)
+  const providerInfo = getProviderInfo()
+  const { service, baseURL } = providerInfo
+
+  // Get the appropriate model name for embeddings from environment
+  // If modelName is provided explicitly, use that; otherwise read from provider-specific env
+  let effectiveModelName: string
+  if (modelName) {
+    effectiveModelName = modelName
+  } else if (service === 'ovms') {
+    effectiveModelName = process.env.OVMS_EMBEDDING_MODEL || ''
+    if (!effectiveModelName) {
+      throw new Error('OVMS_EMBEDDING_MODEL environment variable is not set')
+    }
+  } else {
+    effectiveModelName = process.env.OLLAMA_EMBEDDING_MODEL || ''
+    if (!effectiveModelName) {
+      throw new Error('OLLAMA_EMBEDDING_MODEL environment variable is not set')
+    }
+  }
 
   console.log(`DEBUG: generateEmbeddings starting with:`)
-  console.log(`  ollamaUrl: ${ollamaUrl}`)
-  console.log(`  modelName: ${modelName}`)
+  console.log(`  provider: ${service}`)
+  console.log(`  baseURL: ${baseURL}`)
+  console.log(`  modelName: ${effectiveModelName}`)
   console.log(`  text length: ${text.length}`)
 
-  if (!ollamaUrl) {
-    throw new Error('OLLAMA_URL environment variable is not set')
+  // Ensure the embedding model is available before trying to use it
+  // verifyModel handles both Ollama and OVMS model availability and downloads
+  console.log(`DEBUG: Verifying model ${effectiveModelName} is available for ${service}...`)
+  const modelAvailable = await verifyModel(baseURL, effectiveModelName)
+
+  if (!modelAvailable) {
+    throw new Error(
+      `Failed to verify or download embedding model ${effectiveModelName} for ${service}. ` +
+        `Please check your ${service === 'ovms' ? 'OVMS_EMBEDDING_MODEL' : 'OLLAMA_EMBEDDING_MODEL'} configuration.`,
+    )
   }
 
-  const modelVerified = await verifyModel(ollamaUrl, modelName)
-  if (!modelVerified) {
-    throw new Error(`Failed to verify model: ${modelName} at ${ollamaUrl}`)
-  }
+  console.log(`DEBUG: Model ${effectiveModelName} is ready`)
 
   console.log('DEBUG: generateEmbeddings chunkSizeToken:', chunkSizeToken)
   console.log('DEBUG: generateEmbeddings chunkOverlapToken:', chunkOverlapToken)
@@ -134,18 +179,34 @@ Length: ${chunk.length} -> ${sanitized.length}
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         console.log(
-          `DEBUG: Direct Ollama API call for chunk ${index + 1}, attempt ${attempt}, model: ${modelName}, sanitized length: ${sanitized.length}`,
+          `DEBUG: ${service.toUpperCase()} API call for chunk ${index + 1}, attempt ${attempt}, model: ${effectiveModelName}, sanitized length: ${sanitized.length}`,
         )
 
-        const url = new URL('/api/embed', ollamaUrl)
-        const response = await fetch(url.href, {
+        // Construct endpoint URL based on provider
+        let embeddingUrl: URL
+        if (service === 'ovms') {
+          // OVMS uses /v3/embeddings (OpenAI-compatible)
+          const ovmsBaseUrl = process.env.PROVIDER_URL || 'http://localhost:5950'
+          embeddingUrl = new URL('/v3/embeddings', ovmsBaseUrl)
+          console.log(`DEBUG: Construct URL to embeddingUrl= ${embeddingUrl}`)
+        } else {
+          // Ollama uses /api/embed or /v1/embeddings (both work)
+          const ollamaBaseUrl = process.env.PROVIDER_URL || 'http://localhost:5950'
+          embeddingUrl = new URL('/api/embed', ollamaBaseUrl)
+        }
+
+        console.log('DEBUG: Attempting to call /v3/embeddings for OVMS, checking contents')
+        console.log(`DEBUG: effectiveModelName=${effectiveModelName}`)
+        console.log(`DEBUG: sanitized=${sanitized}`)
+
+        const response = await fetch(embeddingUrl.href, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model: modelName,
-            input: sanitized,
+            model: effectiveModelName,
+            input: sanitized, // OpenAI-compatible format uses "input" field
           }),
           signal: AbortSignal.timeout(30000), // 30 second timeout
         })
@@ -160,33 +221,50 @@ Length: ${chunk.length} -> ${sanitized.length}
           responseText.substring(0, 200),
         )
 
-        let responseJson: OllamaEmbedResponse
+        let embedding: number[]
+
         try {
-          responseJson = JSON.parse(responseText)
+          if (service === 'ovms') {
+            // OVMS uses OpenAI-compatible format: { data: [{ embedding: [...] }] }
+            const ovmsResponse: OVMSEmbedResponse = JSON.parse(responseText)
+
+            if (
+              ovmsResponse.data &&
+              Array.isArray(ovmsResponse.data) &&
+              ovmsResponse.data.length > 0
+            ) {
+              embedding = ovmsResponse.data[0].embedding
+              console.log(`DEBUG: OVMS embedding format, embedding length: ${embedding.length}`)
+            } else {
+              throw new Error(
+                `OVMS response does not contain valid embedding data. Available keys: ${Object.keys(ovmsResponse)}`,
+              )
+            }
+          } else {
+            // Ollama can use either format
+            const ollamaResponse: OllamaEmbedResponse = JSON.parse(responseText)
+
+            if (
+              ollamaResponse.embeddings &&
+              Array.isArray(ollamaResponse.embeddings) &&
+              ollamaResponse.embeddings.length > 0
+            ) {
+              // /api/embed format: { "embeddings": [[...]] }
+              embedding = ollamaResponse.embeddings[0]
+              console.log(`DEBUG: Using 'embeddings' format, embedding length: ${embedding.length}`)
+            } else if (ollamaResponse.embedding && Array.isArray(ollamaResponse.embedding)) {
+              // /api/embeddings format: { "embedding": [...] }
+              embedding = ollamaResponse.embedding
+              console.log(`DEBUG: Using 'embedding' format, embedding length: ${embedding.length}`)
+            } else {
+              throw new Error(
+                `Ollama response does not contain valid embedding data. Available keys: ${Object.keys(ollamaResponse)}`,
+              )
+            }
+          }
         } catch (parseError) {
           throw new Error(
             `Failed to parse JSON response: ${parseError}. Response: ${responseText.substring(0, 500)}`,
-          )
-        }
-
-        // Handle both response formats: newer /api/embed and older /api/embeddings
-        let embedding: number[]
-
-        if (
-          responseJson.embeddings &&
-          Array.isArray(responseJson.embeddings) &&
-          responseJson.embeddings.length > 0
-        ) {
-          // /api/embed format: { "embeddings": [[...]] }
-          embedding = responseJson.embeddings[0]
-          console.log(`DEBUG: Using 'embeddings' format, embedding length: ${embedding.length}`)
-        } else if (responseJson.embedding && Array.isArray(responseJson.embedding)) {
-          // /api/embeddings format: { "embedding": [...] }
-          embedding = responseJson.embedding
-          console.log(`DEBUG: Using 'embedding' format, embedding length: ${embedding.length}`)
-        } else {
-          throw new Error(
-            `Response does not contain valid embedding data. Available keys: ${Object.keys(responseJson)}`,
           )
         }
 

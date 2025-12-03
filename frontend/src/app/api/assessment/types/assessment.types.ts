@@ -3,7 +3,9 @@
 
 import type { Source } from '../../../../payload-types'
 
-export type OllamaFn = ReturnType<typeof import('ollama-ai-provider-v2').createOllama>
+export type ProviderFn = ReturnType<
+  typeof import('@ai-sdk/openai-compatible').createOpenAICompatible
+>
 
 export type ExtractedJson = {
   type?: string

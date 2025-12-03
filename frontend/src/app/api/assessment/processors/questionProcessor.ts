@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ModelMessage } from 'ai'
-import type { OllamaFn, GeneratedQuestion } from '../types/assessment.types'
+import type { ProviderFn, GeneratedQuestion } from '../types/assessment.types'
 import type { CourseInfo } from '@/lib/types/course-info-types'
 import type { AssessmentQuestion } from '@/lib/types/assessment-types'
 import { ASSESSMENT_REQUEST_TIMEOUT_MS, createDefaultMarkingCriteria } from '../config/constants'
@@ -18,7 +18,7 @@ export async function processQuestion(
   questionText: GeneratedQuestion,
   assessmentType: string,
   difficultyLevel: string,
-  ollama: OllamaFn,
+  provider: ProviderFn,
   selectedModel: string,
   assistantMessage: ModelMessage,
   questionIndex: number,
@@ -56,7 +56,7 @@ export async function processQuestion(
         questionString,
         assessmentType,
         difficultyLevel,
-        ollama,
+        provider,
         selectedModel,
         assistantMessage,
         courseInfo,
@@ -66,7 +66,7 @@ export async function processQuestion(
       // Get the default project rubric
       const projectRubric = await generateProjectRubric(
         difficultyLevel,
-        ollama,
+        provider,
         selectedModel,
         assistantMessage,
         courseInfo || { courseName: 'Project Assessment' }, // Use courseInfo if provided
@@ -195,7 +195,7 @@ export async function processQuestion(
         questionString,
         assessmentType,
         difficultyLevel,
-        ollama,
+        provider,
         selectedModel,
         assistantMessage,
         courseInfo,
@@ -216,7 +216,7 @@ export async function processQuestion(
         modelAnswer,
         assessmentType,
         difficultyLevel,
-        ollama,
+        provider,
         selectedModel,
         assistantMessage,
         courseInfo,

@@ -3,7 +3,10 @@
 
 import { ModelMessage, generateText } from 'ai'
 import { ScoredChunk } from '../types/context-chunk'
-import { createOllama } from 'ollama-ai-provider-v2'
+import { getProvider } from '@/lib/providers'
+// import { ollama } from '../providers/ollama-provider'
+
+const provider = getProvider()
 
 // Configuration
 const CONFIG = {
@@ -14,7 +17,7 @@ const CONFIG = {
   batchDelay: parseInt(process.env.RERANK_BATCH_DELAY || '1000', 10),
   maxChunkLength: parseInt(process.env.MAX_RERANK_CHUNK_LENGTH || '1000', 10),
   defaultModel: process.env.RAG_RERANKER_MODEL || 'llama3.2',
-  ollamaUrl: process.env.OLLAMA_URL || 'http://localhost:11434',
+  ollamaUrl: process.env.PROVIDER_URL || 'http://localhost:5950',
   debug: process.env.DEBUG_RERANKING === 'true',
 }
 
@@ -46,9 +49,6 @@ const logger = {
     console.log('')
   },
 }
-
-// Add type definition for Ollama function
-type OllamaFn = ReturnType<typeof createOllama>
 
 /**
  * Creates a reranking prompt for the given query and chunk
@@ -104,7 +104,6 @@ function extractScore(response: string, fallbackScore: number): number {
  * Reranks a single chunk against the query
  */
 async function rerankChunk(
-  ollama: OllamaFn,
   modelName: string,
   query: string,
   chunk: ScoredChunk,
@@ -119,7 +118,7 @@ async function rerankChunk(
     // Create prompt and generate response
     const prompt = createRerankingPrompt(query, truncatedContent)
     const response = await generateText({
-      model: ollama(modelName),
+      model: provider(modelName),
       messages: [prompt],
       temperature: 0.0,
       maxOutputTokens: 20, // We only need a small response
@@ -137,7 +136,6 @@ async function rerankChunk(
  * Process a batch of chunks for reranking
  */
 async function processBatch(
-  ollama: OllamaFn,
   modelName: string,
   query: string,
   batchChunks: ScoredChunk[],
@@ -156,7 +154,7 @@ async function processBatch(
     }
 
     // Rerank this chunk
-    const score = await rerankChunk(ollama, modelName, query, chunk, actualIndex)
+    const score = await rerankChunk(modelName, query, chunk, actualIndex)
 
     results.push({ index: actualIndex, score })
   }
@@ -177,9 +175,6 @@ export async function rerankWithOllama(
   logger.log(`Number of chunks to rerank: ${chunks.length}`)
 
   try {
-    // Configure Ollama client
-    const ollama = createOllama({ baseURL: CONFIG.ollamaUrl + '/api' })
-
     // Prepare reranked chunks
     const rerankedChunks = [...chunks] // Clone to avoid mutating original
 
@@ -194,7 +189,7 @@ export async function rerankWithOllama(
       )
 
       const batchChunks = chunks.slice(i, i + batchSize)
-      const batchResults = await processBatch(ollama, rerankerModel, query, batchChunks, i)
+      const batchResults = await processBatch(rerankerModel, query, batchChunks, i)
 
       // Update scores from batch results
       batchResults.forEach(({ index, score }) => {

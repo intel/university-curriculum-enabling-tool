@@ -1,12 +1,13 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { createOllama } from 'ollama-ai-provider-v2'
+import { getProvider } from '@/lib/providers'
 import { type ModelMessage, generateObject } from 'ai'
 import { NextResponse } from 'next/server'
 import { getStoredChunks } from '@/lib/chunk/get-stored-chunks'
 import { effectiveTokenCountForText } from '@/lib/utils'
 import { errorResponse } from '@/lib/api-response'
+import { z } from 'zod'
 import type { ClientSource } from '@/lib/types/client-source'
 import type { ContextChunk } from '@/lib/types/context-chunk'
 
@@ -17,6 +18,57 @@ const TEMPERATURE = Number.parseFloat(process.env.RAG_TEMPERATURE || '0.1')
 const TOKEN_MAX = Number.parseInt(process.env.RAG_TOKEN_MAX ?? '2048')
 const TOKEN_RESPONSE_BUDGET = 2048
 const TOKEN_CONTEXT_BUDGET = 1024
+
+const provider = getProvider()
+
+// Zod schemas for quiz generation
+const mcqQuestionSchema = z.object({
+  question: z.string().describe('The question text'),
+  options: z.array(z.string()).length(4).describe('Exactly 4 answer options'),
+  correctAnswer: z.string().describe('The correct answer from the options'),
+  explanation: z.string().describe('Detailed explanation of why the answer is correct'),
+  type: z.literal('mcq'),
+  difficulty: z.string(),
+})
+
+const fillInTheBlankQuestionSchema = z.object({
+  question: z.string().describe('The question text with [BLANK] placeholder'),
+  correctAnswer: z.string().describe('The word or phrase that fills the blank'),
+  explanation: z.string().describe('Explanation of the answer with context'),
+  type: z.literal('fillInTheBlank'),
+  difficulty: z.string(),
+})
+
+const shortAnswerQuestionSchema = z.object({
+  question: z.string().describe('The open-ended question'),
+  correctAnswer: z.string().describe('Model answer with key points'),
+  explanation: z.string().describe('Scoring criteria and acceptable variations'),
+  type: z.literal('shortAnswer'),
+  difficulty: z.string(),
+})
+
+const trueFalseQuestionSchema = z.object({
+  statement: z.string().describe('The statement to evaluate as true or false'),
+  correctAnswer: z.string().describe('Either "True" or "False"'),
+  explanation: z.string().describe('Detailed explanation of why the statement is true or false'),
+  type: z.literal('trueFalse'),
+  difficulty: z.string(),
+})
+
+const getQuizSchema = (questionType: string) => {
+  const questionSchema =
+    questionType === 'mcq'
+      ? mcqQuestionSchema
+      : questionType === 'fillInTheBlank'
+        ? fillInTheBlankQuestionSchema
+        : questionType === 'shortAnswer'
+          ? shortAnswerQuestionSchema
+          : trueFalseQuestionSchema
+
+  return z.object({
+    questions: z.array(questionSchema).describe('Array of quiz questions'),
+  })
+}
 
 export async function POST(req: Request) {
   try {
@@ -40,12 +92,6 @@ export async function POST(req: Request) {
       courseInfo,
       searchKeywords,
     })
-
-    const ollamaUrl = process.env.OLLAMA_URL
-    if (!ollamaUrl) {
-      throw new Error('OLLAMA_URL is not defined in environment variables.')
-    }
-    const ollama = createOllama({ baseURL: ollamaUrl + '/api' })
 
     const getQuestionTypePrompt = (type: string, difficulty: string, lang: 'en' | 'id') => {
       const basePromptsEN = {
@@ -431,20 +477,18 @@ IMPORTANT:
 
     const fullMessages = [systemMessage, assistantMessage, userMessage]
 
-    console.log('Generating quiz with Ollama...')
+    console.log('Generating quiz..')
     const startTime = Date.now()
+
+    // Use proper Zod schema for OVMS compatibility (requires json_schema mode)
     const { object: quiz, usage } = await generateObject({
-      model: ollama(selectedModel),
-      output: 'no-schema',
+      model: provider(selectedModel),
+      schema: getQuizSchema(questionType),
       messages: fullMessages,
       temperature: TEMPERATURE,
-      maxOutputTokens: TOKEN_RESPONSE_BUDGET,
       providerOptions: {
-        ollama: {
-          mode: 'json',
-          options: {
-            numCtx: TOKEN_RESPONSE_BUDGET,
-          },
+        openaiCompatible: {
+          numCtx: TOKEN_MAX,
         },
       },
     })

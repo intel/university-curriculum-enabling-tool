@@ -17,11 +17,11 @@ if (Test-Path $NodeEnvScript) {
 # Function to safely remove directories with long paths
 function Remove-DirectorySafely {
     param($path)
-    
+
     if (-not (Test-Path $path)) {
         return
     }
-    
+
     try {
         # First try the standard removal
         Remove-Item $path -Recurse -Force -ErrorAction Stop
@@ -29,21 +29,21 @@ function Remove-DirectorySafely {
         # If that fails, try using robocopy to create an empty directory and mirror it
         # This is a Windows-specific technique for handling long paths
         Write-Host "Standard removal failed for $path, trying alternative method..."
-        
+
         try {
             # Create a temporary empty directory
             $tempDir = Join-Path $env:TEMP "empty_$(Get-Random)"
             New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
-            
+
             # Use robocopy to mirror the empty directory over the target (effectively deleting it)
             $null = & robocopy $tempDir $path /MIR /R:0 /W:0 /NP /NFL /NDL /NJH /NJS 2>$null
-            
+
             # Remove the now-empty target directory
             Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
-            
+
             # Clean up the temporary directory
             Remove-Item $tempDir -Force -ErrorAction SilentlyContinue
-            
+
             Write-Host "Successfully removed $path using alternative method"
         } catch {
             Write-Host "Warning: Could not fully remove $path. Some files may remain due to path length limitations."
@@ -55,17 +55,17 @@ function Remove-DirectorySafely {
 # Function to find the distribution package directory for a given persona
 function Find-DistPackage {
     param($persona)
-    
+
     $distDir = Join-Path $RepoDir "dist"
     $packageName = ""
-    
+
     if (-not (Test-Path $distDir)) {
         return $null
     }
-    
+
     if ($persona -eq "faculty") {
         # For faculty persona, find directories that don't end with persona names
-        $packageName = Get-ChildItem $distDir -Directory | 
+        $packageName = Get-ChildItem $distDir -Directory |
             Where-Object { $_.Name -notmatch "-lecturer$" -and $_.Name -notmatch "-student$" -and $_.Name -ne "dist" } |
             Sort-Object Name | Select-Object -Last 1
     } else {
@@ -74,7 +74,7 @@ function Find-DistPackage {
             Where-Object { $_.Name -match "-$persona$" } |
             Sort-Object Name | Select-Object -Last 1
     }
-    
+
     if ($packageName -and (Test-Path (Join-Path $packageName.FullName ".version"))) {
         return $packageName.FullName
     } else {
@@ -91,27 +91,27 @@ if (Test-Path (Join-Path $ProjectRoot ".version")) {
     Write-Host "Detected distribution package environment (version: $Version)"
 } else {
     Write-Host "Detected repository environment"
-    
+
     # Default persona is faculty if not specified
     $Persona = if ($args[0]) { $args[0] } else { "faculty" }
 }
 
 # Store original repository directory
 $RepoDir = $ProjectRoot
-    
+
     # When running from repository, always use repository scripts
     if (Test-Path (Join-Path $RepoDir ".git")) {
         Write-Host "Repository environment detected. Will use repository scripts for uninstallation."
-        
+
         # Check if dist package exists (for informational purposes only)
         $DistPackage = Find-DistPackage $Persona
-        
+
         if ($DistPackage -and (Test-Path (Join-Path $DistPackage ".version"))) {
             Write-Host "Found dist package at: $DistPackage (but will use repository scripts for uninstallation)"
         } else {
             Write-Host "No valid dist package found. Will use repository scripts for uninstallation."
         }
-        
+
         # Keep RepoDir pointing to the repository root
     } else {
         Write-Host "ERROR: Not in a repository or dist package environment."
@@ -148,7 +148,7 @@ if ($IsDistPackage -eq $true) {
 # First check if required modules are installed
 if ((Test-Path $NodeBin) -and (Test-Path $UtilsPath)) {
     Write-Host "Found local Node.js binary and utils.mjs script..."
-    
+
     # Try to run the script with a simple check
     try {
         & $NodeBin -e "process.exit(0);" 2>$null
@@ -196,8 +196,8 @@ if ($env:SKIP_REMOVE_COMPONENTS) {
     }
 }
 
-# Kill running Node.js, PM2, and Ollama processes before removal
-Write-Host "Stopping any running Node.js, PM2, and Ollama processes..."
+# Kill running Node.js, PM2, Ollama, and OVMS processes before removal
+Write-Host "Stopping any running Node.js, PM2, Ollama, and OVMS processes..."
 try {
     $nodeProcs = Get-Process -Name node -ErrorAction SilentlyContinue
     if ($nodeProcs) {
@@ -219,6 +219,13 @@ try {
         $ollamaProcs | ForEach-Object { $_.Kill() }
     }
 } catch {}
+try {
+    $ovmsProcs = Get-Process | Where-Object { $_.Name -like '*ovms*' }
+    if ($ovmsProcs) {
+        Write-Host "Killing all processes with 'ovms' in their name..."
+        $ovmsProcs | ForEach-Object { $_.Kill() }
+    }
+} catch {}
 # try {
 #     $ollamaLibProcs = Get-Process -Name ollama-lib,ollama-lib.exe -ErrorAction SilentlyContinue
 #     if ($ollamaLibProcs) {
@@ -230,21 +237,28 @@ try {
 # Remove components if requested
 if ($RemoveComponents -eq $true) {
     Write-Host "Removing installed components..."
-    
-    # Remove backend virtual environment
+
+    # Remove backend virtual environment (Ollama)
     $VenvPath = "backend\venv"
     if (Test-Path $VenvPath) {
-        Write-Host "Removing backend virtual environment..."
+        Write-Host "Removing backend virtual environment (Ollama)..."
         Remove-DirectorySafely $VenvPath
     }
-    
+
+    # Remove OVMS backend virtual environment
+    $OvmsVenvPath = "backend\ovms_service\venv"
+    if (Test-Path $OvmsVenvPath) {
+        Write-Host "Removing OVMS backend virtual environment..."
+        Remove-DirectorySafely $OvmsVenvPath
+    }
+
     # Remove frontend build and node_modules
     $NextPath = "frontend\.next"
     if (Test-Path $NextPath) {
         Write-Host "Removing frontend build..."
         Remove-DirectorySafely $NextPath
     }
-    
+
     # Remove all next-<persona> build directories in frontend folder
     if (Test-Path "frontend") {
         $nextDirs = Get-ChildItem "frontend" -Directory | Where-Object { $_.Name -match "^next-" }
@@ -253,31 +267,31 @@ if ($RemoveComponents -eq $true) {
             Remove-DirectorySafely $nextDir.FullName
         }
     }
-    
+
     $FrontendNodeModules = "frontend\node_modules"
     if (Test-Path $FrontendNodeModules) {
         Write-Host "Removing frontend node_modules..."
         Remove-DirectorySafely $FrontendNodeModules
     }
-    
+
     # Remove root node_modules directory
     if (Test-Path "node_modules") {
         Write-Host "Removing root node_modules..."
         Remove-DirectorySafely "node_modules"
     }
-    
-    # Remove thirdparty directory (includes Node.js and Ollama)
+
+    # Remove thirdparty directory (includes Node.js, Ollama, and OVMS)
     if (Test-Path "thirdparty") {
-        Write-Host "Removing thirdparty directory (Node.js, Ollama, etc.)..."
+        Write-Host "Removing thirdparty directory (Node.js, Ollama, OVMS, etc.)..."
         Remove-DirectorySafely "thirdparty"
     }
-    
+
     # Remove data directory
     if (Test-Path "data") {
         Write-Host "Removing data directory..."
         Remove-DirectorySafely "data"
     }
-    
+
     # Remove test logs directory (unless explicitly told to skip it)
     if ((Test-Path "tests\logs") -and ($SkipTestLogs -ne $true)) {
         Write-Host "Removing test logs directory..."
@@ -285,24 +299,24 @@ if ($RemoveComponents -eq $true) {
     } elseif ((Test-Path "tests\logs") -and ($SkipTestLogs -eq $true)) {
         Write-Host "Skipping removal of test logs directory as requested..."
     }
-    
+
     # Remove node_env.ps1 script
     if (Test-Path "node_env.ps1") {
         Write-Host "Removing node_env.ps1 script..."
         Remove-Item "node_env.ps1" -Force
     }
-    
+
     # Remove package.json and package-lock.json
     if (Test-Path "package.json") {
         Write-Host "Removing package.json..."
         Remove-Item "package.json" -Force
     }
-    
+
     if (Test-Path "package-lock.json") {
         Write-Host "Removing package-lock.json..."
         Remove-Item "package-lock.json" -Force
     }
-    
+
     # Remove dist packages - make sure to use the repository directory if we're in repo mode
     if (($IsDistPackage -eq $false) -and $RepoDir -and (Test-Path (Join-Path $RepoDir "dist"))) {
         Write-Host "Removing dist packages from repository..."
@@ -311,7 +325,7 @@ if ($RemoveComponents -eq $true) {
         Write-Host "Removing dist packages..."
         Remove-DirectorySafely "dist"
     }
-    
+
     Write-Host "All components removed successfully."
 }
 

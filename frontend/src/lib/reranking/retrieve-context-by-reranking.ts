@@ -8,12 +8,12 @@ import {
   NoObjectGeneratedError,
   TypeValidationError,
 } from 'ai'
-import { ContextChunk } from '../types/context-chunk'
-import { verifyModel } from '../model/model-manager'
-import { createOllama } from 'ollama-ai-provider-v2'
+import { ContextChunk, ScoredChunk } from '../types/context-chunk'
+import { getProvider, getProviderInfo } from '@/lib/providers'
 import { EmbeddingChunk } from '../types/embedding-chunk'
 import { z } from 'zod'
 import { effectiveTokenCountForText } from '../utils'
+import { rerankWithOVMS } from './ovms-rerank'
 
 // Define a schema for the reranking output.
 const rerankingSchema = z.object({
@@ -24,6 +24,8 @@ const rerankingSchema = z.object({
     }),
   ),
 })
+
+const provider = getProvider()
 
 export interface RerankingResult {
   candidate: number
@@ -39,7 +41,7 @@ export interface RerankingResult {
  * @param similarityTopK - The number of top candidates to select based on similarity.
  * @param rerankingTopK - The number of top candidates to rerank.
  * @param similarityThreshold - The threshold for filtering candidates based on similarity.
- * @param rerankingModel - The model used for reranking.
+ * @param rerankingModel - The model used for reranking (optional - reads from env if not provided).
  * @param tokenMax - The maximum number of tokens for the model.
  * @returns A promise that resolves to an array of reranked context chunks.
  */
@@ -50,9 +52,28 @@ export async function retrieveContextByReranking(
   similarityTopK: number = parseInt(process.env.RAG_CONTEXT_SIMILARITY_TOP_K || '5', 10),
   rerankingTopK: number = parseInt(process.env.RAG_RERANKING_TOP_K || '15', 10),
   similarityThreshold: number = parseFloat(process.env.RAG_CONTEXT_SIMILARITY_THRESHOLD || '0.8'),
-  rerankingModel: string = process.env.RAG_RERANKING_MODEL || 'llama3.2',
+  rerankingModel?: string,
   tokenMax: number = parseInt(process.env.RAG_TOKEN_MAX ?? '1024'),
 ): Promise<ContextChunk[]> {
+  // Get provider info to determine which reranking model to use
+  const { service } = getProviderInfo()
+
+  // Determine the reranking model from environment if not provided
+  let effectiveRerankingModel: string
+  if (rerankingModel) {
+    effectiveRerankingModel = rerankingModel
+  } else if (service === 'ovms') {
+    effectiveRerankingModel = process.env.OVMS_RERANKING_MODEL || ''
+    if (!effectiveRerankingModel) {
+      throw new Error('OVMS_RERANKING_MODEL environment variable is not set')
+    }
+  } else {
+    effectiveRerankingModel = process.env.OLLAMA_RERANKING_MODEL || ''
+    if (!effectiveRerankingModel) {
+      throw new Error('OLLAMA_RERANKING_MODEL environment variable is not set')
+    }
+  }
+
   // Step 1: Compute cosine similarity for each chunk.
   const candidates = storedEmbedding.map((stored) => ({
     ...stored,
@@ -99,8 +120,52 @@ export async function retrieveContextByReranking(
   //   // chunk: candidate.chunk,
   // })));
 
-  // Construct the prompt for the reranking model.
-  const rerankingPrompt = `
+  let combinedCandidates: typeof topCandidates = topCandidates // Default to topCandidates
+
+  // Choose reranking strategy based on provider
+  if (service === 'ovms') {
+    // OVMS: Use dedicated /v3/rerank endpoint (efficient batch API)
+    console.log(`Using OVMS rerank API with model: ${effectiveRerankingModel}`)
+
+    try {
+      // Convert to ScoredChunk format for OVMS reranker
+      const scoredChunks: ScoredChunk[] = topCandidates.map((c, index) => ({
+        chunk: c.chunk || '',
+        similarity: c.similarity,
+        combinedScore: c.similarity,
+        sourceId: c.sourceId,
+        sourceType: c.sourceType,
+        order: c.order,
+        originalIndex: index,
+        bm25Score: 0, // Not used in this context
+        semanticScore: c.similarity, // Use similarity as semantic score
+      }))
+
+      // Call OVMS rerank API
+      const reranked = await rerankWithOVMS(query, scoredChunks, effectiveRerankingModel)
+
+      // Convert back to candidate format
+      combinedCandidates = reranked.map((scored) => {
+        const originalCandidate = topCandidates[scored.originalIndex]
+        return {
+          chunk: scored.chunk,
+          embedding: originalCandidate?.embedding || [],
+          sourceId: scored.sourceId,
+          similarity: scored.combinedScore, // Use combined score from OVMS
+          order: scored.order,
+          sourceType: scored.sourceType,
+        }
+      })
+    } catch (error) {
+      console.error('OVMS reranking failed, falling back to similarity scores:', error)
+      // combinedCandidates already set to topCandidates
+    }
+  } else {
+    // Ollama: Use LLM-based prompt reranking
+    console.log(`Using Ollama LLM-based reranking with model: ${effectiveRerankingModel}`)
+
+    // Construct the prompt for the reranking model.
+    const rerankingPrompt = `
 You are an expert in assessing relevance for retrieval augmented generation.
 Given the query:
 "${query}"
@@ -130,129 +195,124 @@ Example Correct Response:
 }"
 `
 
-  // [DEBUG] show the reranking prompt
-  // console.log(`rerankingResult: ${rerankingPrompt}`);
+    // [DEBUG] show the reranking prompt
+    // console.log(`rerankingResult: ${rerankingPrompt}`);
 
-  let rerankingResult: RerankingResult[] = []
-  let combinedCandidates: typeof topCandidates = topCandidates // Default to topCandidates
+    let rerankingResult: RerankingResult[] = []
 
-  try {
-    // Verify the reranking model.
-    const ollamaUrl = process.env.OLLAMA_URL
-    const modelVerified = await verifyModel(ollamaUrl, rerankingModel)
-    if (!modelVerified) {
-      throw new Error('Failed to verify model.')
-    }
+    try {
+      // Note: We don't pre-verify the model exists. Like Ollama, we just try to use it.
+      // The provider will auto-download if missing, or return an error if it fails.
+      console.log(`Reranking the context with model: ${effectiveRerankingModel}`)
 
-    // Create an instance of the Ollama AI provider.
-    const ollama = createOllama({ baseURL: `${ollamaUrl}/api` })
-    console.log(`Reranking the context`)
+      // Start timing the reranking process.
+      const startTime = Date.now()
 
-    // Start timing the reranking process.
-    const startTime = Date.now()
-
-    // Generate the reranking result using the model.
-    const { object, usage } = await generateObject({
-      model: ollama(rerankingModel),
-      mode: 'json',
-      schema: rerankingSchema,
-      prompt: rerankingPrompt,
-      maxOutputTokens: tokenMax,
-      providerOptions: {
-        ollama: {
-          mode: 'json',
-          options: {
-            numCtx: tokenMax, // 2048 tokens for context window
+      // Generate the reranking result using the model.
+      const { object, usage } = await generateObject({
+        model: provider(effectiveRerankingModel),
+        mode: 'json',
+        schema: rerankingSchema,
+        prompt: rerankingPrompt,
+        maxOutputTokens: tokenMax,
+        providerOptions: {
+          ollama: {
+            mode: 'json',
+            options: {
+              numCtx: tokenMax, // 2048 tokens for context window
+            },
           },
         },
-      },
-    })
+      })
 
-    // End timing and calculate the time taken.
-    const endTime = Date.now()
-    const timeTakenMs = endTime - startTime
-    const timeTakenSeconds = timeTakenMs / 1000
+      // End timing and calculate the time taken.
+      const endTime = Date.now()
+      const timeTakenMs = endTime - startTime
+      const timeTakenSeconds = timeTakenMs / 1000
 
-    // Calculate token generation speed.
-    const totalTokens = usage.outputTokens || 0
-    const tokenGenerationSpeed = totalTokens / timeTakenSeconds
+      // Calculate token generation speed.
+      const totalTokens = usage.outputTokens || 0
+      const tokenGenerationSpeed = totalTokens / timeTakenSeconds
 
-    console.log(
-      `Usage tokens: ` +
-        `promptEst(${effectiveTokenCountForText(rerankingPrompt)}) ` +
-        `prompt(${usage.inputTokens}) ` +
-        `completion(${usage.outputTokens}) | ` +
-        `${tokenGenerationSpeed.toFixed(2)} t/s | ` +
-        `Duration: ${timeTakenSeconds.toFixed(2)} s`,
-    )
+      console.log(
+        `Usage tokens: ` +
+          `promptEst(${effectiveTokenCountForText(rerankingPrompt)}) ` +
+          `prompt(${usage.inputTokens}) ` +
+          `completion(${usage.outputTokens}) | ` +
+          `${tokenGenerationSpeed.toFixed(2)} t/s | ` +
+          `Duration: ${timeTakenSeconds.toFixed(2)} s`,
+      )
 
-    // [DEBUG] show the generated output (output automatically sorted highest to low)
-    // console.log(`ranking: ${JSON.stringify(object.ranking, null, 2)}`);
+      // [DEBUG] show the generated output (output automatically sorted highest to low)
+      // console.log(`ranking: ${JSON.stringify(object.ranking, null, 2)}`);
 
-    // Extract candidate and score into a new array of objects.
-    rerankingResult = object.ranking.map((item) => ({
-      candidate: item.candidate,
-      score: item.score,
-    }))
+      // Extract candidate and score into a new array of objects.
+      rerankingResult = object.ranking.map((item) => ({
+        candidate: item.candidate,
+        score: item.score,
+      }))
 
-    // Validate the rerank output.
-    if (!Array.isArray(object.ranking) || object.ranking.length !== topCandidates.length) {
-      throw new Error(`Invalid reranking output: ${object.ranking.length}/${topCandidates.length}`)
-    }
-
-    // Update topCandidates with the new similarity scores.
-    combinedCandidates = topCandidates.map((candidate, index) => {
-      // Use the index to find the corresponding ranking entry.
-      const rankingEntry = rerankingResult.find((r) => r.candidate === index + 1)
-      if (rankingEntry && rankingEntry.score !== undefined) {
-        console.log(
-          `DEBUG: index ${index + 1}, order: ${candidate.order}, sourceId: ${candidate.sourceId}, current similarity: ${candidate.similarity}, reranked score: ${rankingEntry.score}`,
+      // Validate the rerank output.
+      if (!Array.isArray(object.ranking) || object.ranking.length !== topCandidates.length) {
+        throw new Error(
+          `Invalid reranking output: ${object.ranking.length}/${topCandidates.length}`,
         )
-        return {
-          ...candidate,
-          similarity: (candidate.similarity + rankingEntry.score) / 2,
+      }
+
+      // Update topCandidates with the new similarity scores.
+      combinedCandidates = topCandidates.map((candidate, index) => {
+        // Use the index to find the corresponding ranking entry.
+        const rankingEntry = rerankingResult.find((r) => r.candidate === index + 1)
+        if (rankingEntry && rankingEntry.score !== undefined) {
+          console.log(
+            `DEBUG: index ${index + 1}, order: ${candidate.order}, sourceId: ${candidate.sourceId}, current similarity: ${candidate.similarity}, reranked score: ${rankingEntry.score}`,
+          )
+          return {
+            ...candidate,
+            similarity: (candidate.similarity + rankingEntry.score) / 2,
+          }
+        } else {
+          console.log(`No matching ranking entry found for index ${index}`)
         }
-      } else {
-        console.log(`No matching ranking entry found for index ${index}`)
-      }
-      return candidate
-    })
-  } catch (error) {
-    // Handle errors during the reranking process.
-    console.log(`Error: ${error}`)
-    if (APICallError.isInstance(error)) {
-      console.log(`Error data: ${error.data}`)
-      console.log(`Error message (APICallError): ${error}`)
+        return candidate
+      })
+    } catch (error) {
+      // Handle errors during the reranking process.
+      console.log(`Error: ${error}`)
+      if (APICallError.isInstance(error)) {
+        console.log(`Error data: ${error.data}`)
+        console.log(`Error message (APICallError): ${error}`)
 
-      if (TypeValidationError.isInstance(error.cause)) {
-        console.log(`Error cause: ${error.cause.message}`)
-      }
-
-      console.log(`Error message: ${error.message}`)
-      console.log(`Error responseBody: ${error.responseBody}`)
-      const errorResponse = JSON.parse(`${error.responseBody}`)
-
-      if (errorResponse.message && typeof errorResponse.message.content === 'string') {
-        try {
-          errorResponse.message.content = JSON.parse(errorResponse.message.content)
-        } catch (parseError) {
-          console.log('Failed to parse content as JSON:', parseError)
+        if (TypeValidationError.isInstance(error.cause)) {
+          console.log(`Error cause: ${error.cause.message}`)
         }
-      } else {
-        console.log('No valid JSON content to parse in errorResponse.message.content')
-      }
 
-      // [DEBUG] Show full error response of API Call Error
-      const prettyErrorResponse = JSON.stringify(errorResponse, null, 2)
-      console.log(prettyErrorResponse)
-    } else if (NoObjectGeneratedError.isInstance(error)) {
-      console.log('NoObjectGeneratedError')
-      if (TypeValidationError.isInstance(error.cause)) {
-        console.log(`cause message: ${error.cause.message}`)
+        console.log(`Error message: ${error.message}`)
+        console.log(`Error responseBody: ${error.responseBody}`)
+        const errorResponse = JSON.parse(`${error.responseBody}`)
+
+        if (errorResponse.message && typeof errorResponse.message.content === 'string') {
+          try {
+            errorResponse.message.content = JSON.parse(errorResponse.message.content)
+          } catch (parseError) {
+            console.log('Failed to parse content as JSON:', parseError)
+          }
+        } else {
+          console.log('No valid JSON content to parse in errorResponse.message.content')
+        }
+
+        // [DEBUG] Show full error response of API Call Error
+        const prettyErrorResponse = JSON.stringify(errorResponse, null, 2)
+        console.log(prettyErrorResponse)
+      } else if (NoObjectGeneratedError.isInstance(error)) {
+        console.log('NoObjectGeneratedError')
+        if (TypeValidationError.isInstance(error.cause)) {
+          console.log(`cause message: ${error.cause.message}`)
+        }
+        console.log('Text:', error.text)
+        console.log('Response:', error.response)
+        console.log('Usage:', error.usage)
       }
-      console.log('Text:', error.text)
-      console.log('Response:', error.response)
-      console.log('Usage:', error.usage)
     }
   }
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { generateText, type ModelMessage } from 'ai'
-import type { OllamaFn, AssessmentMetadata } from '../types/assessment.types'
+import type { ProviderFn, AssessmentMetadata } from '../types/assessment.types'
 import type { CourseInfo } from '@/lib/types/course-info-types'
 import { TEMPERATURE, TOKEN_MAX, langDirective, getDefaultDuration } from '../config/constants'
 import { extractJsonFromText } from '../utils/jsonHelpers'
@@ -11,7 +11,7 @@ import { stripThinkTags } from '../utils/generalHelpers'
 export async function generateAssessmentMetadata(
   assessmentType: string,
   difficultyLevel: string,
-  ollama: OllamaFn,
+  provider: ProviderFn,
   selectedModel: string,
   assistantMessage: ModelMessage,
   courseInfo: CourseInfo | undefined,
@@ -147,7 +147,7 @@ DO NOT include any text outside the JSON object.`
 
   try {
     const response = await generateText({
-      model: ollama(selectedModel),
+      model: provider(selectedModel),
       messages: [systemMessage, assistantMessage, userMessage],
       temperature: TEMPERATURE,
       maxOutputTokens: Math.floor(TOKEN_MAX / 4),

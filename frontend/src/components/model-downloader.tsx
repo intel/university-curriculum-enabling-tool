@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import {
   DialogContent,
   DialogHeader,
@@ -19,6 +19,7 @@ import { z } from 'zod'
 import { standardSchemaResolver } from '@hookform/resolvers/standard-schema'
 import { throttle } from 'lodash'
 import { Info, Loader2 } from 'lucide-react'
+import type { AIService } from '@/lib/providers'
 
 interface ModelDownloaderProps {
   open: boolean
@@ -29,10 +30,11 @@ const formSchema = z.object({
   name: z.string().min(1, {
     message: 'Please select a model to download',
   }),
+  hfToken: z.string().optional(),
 })
 
 export function ModelDownloader({ open, onOpenChange }: ModelDownloaderProps) {
-  // const { addModel } = useModelStore()
+  const [aiService, setAiService] = useState<AIService>('ollama')
 
   const {
     isDownloading,
@@ -45,10 +47,29 @@ export function ModelDownloader({ open, onOpenChange }: ModelDownloaderProps) {
 
   const { mutate } = useModels()
 
+  // Fetch provider info on mount
+  useEffect(() => {
+    const fetchProviderInfo = async () => {
+      try {
+        const response = await fetch('/api/provider-info')
+        if (response.ok) {
+          const data = await response.json()
+          if (data.success && data.provider) {
+            setAiService(data.provider.service)
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch provider info:', error)
+      }
+    }
+    fetchProviderInfo()
+  }, [])
+
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: standardSchemaResolver(formSchema),
     defaultValues: {
       name: '',
+      hfToken: '',
     },
   })
 
@@ -63,12 +84,22 @@ export function ModelDownloader({ open, onOpenChange }: ModelDownloaderProps) {
     const lastStatus: string | null = null
 
     try {
-      const response = await fetch('/api/model', {
+      // Use different endpoints based on AI service
+      const endpoint = aiService === 'ovms' ? '/api/ovms/download-model' : '/api/model'
+      const requestBody =
+        aiService === 'ovms'
+          ? {
+              modelId: modelName,
+              hfToken: data.hfToken || undefined,
+            }
+          : { name: modelName }
+
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ name: modelName }),
+        body: JSON.stringify(requestBody),
       })
 
       if (!response.ok) {
@@ -81,9 +112,12 @@ export function ModelDownloader({ open, onOpenChange }: ModelDownloaderProps) {
 
       await processStream(response.body, throttledSetProgress, lastStatus)
 
-      toast.success('Model downloaded successfully')
+      toast.success(
+        aiService === 'ovms'
+          ? 'Model downloaded and converted successfully'
+          : 'Model downloaded successfully',
+      )
       mutate() // Fetch the updated list of models after download
-      // onClose(); // Close the dialog after download
       onOpenChange(false) // Close the dialog after download
     } catch (error) {
       toast.error(`Error: ${error instanceof Error ? error.message : 'Failed to download model'}`)
@@ -178,9 +212,15 @@ export function ModelDownloader({ open, onOpenChange }: ModelDownloaderProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[525px]">
         <DialogHeader>
-          <DialogTitle>Download Model</DialogTitle>
+          <DialogTitle>
+            {aiService === 'ovms'
+              ? 'Add Pre-trained Model from HuggingFace Library'
+              : 'Download Model'}
+          </DialogTitle>
           <DialogDescription>
-            Download additional AI models to use in your courses
+            {aiService === 'ovms'
+              ? 'Download and convert models from HuggingFace Hub to use in your courses'
+              : 'Download additional AI models to use in your courses'}
           </DialogDescription>
         </DialogHeader>
 
@@ -188,13 +228,15 @@ export function ModelDownloader({ open, onOpenChange }: ModelDownloaderProps) {
           <div className="mb-4 flex rounded-md bg-muted p-3">
             <Info className="mr-2 h-5 w-5 flex-shrink-0 text-blue-500" />
             <p className="text-sm">
-              Downloaded models will be stored locally. Make sure you have enough disk space
-              available.
+              {aiService === 'ovms'
+                ? 'Models will be downloaded from HuggingFace Hub, converted to OpenVINO IR format, and configured for OVMS. This process may take 10-30 minutes depending on model size.'
+                : 'Downloaded models will be stored locally. Make sure you have enough disk space available.'}
             </p>
           </div>
 
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="w-full space-y-6">
+              {/* Model Name Field */}
               <FormField
                 control={form.control}
                 name="name"
@@ -205,15 +247,22 @@ export function ModelDownloader({ open, onOpenChange }: ModelDownloaderProps) {
                       <Input
                         {...field}
                         type="text"
-                        placeholder="llama2"
+                        placeholder={
+                          aiService === 'ovms' ? 'OpenVINO/Qwen2.5-1.5B-Instruct-int8-ov' : 'llama2'
+                        }
                         value={field.value || ''}
                       />
                     </FormControl>
                     <p className="pt-1 text-xs">
                       Check the{' '}
                       <a
-                        href="https://ollama.com/library"
+                        href={
+                          aiService === 'ovms'
+                            ? 'https://huggingface.co/OpenVINO/models'
+                            : 'https://ollama.com/library'
+                        }
                         target="_blank"
+                        rel="noopener noreferrer"
                         className="text-blue-500 underline"
                       >
                         library
@@ -221,28 +270,69 @@ export function ModelDownloader({ open, onOpenChange }: ModelDownloaderProps) {
                       for a list of available models.
                     </p>
                     <FormMessage />
-                    <div className="w-full space-y-2">
-                      <Button type="submit" className="w-full" disabled={isDownloading}>
-                        {isDownloading ? (
-                          <div className="flex items-center gap-2">
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                            <span>
-                              Downloading {downloadingModel}... {downloadProgress.toFixed(0)}%
-                            </span>
-                          </div>
-                        ) : (
-                          'Download model'
-                        )}
-                      </Button>
-                      <p className="text-center text-xs">
-                        {isDownloading
-                          ? 'This may take a while. You can safely close this modal and continue using the app.'
-                          : 'Pressing the button will download the specified model to your device.'}
-                      </p>
-                    </div>
                   </FormItem>
                 )}
               />
+
+              {/* HuggingFace Token Field (OVMS only) */}
+              {aiService === 'ovms' && (
+                <FormField
+                  control={form.control}
+                  name="hfToken"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>HuggingFace Token</FormLabel>
+                      <FormControl>
+                        <Input
+                          {...field}
+                          type="password"
+                          placeholder="hf_xxxxxxxxxxxxxxxxxxxxx"
+                          value={field.value || ''}
+                        />
+                      </FormControl>
+                      <p className="pt-1 text-xs">
+                        Get your token from{' '}
+                        <a
+                          href="https://huggingface.co/settings/tokens"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-500 underline"
+                        >
+                          HuggingFace Settings
+                        </a>
+                        . Required for downloading models. Leave empty to use server-side token.
+                      </p>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
+
+              {/* Submit Button */}
+              <div className="w-full space-y-2">
+                <Button type="submit" className="w-full" disabled={isDownloading}>
+                  {isDownloading ? (
+                    <div className="flex items-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span>
+                        {aiService === 'ovms' ? 'Converting' : 'Downloading'} {downloadingModel}...{' '}
+                        {downloadProgress.toFixed(0)}%
+                      </span>
+                    </div>
+                  ) : (
+                    <>{aiService === 'ovms' ? 'Download and Convert Model' : 'Download model'}</>
+                  )}
+                </Button>
+                <p className="text-center text-xs">
+                  {isDownloading
+                    ? aiService === 'ovms'
+                      ? 'Model conversion is in progress. This may take 10-30 minutes. You can safely close this modal.'
+                      : 'This may take a while. You can safely close this modal and continue using the app.'
+                    : aiService === 'ovms'
+                      ? 'Pressing the button will download the model from HuggingFace and convert it to OpenVINO IR format.'
+                      : 'Pressing the button will download the specified model to your device.'}
+                </p>
+              </div>
             </form>
           </Form>
         </div>

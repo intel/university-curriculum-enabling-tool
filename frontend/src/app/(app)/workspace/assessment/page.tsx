@@ -170,7 +170,6 @@ export default function AssessmentPage() {
   const [numQuestions, setNumQuestions] = useState<number>(3)
   const [currentView, setCurrentView] = useState<'welcome' | 'config' | 'assessment'>('welcome')
   const [isLoading, setIsLoading] = useState<boolean>(false)
-  const [academicYear, setAcademicYear] = useState<string>('')
 
   const selectedSources = useSourcesStore((state) => state.selectedSources)
   const { getActiveContextModelName, getContextTypeLabel, selectedCourseId } =
@@ -216,7 +215,6 @@ export default function AssessmentPage() {
 
     // Reset the current academic year
     const currentAcademicYear = getCurrentAcademicYear()
-    setAcademicYear(currentAcademicYear)
 
     // Reset form validation
     setIsFormValid(false)
@@ -295,7 +293,7 @@ export default function AssessmentPage() {
         const description = selectedCourse.description || ''
         const title = `${code} ${name} Assessment`
 
-        // Completely replace metadata instead of updating it
+        // Completely replace metadata instead of updating it, but preserve difficulty level
         setMetadata((prev) => ({
           courseCode: code,
           courseName: name,
@@ -329,25 +327,22 @@ export default function AssessmentPage() {
         const description = selectedCourse.description || ''
         const title = `${code} ${name} Assessment`
 
-        // Update metadata state
-        setMetadata({
+        // Update metadata state - MERGE with existing values instead of replacing
+        setMetadata((prev) => ({
+          ...prev, // Keep all existing fields (semester, deadline, groupSize, etc.)
           courseCode: code,
           courseName: name,
           courseDescription: description,
           examTitle: title,
-          academicYear: getCurrentAcademicYear(),
-          semester: '',
-          deadline: '',
-          groupSize: undefined,
-          projectDuration: '',
-          difficultyLevel: '',
-        })
+          academicYear: prev.academicYear || getCurrentAcademicYear(),
+        }))
       }
     }
+    // NOTE: difficultyLevel intentionally excluded from dependencies to prevent metadata wipe
   }, [selectedCourseId, coursesData?.docs])
 
   // Add a validation function after the handleSemesterChange function
-  const validateForm = () => {
+  const validateForm = useCallback(() => {
     // Basic validation for all assessment types
     let valid = assessmentType !== '' && difficultyLevel !== ''
 
@@ -362,9 +357,36 @@ export default function AssessmentPage() {
         !!metadata.groupSize
     }
 
+    console.log('Validation check:', {
+      assessmentType,
+      difficultyLevel,
+      valid,
+      isProject: assessmentType === 'project',
+      projectFields: {
+        projectDuration: metadata.projectDuration,
+        semester: metadata.semester,
+        deadline: metadata.deadline,
+        academicYear: metadata.academicYear,
+        groupSize: metadata.groupSize,
+      },
+    })
+
     setIsFormValid(valid)
     return valid
-  }
+  }, [
+    assessmentType,
+    difficultyLevel,
+    metadata.projectDuration,
+    metadata.semester,
+    metadata.deadline,
+    metadata.academicYear,
+    metadata.groupSize,
+  ])
+
+  // Automatically validate form when relevant fields change
+  useEffect(() => {
+    validateForm()
+  }, [validateForm])
 
   // Update the handleAssessmentTypeChange function to ensure state is updated before view change
   const handleAssessmentTypeChange = (type: string) => {
@@ -432,7 +454,6 @@ export default function AssessmentPage() {
   // Add validation to the other input handlers
   // For academicYear
   const handleAcademicYearChange = (value: string) => {
-    setAcademicYear(value)
     setMetadata((prev) => ({ ...prev, academicYear: value }))
     setTimeout(() => validateForm(), 0)
   }
@@ -1073,7 +1094,7 @@ export default function AssessmentPage() {
                   <Label htmlFor="academicYear">Academic Year *</Label>
                   <Input
                     id="academicYear"
-                    value={academicYear}
+                    value={metadata.academicYear || ''}
                     onChange={(e) => handleAcademicYearChange(e.target.value)}
                     placeholder="Auto-set to current academic year"
                     className="mt-1"

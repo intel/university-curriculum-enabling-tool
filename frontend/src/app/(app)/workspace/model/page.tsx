@@ -6,6 +6,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import { usePersonaStore } from '@/lib/store/persona-store'
 import { useModelStore } from '@/lib/store/model-store'
+import { getAIService } from '@/lib/providers'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -75,6 +76,10 @@ export default function ModelPage() {
   const { activePersona } = usePersonaStore()
   const { models, setSelectedModel } = useModelStore()
   const { deleteModelByName } = useDeleteModel()
+
+  // Get the AI service to determine which library to show
+  const aiService = getAIService()
+  const modelLibraryName = aiService === 'ovms' ? 'HuggingFace Library' : 'Ollama Library'
 
   const [searchTerm, setSearchTerm] = useState('')
   const [isDownloaderOpen, setIsDownloaderOpen] = useState(false)
@@ -356,7 +361,7 @@ export default function ModelPage() {
             </DropdownMenuTrigger>
             <DropdownMenuContent>
               <DropdownMenuItem onClick={() => setIsDownloaderOpen(true)}>
-                Add Pre-trained Model From Ollama Library
+                Add Pre-trained Model From {modelLibraryName}
               </DropdownMenuItem>
               <DropdownMenuItem
                 disabled
@@ -391,7 +396,7 @@ export default function ModelPage() {
           </DropdownMenuTrigger>
           <DropdownMenuContent className="mr-2">
             <DropdownMenuItem onClick={() => setIsDownloaderOpen(true)}>
-              Add Pre-trained Model From Ollama Library
+              Add Pre-trained Model From {modelLibraryName}
             </DropdownMenuItem>
             <DropdownMenuItem disabled onClick={() => router.push('/workspace/model/upload_model')}>
               Add Fine-tuned Model (Coming Soon)

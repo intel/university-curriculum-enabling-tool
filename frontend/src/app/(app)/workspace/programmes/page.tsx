@@ -91,12 +91,6 @@ import { Programme } from '@/payload-types'
 import { useCourses } from '@/lib/hooks/use-courses'
 import { Skeleton } from '@/components/ui/skeleton'
 
-// Define the expected error interface
-interface ExportError {
-  error: string
-  details: string
-}
-
 // Define the export package state type
 type ExportPackageState = {
   isOpen: boolean
@@ -469,99 +463,77 @@ export default function ProgrammesPage() {
       isComplete: false,
     }))
 
-    // Simulate package creation with progress updates
     try {
       const programme = programmesData?.docs.find(
         (p: Programme) => p.id === exportPackage.programmeId,
       )
       if (!programme) return
+
+      // Step 1: Preparing programme files
+      await simulateProgress(0, 20, 'Preparing programme files...', 500)
+
+      // Step 2: Preparing prebuilt software package
+      await simulateProgress(20, 40, 'Preparing the prebuilt software package...', 500)
+
+      // Step 3: Retrieving model files
+      await simulateProgress(40, 60, 'Retrieving model files...', 500)
+
+      // Step 4: Creating the ZIP package and triggering download
+      setExportPackage((prev) => ({
+        ...prev,
+        status: 'Starting ZIP download...',
+        progress: 70,
+      }))
+
+      // Use a simple POST request with fetch and get the blob
       const response = await fetch('/api/programmes/download', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({
           persona: exportPackage.targetPersona,
-          programme,
+          programme: programme,
         }),
       })
 
-      if (!response.ok || !response.body) {
-        const errorMessage = (await response.json().catch(() => null)) as ExportError | null
-        throw new Error(errorMessage?.details || 'Failed to export package: Unknown error')
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Failed to download: ${errorText}`)
       }
-      // Step 1: Preparing programme files
-      await simulateProgress(0, 0, 'Preparing programme files...', 1000)
 
-      // Step 2: Preparing prebuilt software package
-      await simulateProgress(0, 0, 'Preparing the prebuilt software package...', 1000)
-
-      // Step 3: Retrieving model files
-      await simulateProgress(0, 0, 'Retrieving model files...', 1000)
-
-      // Step 4: Bundling the package
-      await simulateProgress(0, 0, 'Creating the ZIP package...', 1000)
-
+      // Get the filename from the Content-Disposition header
       const contentDisposition = response.headers.get('Content-Disposition')
       const filenameMatch = contentDisposition?.match(/filename="(.+)"/)
-      const filename = filenameMatch
-        ? filenameMatch[1]
-        : `${programme.code.toLowerCase()}-${programme.version}.zip`
+      const filename = filenameMatch?.[1] || `programme-${programme.code}-${programme.version}.zip`
 
-      const contentLength = response.headers.get('Content-Length')
-      const totalBytes = contentLength ? parseInt(contentLength, 10) : 0
+      // Step 5: Downloading the ZIP
+      setExportPackage((prev) => ({
+        ...prev,
+        status: 'Downloading ZIP file...',
+        progress: 80,
+      }))
 
-      const reader = response.body.getReader()
-      let receivedBytes = 0
+      // Get the blob from the response
+      const blob = await response.blob()
 
-      const chunks: BlobPart[] = []
-      const stream = new ReadableStream({
-        start(controller) {
-          const push = async () => {
-            const { done, value } = await reader.read()
-            if (done) {
-              console.log('Download complete.')
-              controller.close()
+      // Create a temporary URL and trigger download
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.style.display = 'none'
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
 
-              // Combine all chunks into a single Blob and trigger download
-              const blob = new Blob(chunks, { type: 'application/zip' })
-              const url = window.URL.createObjectURL(blob)
-              const link = document.createElement('a')
-              link.href = url
-              link.download = filename
-              link.click()
-              window.URL.revokeObjectURL(url)
-
-              return
-            }
-            receivedBytes += value?.length || 0
-            const progress =
-              totalBytes > 0
-                ? Math.min(Math.max(Math.round((receivedBytes / totalBytes) * 100), 0), 100)
-                : 0
-
-            // Step 5: Download package. Only log and update progress if it has changed
-            setExportPackage((prev) => ({
-              ...prev,
-              progress,
-              status: `Downloading package (${progress}%)`,
-            }))
-
-            // Enqueue the chunk for streaming
-            controller.enqueue(value)
-
-            // Accumulate chunks into a buffer
-            chunks.push(value)
-
-            push()
-          }
-          push()
-        },
-      })
-
-      const blobStream = new Response(stream)
-      await blobStream.blob()
+      // Cleanup
+      setTimeout(() => {
+        window.URL.revokeObjectURL(url)
+        document.body.removeChild(a)
+      }, 100)
 
       toast.success('Programme Exported', {
-        description: `${programme.name} has been exported as a ${exportPackage.targetPersona} package.`,
+        description: `${programme.name} has been exported successfully. Check your Downloads folder.`,
       })
 
       // Complete
@@ -569,15 +541,16 @@ export default function ProgrammesPage() {
         ...prev,
         isExporting: false,
         progress: 100,
-        status: 'Package created successfully!',
+        status: 'Download complete!',
         isComplete: true,
       }))
     } catch (error) {
+      console.error('Download error:', error)
       setExportPackage((prev) => ({
         ...prev,
         isExporting: false,
         isError: true,
-        status: `${error}`,
+        status: `Error: ${error instanceof Error ? error.message : String(error)}`,
       }))
     }
   }

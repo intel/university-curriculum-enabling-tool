@@ -50,12 +50,18 @@ export function useDeleteModel() {
   // Use useMutation with query client for better cache management
   const mutation = useMutation({
     mutationFn: deleteModelFetcher,
-    onSuccess: (_, variables) => {
-      // Update the local store
+    onSuccess: async (_, variables) => {
       deleteModel(variables.name)
 
+      // Wait for 500ms to allow state updates to propagate
+      // Use explicit callback to avoid taint analysis issues
+      await new Promise<void>((resolve) => {
+        const callback = () => resolve()
+        setTimeout(callback, 500)
+      })
+
       // Invalidate the models query to refresh the data
-      queryClient.invalidateQueries({ queryKey: ['models'] })
+      await queryClient.invalidateQueries({ queryKey: ['models'] })
 
       toast.success('Model Deleted', {
         description: `${variables.name} has been deleted successfully.`,

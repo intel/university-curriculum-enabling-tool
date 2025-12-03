@@ -19,6 +19,9 @@ export function resolvePaths(args = {}) {
   
   // Check if we're in development mode
   const isDevelopmentMode = process.env.DEV_MODE === 'true';
+
+  // Check if ollama or OpenVINO Model Server (OVMS) is selected
+  const isOllamaOrOvms = process.env.PROVIDER;
   
   // Detect if we're already in a distribution package by checking for .version file
   const versionFileExists = fs.existsSync(path.join(ROOT_DIR, '.version'));
@@ -84,12 +87,16 @@ export function resolvePaths(args = {}) {
     thirdparty: path.join(workingDir, 'thirdparty'),
     node: path.join(workingDir, 'thirdparty', 'node'),
     ollama: path.join(workingDir, 'thirdparty', 'ollama'),
+    ovms: path.join(workingDir, 'thirdparty', 'ovms'),
     data: path.join(workingDir, 'data'),
     venv: path.join(workingDir, 'backend', 'venv'),
+    ovmsBackend: path.join(workingDir, 'backend', 'ovms_service'),
+    ovmsVenv: path.join(workingDir, 'backend', 'ovms_service', 'venv'),
     ecosystem: path.join(workingDir, 'ecosystem.config.cjs'),
     dist: path.join(ROOT_DIR, 'dist'),
     isDistPackage: isDistPackage,
     isDevelopmentMode: isDevelopmentMode,
+    isOllamaOrOvms: isOllamaOrOvms,
     isRootRepo: isRootRepo
   };
 }

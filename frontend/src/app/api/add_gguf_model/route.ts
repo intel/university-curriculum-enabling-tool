@@ -6,12 +6,12 @@ import path from 'path'
 import fs from 'fs/promises'
 
 const localFilePath = path.resolve(process.cwd(), '..', 'models')
-const OLLAMA_URL = process.env.OLLAMA_URL
+const PROVIDER_URL = process.env.PROVIDER_URL
 
 export async function GET() {
   try {
     // Fetch the list of existing models from Ollama via /api/tags
-    const urlOllamaTags = new URL('/api/tags', OLLAMA_URL).href
+    const urlOllamaTags = new URL('/api/tags', PROVIDER_URL).href
     const tagsResponse = await fetch(urlOllamaTags)
     if (!tagsResponse.ok) {
       throw new Error('Failed to fetch existing models from Ollama')
@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
           path: modelfilePath, // Update the path to the newly created Modelfile
         }
 
-        const apiCreateUrl = new URL('/api/create', OLLAMA_URL).href
+        const apiCreateUrl = new URL('/api/create', PROVIDER_URL).href
         const response = await fetch(apiCreateUrl, {
           method: 'POST',
           headers: {

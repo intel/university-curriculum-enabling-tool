@@ -2,13 +2,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { generateText, generateObject, type ModelMessage } from 'ai'
-import type { OllamaFn } from '../types/assessment.types'
+import { z } from 'zod'
+import type { ProviderFn } from '../types/assessment.types'
 import type { ProjectRubric, ProjectRubricCriterion } from '@/lib/types/project-rubric-criterion'
 import type { CourseInfo } from '@/lib/types/course-info-types'
 import { TEMPERATURE, TOKEN_RESPONSE_BUDGET, langDirective } from '../config/constants'
 import { extractJsonFromText } from '../utils/jsonHelpers'
 import { stripThinkTags, logAssessmentDebug } from '../utils/generalHelpers'
 import { needLanguageEnforcementForCriteria, enforceRubricLanguage } from '../utils/languageHelpers'
+
+// Zod schema for project rubric criterion (inline for OVMS compatibility)
+const projectRubricCriterionSchema = z.object({
+  name: z.string(),
+  weight: z.number(),
+  description: z.string().optional(),
+  levels: z
+    .object({
+      excellent: z.string(),
+      good: z.string(),
+      average: z.string(),
+      acceptable: z.string(),
+      poor: z.string(),
+    })
+    .optional(),
+})
 
 // Matches bullet/numbered criterion lines that optionally include a weight in parentheses.
 // Capture groups:
@@ -301,7 +318,7 @@ export function extractCriteriaFromText(
 export async function generateRubricSection(
   section: 'report' | 'demo' | 'individual',
   difficultyLevel: string,
-  ollama: OllamaFn,
+  provider: ProviderFn,
   selectedModel: string,
   assistantMessage: ModelMessage,
   courseInfo: CourseInfo,
@@ -401,8 +418,8 @@ IMPORTANT: Do not use markdown formatting (**, ##, etc.). Pure JSON only.`
     // Try structured generation first for better JSON compliance
     try {
       const { object } = await generateObject({
-        model: ollama(selectedModel),
-        output: 'no-schema',
+        model: provider(selectedModel),
+        schema: z.array(projectRubricCriterionSchema),
         messages: [systemMessage, assistantMessage, userMessage],
         temperature: TEMPERATURE,
         maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 3),
@@ -410,11 +427,11 @@ IMPORTANT: Do not use markdown formatting (**, ##, etc.). Pure JSON only.`
 
       if (object && Array.isArray(object)) {
         logAssessmentDebug(`Successfully generated ${section} criteria via generateObject`)
-        const criteria = object as unknown as ProjectRubricCriterion[]
+        const criteria = object as ProjectRubricCriterion[]
 
         // Batch enforcement to reduce latency
         const languageEnforcedCriteria = needLanguageEnforcementForCriteria(criteria, language)
-          ? await enforceRubricLanguage(criteria, language, ollama, selectedModel)
+          ? await enforceRubricLanguage(criteria, language, provider, selectedModel)
           : criteria
         logAssessmentDebug(`Language enforcement (batched) completed for ${section} criteria`)
         return languageEnforcedCriteria
@@ -431,7 +448,7 @@ IMPORTANT: Do not use markdown formatting (**, ##, etc.). Pure JSON only.`
 
     // Fallback to text generation
     const response = await generateText({
-      model: ollama(selectedModel),
+      model: provider(selectedModel),
       messages: [systemMessage, assistantMessage, userMessage],
       temperature: TEMPERATURE,
       maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / 3), // Ensure integer by using Math.floor
@@ -459,7 +476,7 @@ IMPORTANT: Do not use markdown formatting (**, ##, etc.). Pure JSON only.`
         logAssessmentDebug(`Successfully parsed ${section} criteria directly`)
 
         const languageEnforcedCriteria = needLanguageEnforcementForCriteria(criteria, language)
-          ? await enforceRubricLanguage(criteria, language, ollama, selectedModel)
+          ? await enforceRubricLanguage(criteria, language, provider, selectedModel)
           : criteria
         logAssessmentDebug(`Language enforcement (batched) completed for ${section} criteria`)
         return languageEnforcedCriteria
@@ -476,7 +493,7 @@ IMPORTANT: Do not use markdown formatting (**, ##, etc.). Pure JSON only.`
           logAssessmentDebug(`Successfully extracted and parsed ${section} criteria JSON`)
 
           const languageEnforcedCriteria = needLanguageEnforcementForCriteria(criteria, language)
-            ? await enforceRubricLanguage(criteria, language, ollama, selectedModel)
+            ? await enforceRubricLanguage(criteria, language, provider, selectedModel)
             : criteria
           logAssessmentDebug(
             `Language enforcement (batched) completed for extracted ${section} criteria`,
@@ -497,7 +514,7 @@ IMPORTANT: Do not use markdown formatting (**, ##, etc.). Pure JSON only.`
       )
 
       const languageEnforcedCriteria = needLanguageEnforcementForCriteria(manualCriteria, language)
-        ? await enforceRubricLanguage(manualCriteria, language, ollama, selectedModel)
+        ? await enforceRubricLanguage(manualCriteria, language, provider, selectedModel)
         : manualCriteria
       logAssessmentDebug(
         `Language enforcement (batched) completed for manually extracted ${section} criteria`,
@@ -517,7 +534,7 @@ IMPORTANT: Do not use markdown formatting (**, ##, etc.). Pure JSON only.`
 // Modify the generateProjectRubric function to separate generation and combination
 export async function generateProjectRubric(
   difficultyLevel: string,
-  ollama: OllamaFn,
+  provider: ProviderFn,
   selectedModel: string,
   assistantMessage: ModelMessage,
   courseInfo: CourseInfo,
@@ -530,7 +547,7 @@ export async function generateProjectRubric(
     const reportCriteria = await generateRubricSection(
       'report',
       difficultyLevel,
-      ollama,
+      provider,
       selectedModel,
       assistantMessage,
       courseInfo,
@@ -541,7 +558,7 @@ export async function generateProjectRubric(
     const demoCriteria = await generateRubricSection(
       'demo',
       difficultyLevel,
-      ollama,
+      provider,
       selectedModel,
       assistantMessage,
       courseInfo,
@@ -552,7 +569,7 @@ export async function generateProjectRubric(
     const individualCriteria = await generateRubricSection(
       'individual',
       difficultyLevel,
-      ollama,
+      provider,
       selectedModel,
       assistantMessage,
       courseInfo,

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { generateText, type ModelMessage } from 'ai'
-import type { OllamaFn } from '../types/assessment.types'
+import type { ProviderFn } from '../types/assessment.types'
 import type { ProjectRubricCriterion } from '@/lib/types/project-rubric-criterion'
 import {
   TEMPERATURE,
@@ -65,7 +65,7 @@ export function detectLikelyLanguage(text: string): 'en' | 'id' | 'unknown' {
 export async function ensureTargetLanguageText(
   text: string,
   language: 'en' | 'id',
-  ollama: OllamaFn,
+  provider: ProviderFn,
   selectedModel: string,
   options?: { force?: boolean },
 ): Promise<string> {
@@ -98,7 +98,7 @@ export async function ensureTargetLanguageText(
   const userMessage: ModelMessage = { role: 'user', content: text }
   try {
     const resp = await generateText({
-      model: ollama(selectedModel),
+      model: provider(selectedModel),
       messages: [systemMessage, userMessage],
       temperature: Math.max(0, TEMPERATURE - LANGUAGE_ENFORCEMENT_TEMPERATURE_DECREASE),
       maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET),
@@ -134,7 +134,7 @@ export function needLanguageEnforcementForCriteria(
 export async function enforceRubricLanguage(
   criteria: ProjectRubricCriterion[],
   language: 'en' | 'id',
-  ollama: OllamaFn,
+  provider: ProviderFn,
   selectedModel: string,
 ): Promise<ProjectRubricCriterion[]> {
   const langDirective =
@@ -152,7 +152,7 @@ export async function enforceRubricLanguage(
 
   try {
     const resp = await generateText({
-      model: ollama(selectedModel),
+      model: provider(selectedModel),
       messages: [systemMessage, userMessage],
       temperature: Math.max(0, TEMPERATURE - LANGUAGE_ENFORCEMENT_TEMPERATURE_DECREASE),
       maxOutputTokens: Math.floor(TOKEN_RESPONSE_BUDGET / RUBRIC_TOKEN_BUDGET_DIVISOR),

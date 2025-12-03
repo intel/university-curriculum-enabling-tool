@@ -1,11 +1,12 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { createOllama } from 'ollama-ai-provider-v2'
+import { getProvider } from '@/lib/providers'
 import { generateObject, convertToModelMessages, type UIMessage } from 'ai'
 import { NextResponse } from 'next/server'
 import { hybridSearch } from '@/lib/chunk/hybrid-search'
 import { getStoredChunks } from '@/lib/chunk/get-stored-chunks'
+import { z } from 'zod'
 
 import {
   processChunksMultiPass,
@@ -17,10 +18,19 @@ import {
 } from '@/lib/rag/multi-pass'
 import { ContextChunk } from '@/lib/types/context-chunk'
 
-type FaqItem = {
-  question: string
-  answer: string
-}
+// Zod schema for FAQ items
+const faqItemSchema = z.object({
+  question: z.string().min(1, 'Question cannot be empty'),
+  answer: z.string().min(1, 'Answer cannot be empty'),
+})
+
+// Zod schema for FAQ response
+const faqResponseSchema = z.object({
+  FAQs: z.array(faqItemSchema).min(1, 'At least one FAQ is required'),
+})
+
+// Type inference from Zod schemas
+type FaqItem = z.infer<typeof faqItemSchema>
 
 // Type for the processed FAQ result
 type FaqResult = {
@@ -33,6 +43,7 @@ type Usage = { inputTokens?: number; outputTokens?: number; totalTokens?: number
 const getInputTokens = (u?: Usage | undefined) => u?.inputTokens ?? 0
 const getOutputTokens = (u?: Usage | undefined) => u?.outputTokens ?? 0
 const getTotalTokens = (u?: Usage | undefined) => u?.totalTokens ?? 0
+const provider = getProvider()
 
 export const dynamic = 'force-dynamic'
 
@@ -283,16 +294,13 @@ const createFaqGenerationFunction = (): GenerationFunction<FaqResult> => {
 
     const result = await generateObject({
       model: model as Parameters<typeof generateObject>[0]['model'],
-      output: 'no-schema' as const,
+      schema: faqResponseSchema,
       messages: modelMessages,
       temperature,
       maxOutputTokens,
       providerOptions: {
-        ollama: {
-          mode: 'json',
-          options: {
-            numCtx: TOKEN_RESPONSE_BUDGET,
-          },
+        openaiCompatible: {
+          numCtx: TOKEN_RESPONSE_BUDGET,
         },
       },
     })
@@ -382,13 +390,6 @@ export async function POST(req: Request) {
       })
     }
 
-    // Set up Ollama instance
-    const ollamaUrl = process.env.OLLAMA_URL
-    if (!ollamaUrl) {
-      throw new Error('OLLAMA_URL is not defined in environment variables.')
-    }
-    const ollama = createOllama({ baseURL: ollamaUrl + '/api' })
-
     // Check if we have valid sources
     const hasValidSources = Array.isArray(selectedSources) && selectedSources.length > 0
 
@@ -472,7 +473,7 @@ export async function POST(req: Request) {
 
       try {
         const { object: rawResult, usage } = await faqGenerationFunction({
-          model: ollama(selectedModel),
+          model: provider(selectedModel),
           output: 'no-schema',
           messages: messages,
           temperature: TEMPERATURE + 0.1,
@@ -523,7 +524,7 @@ export async function POST(req: Request) {
         userQuery,
         continueFaqs ? [] : retrievedChunks,
         faqGenerationFunction,
-        ollama(selectedModel),
+        provider(selectedModel),
         options,
         CONTENT_TYPE_FAQ,
         faqSystemPromptGenerator,

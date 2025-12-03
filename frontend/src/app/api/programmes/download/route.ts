@@ -6,7 +6,9 @@ import path from 'path'
 import archiver from 'archiver'
 import { NextResponse } from 'next/server'
 import os from 'os'
+import { Readable } from 'stream'
 import { fileURLToPath } from 'url'
+import { getAIService } from '@/lib/providers'
 
 // Inline abbreviation function to avoid "unknown function" taint
 const createSafeAbbreviation = (name: string): string => {
@@ -53,17 +55,26 @@ interface ProgrammeCourse {
   [key: string]: unknown
 }
 
+interface Programme {
+  code: string
+  version: string
+  courses: ProgrammeCourse[]
+  [key: string]: unknown
+}
+
 export async function POST(req: Request) {
   let stagingDir = ''
-  // const controller = new AbortController()
-  // const { signal } = controller
 
   try {
+    // Parse JSON request body
     const body = await req.json()
-    const { persona, programme } = body
+    const { persona, programme } = body as { persona: string; programme: Programme }
 
     if (!persona || !programme) {
-      throw `Missing required fields`
+      return NextResponse.json(
+        { error: 'Missing required fields: persona and programme' },
+        { status: 400 },
+      )
     }
 
     // Generate a better filename using programme info
@@ -74,12 +85,10 @@ export async function POST(req: Request) {
     // Use the signal from the request
     const { signal } = req
 
-    // tempDir = path.join("/tmp", `export-${persona}-${Date.now()}`)
-    // await fs.ensureDir(tempDir)
-
-    // Create temp directory with proper Windows path handling
-    const tempDirTemplate = path.join(os.tmpdir(), `package-${persona}-${Date.now()}XXXXXX`)
-    stagingDir = await fs.mkdtemp(fileURLToPath(new URL(`file://${tempDirTemplate}`)))
+    // Create temp directory with proper cross-platform handling
+    // Note: fs.mkdtemp expects a prefix, NOT a template ending with XXXXXX
+    const tempDirPrefix = path.join(os.tmpdir(), `package-${persona}-${Date.now()}-`)
+    stagingDir = await fs.mkdtemp(tempDirPrefix)
     console.log(`DEBUG: Created temporary staging directory: ${stagingDir}`)
 
     // Listen for abort signal
@@ -87,7 +96,7 @@ export async function POST(req: Request) {
       console.log('Request aborted by the client.')
       if (stagingDir) {
         try {
-          await fs.remove(fileURLToPath(new URL(`file://${stagingDir}`))) // Clean up temporary directory
+          await fs.remove(stagingDir) // Clean up temporary directory
         } catch (cleanupError) {
           console.error('Error cleaning up temp dir:', cleanupError)
         }
@@ -134,14 +143,18 @@ export async function POST(req: Request) {
 
     // DEFINE BASE PATH MAPPING DEPENDING ON PRODUCTION OR DEVELOPMENT ENVIRONMENT
     const isProd = process.env.NODE_ENV === 'production'
+
+    const appVersion = '2025.0.0'
+    const appName = 'university-curriculum-enabling-tool'
+    const distFolderName = `${appName}-${appVersion}`.toLowerCase().replace(/\s+/g, '-')
+
     const ALLOWED_ASSET_PATHS = {
       production: path.resolve(process.cwd(), '..', '..', 'assets', 'deployment', 'personas'),
       development: path.resolve(
         process.cwd(),
         '..',
         'dist',
-        'faculty',
-        'package',
+        distFolderName,
         'assets',
         'deployment',
         'personas',
@@ -237,300 +250,19 @@ export async function POST(req: Request) {
     const modelsDestDir = path.join(stagingDir, 'models')
     await fs.ensureDir(fileURLToPath(new URL(`file://${modelsDestDir}`)))
 
+    // Detect AI service provider
+    const aiService = getAIService()
+    console.log(`DEBUG: Using AI service: ${aiService}`)
+
     const platform = process.platform
 
-    // Try OLLAMA_DIR environment variable first (most flexible)
-    const envOllamaDir = process.env.OLLAMA_DIR
-    let validatedOllamaDir = ''
-    let cleanOllamaModelDir = ''
-    let cleanOllamaManifestDir = ''
-
-    if (envOllamaDir) {
-      // Validate home directory format for different platforms and usernames
-      const ENV_OLLAMA_VALIDATION_PATTERNS = [
-        '^/root/\\.ollama$', // Linux production
-        '^/home/[a-zA-Z0-9_\\-]+/\\.ollama$', // Linux users
-        '^C:\\\\Users\\\\[a-zA-Z0-9_\\-]+\\\\\\.ollama$', // Windows users
-      ]
-
-      let isValidEnvOllama = false
-      for (const pattern of ENV_OLLAMA_VALIDATION_PATTERNS) {
-        if (new RegExp(pattern).test(envOllamaDir)) {
-          isValidEnvOllama = true
-          break
-        }
-      }
-
-      if (isValidEnvOllama) {
-        console.log(`DEBUG: Using OLLAMA_DIR environment variable: ${envOllamaDir}`)
-        validatedOllamaDir = envOllamaDir
-        cleanOllamaModelDir = path.join(envOllamaDir, 'models', 'blobs')
-        cleanOllamaManifestDir = path.join(
-          envOllamaDir,
-          'models',
-          'manifests',
-          'registry.ollama.ai',
-          'library',
-        )
-
-        console.log(`DEBUG: Constructed cleanOllamaModelDir: ${cleanOllamaModelDir}`)
-        console.log(`DEBUG: Constructed cleanOllamaManifestDir: ${cleanOllamaManifestDir}`)
-      } else {
-        throw new Error(`Invalid OLLAMA_DIR environment variable: ${envOllamaDir}`)
-      }
+    // Handle models based on AI service provider
+    if (aiService === 'ovms') {
+      // OVMS MODEL EXPORT
+      await exportOvmsModels(modelNames, modelsDestDir)
     } else {
-      // Fallback to platform-specific defaults based on USERNAME environment variable
-      const envUser = process.env.USER || process.env.USERNAME
-
-      if (envUser) {
-        // VALIDATE USERNAME from environment
-        const USERNAME_PATTERN = /^[a-zA-Z0-9_\-]+$/
-        if (!USERNAME_PATTERN.test(envUser)) {
-          throw new Error(`Invalid username format: ${envUser}`)
-        }
-
-        console.log(`DEBUG: Using username from environment: ${envUser}`)
-
-        let ollamaBase = ''
-        switch (platform) {
-          case 'win32':
-            ollamaBase = `C:\\Users\\${envUser}\\.ollama`
-            break
-          case 'linux':
-          default:
-            ollamaBase = envUser === 'root' ? '/root/.ollama' : `/home/${envUser}/.ollama`
-            break
-        }
-
-        console.log(`DEBUG: Constructed ollamaBase from username: ${ollamaBase}`)
-
-        validatedOllamaDir = ollamaBase
-        cleanOllamaModelDir = path.join(ollamaBase, 'models', 'blobs')
-        cleanOllamaManifestDir = path.join(
-          ollamaBase,
-          'models',
-          'manifests',
-          'registry.ollama.ai',
-          'library',
-        )
-
-        console.log(`DEBUG: Constructed cleanOllamaModelDir from username: ${cleanOllamaModelDir}`)
-        console.log(
-          `DEBUG: Constructed cleanOllamaManifestDir from username: ${cleanOllamaManifestDir}`,
-        )
-      } else {
-        // Final fallback to hardcoded production paths
-        if (isProd) {
-          switch (platform) {
-            case 'win32':
-              validatedOllamaDir = 'C:\\Users\\Administrator\\.ollama'
-              cleanOllamaModelDir = 'C:\\Users\\Administrator\\.ollama\\models\\blobs'
-              cleanOllamaManifestDir =
-                'C:\\Users\\Administrator\\.ollama\\models\\manifests\\registry.ollama.ai\\library'
-              break
-            case 'linux':
-            default:
-              validatedOllamaDir = '/root/.ollama'
-              cleanOllamaModelDir = '/root/.ollama/models/blobs'
-              cleanOllamaManifestDir = '/root/.ollama/models/manifests/registry.ollama.ai/library'
-              break
-          }
-
-          console.log(`DEBUG: Using hardcoded production paths for platform: ${platform}`)
-          console.log(`DEBUG: Hardcoded validatedOllamaDir: ${validatedOllamaDir}`)
-          console.log(`DEBUG: Hardcoded cleanOllamaModelDir: ${cleanOllamaModelDir}`)
-          console.log(`DEBUG: Hardcoded cleanOllamaManifestDir: ${cleanOllamaManifestDir}`)
-        } else {
-          throw new Error(
-            'Unable to determine Ollama directory. Please set OLLAMA_DIR environment variable.',
-          )
-        }
-      }
-    }
-
-    console.log(`DEBUG: Using validated Ollama base directory: ${validatedOllamaDir}`)
-    console.log(`DEBUG: Using validated Ollama model directory: ${cleanOllamaModelDir}`)
-    console.log(`DEBUG: Using validated Ollama manifest directory: ${cleanOllamaManifestDir}`)
-
-    for (const modelName of modelNames) {
-      // VALIDATE MODEL NAME FORMAT - Regex patterns for safe model names
-      const MODEL_NAME_VALIDATION_PATTERNS = [
-        '^[a-zA-Z0-9_\\-\\.]+:[a-zA-Z0-9_\\-\\.]+$', // Format: modelname:version
-      ]
-
-      // Validate model name against patterns
-      let isValidModelName = false
-      for (const pattern of MODEL_NAME_VALIDATION_PATTERNS) {
-        if (new RegExp(pattern).test(modelName)) {
-          isValidModelName = true
-          break
-        }
-      }
-
-      if (!isValidModelName) {
-        console.warn(`Skipping invalid model name format: ${modelName}`)
-        continue
-      }
-
-      const [folderName, version] = modelName.split(':')
-
-      // VALIDATE FOLDER NAME AND VERSION COMPONENTS
-      const FOLDER_NAME_PATTERN = /^[a-zA-Z0-9_\-\.]+$/
-      const VERSION_PATTERN = /^[a-zA-Z0-9_\-\.]+$/
-
-      if (!FOLDER_NAME_PATTERN.test(folderName) || !VERSION_PATTERN.test(version)) {
-        console.warn(`Skipping model with invalid components: ${modelName}`)
-        continue
-      }
-
-      // CREATE CLEAN, VALIDATED COMPONENTS
-      const cleanFolderName = folderName
-      const cleanVersion = version
-
-      const modelDestDir = path.join(modelsDestDir, cleanFolderName)
-      await fs.ensureDir(fileURLToPath(new URL(`file://${modelDestDir}`)))
-
-      try {
-        // SANITIZE OLLAMA MODEL NAME WITH VALIDATION
-        // Create clean model name from validated folder name
-        const validatedModelName = String(cleanFolderName)
-
-        // Apply safe transformations to create clean model name
-        const cleanOllamaModelName = validatedModelName.replace(/:/g, '-').replace(/-latest$/, '')
-
-        // ADDITIONAL VALIDATION - Ensure sanitized name is still safe
-        const CLEAN_MODEL_NAME_PATTERN = /^[a-zA-Z0-9_\-\.]+$/
-        if (!CLEAN_MODEL_NAME_PATTERN.test(cleanOllamaModelName)) {
-          console.warn(`Skipping model with unsafe sanitized name: ${cleanOllamaModelName}`)
-          continue
-        }
-
-        // Construct manifest directory using clean, validated components
-        const modelManifestDir = path.join(cleanOllamaManifestDir, cleanOllamaModelName)
-
-        // ADDITIONAL PATH VALIDATION - Ensure constructed path is safe
-        const normalizedManifestDir = path.normalize(modelManifestDir)
-        const normalizedOllamaDir = path.normalize(cleanOllamaManifestDir)
-
-        if (!normalizedManifestDir.startsWith(normalizedOllamaDir)) {
-          console.warn(`Skipping model with unsafe manifest path: ${cleanOllamaModelName}`)
-          continue
-        }
-
-        if (await fs.pathExists(fileURLToPath(new URL(`file://${normalizedManifestDir}`)))) {
-          const modelDestManifestDir = path.join(
-            modelDestDir,
-            'manifests',
-            'registry.ollama.ai',
-            'library',
-            cleanFolderName,
-          )
-          await fs.ensureDir(fileURLToPath(new URL(`file://${modelDestManifestDir}`)))
-
-          const manifestFilePath = path.join(normalizedManifestDir, cleanVersion)
-
-          // VALIDATE MANIFEST FILE PATH
-          const normalizedManifestFilePath = path.normalize(manifestFilePath)
-          if (!normalizedManifestFilePath.startsWith(normalizedManifestDir)) {
-            console.warn(`Skipping manifest file with unsafe path: ${cleanVersion}`)
-            continue
-          }
-
-          if (await fs.pathExists(fileURLToPath(new URL(`file://${normalizedManifestFilePath}`)))) {
-            await fs.copy(
-              fileURLToPath(new URL(`file://${normalizedManifestFilePath}`)),
-              fileURLToPath(new URL(`file://${path.join(modelDestManifestDir, cleanVersion)}`)),
-            )
-            console.log(`DEBUG: Copied manifest file for model version: ${cleanVersion}`)
-          } else {
-            throw new Error(`Manifest file not found for model: ${cleanOllamaModelName}`)
-          }
-
-          const shaRefs = new Set<string>()
-          try {
-            const content = await fs.readFile(
-              fileURLToPath(new URL(`file://${normalizedManifestFilePath}`)),
-              'utf-8',
-            )
-            const shaMatches = content.match(/sha256:[a-f0-9]+/g) || []
-            for (const sha of shaMatches) {
-              shaRefs.add(sha)
-            }
-          } catch {
-            throw new Error(`Failed to read manifest file for model: ${cleanOllamaModelName}`)
-          }
-
-          console.log(
-            `DEBUG: Found ${shaRefs.size} unique SHA references for model ${cleanOllamaModelName}`,
-          )
-
-          const blobsDestDir = path.join(modelDestDir, 'blobs')
-          await fs.ensureDir(fileURLToPath(new URL(`file://${blobsDestDir}`)))
-
-          for (const shaWithPrefix of shaRefs) {
-            // VALIDATE SHA FORMAT
-            const SHA_PATTERN = /^sha256:[a-f0-9]+$/
-            if (!SHA_PATTERN.test(shaWithPrefix)) {
-              console.warn(`Skipping invalid SHA format: ${shaWithPrefix}`)
-              continue
-            }
-
-            const sha = shaWithPrefix.replace('sha256:', '')
-
-            // VALIDATE EXTRACTED SHA
-            const SHA_HASH_PATTERN = /^[a-f0-9]+$/
-            if (!SHA_HASH_PATTERN.test(sha)) {
-              console.warn(`Skipping invalid SHA hash: ${sha}`)
-              continue
-            }
-
-            let sourceFile = path.join(cleanOllamaModelDir, shaWithPrefix)
-            if (!(await fs.pathExists(fileURLToPath(new URL(`file://${sourceFile}`))))) {
-              sourceFile = path.join(cleanOllamaModelDir, `sha256-${sha}`)
-              if (!(await fs.pathExists(fileURLToPath(new URL(`file://${sourceFile}`))))) {
-                sourceFile = path.join(cleanOllamaModelDir, sha)
-              }
-            }
-
-            if (await fs.pathExists(fileURLToPath(new URL(`file://${sourceFile}`)))) {
-              const relativePath = path.relative(cleanOllamaModelDir, sourceFile)
-              const destFile = path.join(blobsDestDir, relativePath)
-
-              // VALIDATE DESTINATION PATH
-              const normalizedDestFile = path.normalize(destFile)
-              const normalizedBlobsDir = path.normalize(blobsDestDir)
-
-              if (!normalizedDestFile.startsWith(normalizedBlobsDir)) {
-                console.warn(`Skipping blob with unsafe destination path: ${relativePath}`)
-                continue
-              }
-
-              await fs.ensureDir(
-                fileURLToPath(new URL(`file://${path.dirname(normalizedDestFile)}`)),
-              )
-              if (!(await fs.pathExists(fileURLToPath(new URL(`file://${normalizedDestFile}`))))) {
-                try {
-                  await fs.copy(
-                    fileURLToPath(new URL(`file://${sourceFile}`)),
-                    fileURLToPath(new URL(`file://${normalizedDestFile}`)),
-                  )
-                  console.log(`DEBUG: Copied blob file: ${relativePath}`)
-                } catch (copyErr) {
-                  throw new Error(`Error copying blob file ${relativePath}: ${copyErr}`)
-                }
-              }
-            } else {
-              throw new Error(`Required blob file not found: ${shaWithPrefix}`)
-            }
-          }
-
-          console.log(`DEBUG: Finished copying blobs for model: ${cleanOllamaModelName}`)
-        } else {
-          throw new Error(`Model manifest directory not found: ${normalizedManifestDir}`)
-        }
-      } catch (error) {
-        throw new Error(`Exporting model ${modelName} failed due to ${error}`)
-      }
+      // OLLAMA MODEL EXPORT (default)
+      await exportOllamaModels(modelNames, modelsDestDir, platform)
     }
 
     // Generate a better filename using programme info
@@ -658,35 +390,97 @@ export async function POST(req: Request) {
     const startTime = Date.now()
     console.log(`DEBUG: Generating ZIP file name: ${filename}`)
 
-    const archive = archiver('zip', { zlib: { level: 9 } })
-    const zipBuffer: Buffer = await new Promise((resolve, reject) => {
-      const chunks: Buffer[] = []
-
-      archive.on('data', (chunk: Buffer) => chunks.push(chunk))
-      archive.on('end', () => resolve(Buffer.concat(chunks)))
-      archive.on('error', (err: Error) => reject(err))
-
-      archive.directory(stagingDir, false)
-      archive.finalize()
+    // Create archiver instance with STORE compression (no compression)
+    // This is fastest for already-compressed model files
+    const archive = archiver('zip', {
+      store: true, // No compression - maximum speed
+      zlib: { level: 0 }, // No compression level
     })
 
-    const zipFileSize = zipBuffer.length
-    console.log(`DEBUG: Generated ZIP file size: ${(zipFileSize / 1024 / 1024).toFixed(2)} MB`)
+    // Track progress
+    let totalBytes = 0
+    archive.on('progress', (progress: { fs: { totalBytes: number } }) => {
+      const newBytes = progress.fs.totalBytes - totalBytes
+      if (newBytes > 100 * 1024 * 1024) {
+        // Log every 100MB
+        totalBytes = progress.fs.totalBytes
+        console.log(`DEBUG: ZIP progress: ${(totalBytes / 1024 / 1024).toFixed(2)} MB`)
+      }
+    })
 
-    const endTime = Date.now()
-    console.log(`DEBUG: ZIP creation completed in ${(endTime - startTime) / 1000}s`)
+    archive.on('warning', (err: Error) => {
+      console.warn('DEBUG: Archive warning:', err)
+    })
 
-    // Return the buffer directly as the response
-    return new NextResponse(new Uint8Array(zipBuffer), {
+    archive.on('error', (err: Error) => {
+      console.error('DEBUG: Archive error:', err)
+      throw err
+    })
+
+    archive.on('end', () => {
+      const endTime = Date.now()
+      console.log(`DEBUG: ZIP finalized in ${(endTime - startTime) / 1000}s`)
+      console.log(`DEBUG: Total bytes written: ${(archive.pointer() / 1024 / 1024).toFixed(2)} MB`)
+    })
+
+    // Add staging directory to archive, excluding venv folders
+    console.log(`DEBUG: Adding files to archive...`)
+    archive.directory(stagingDir, false, (entry) => {
+      // Exclude venv folders and their contents
+      const pathParts = entry.name.split(/[/\\]/)
+      if (pathParts.includes('venv')) {
+        console.log(`DEBUG: Skipping venv path: ${entry.name}`)
+        return false
+      }
+      console.log(`DEBUG: Adding to ZIP: ${entry.name}`)
+      return entry
+    })
+
+    // Finalize the archive (this triggers the streaming)
+    console.log(`DEBUG: Finalizing archive...`)
+    const finalizePromise = archive.finalize()
+
+    // Clean up staging directory when archive is done
+    finalizePromise
+      .then(() => {
+        console.log(`DEBUG: Archive finalized successfully`)
+        // Cleanup after a small delay to ensure stream has started
+        setTimeout(async () => {
+          try {
+            await fs.remove(stagingDir)
+            console.log(`DEBUG: Cleaned up staging directory: ${stagingDir}`)
+          } catch (cleanupError) {
+            console.error('Error during cleanup:', cleanupError)
+          }
+        }, 5000) // 5 second delay
+      })
+      .catch((err) => {
+        console.error('Error finalizing archive:', err)
+      })
+
+    // Convert Node.js Readable stream to Web ReadableStream
+    const webStream = Readable.toWeb(archive) as ReadableStream
+
+    // Return the stream as response
+    return new NextResponse(webStream, {
       headers: {
         'Content-Type': 'application/zip',
         'Content-Disposition': `attachment; filename="${filename}"`,
-        'Content-Length': String(zipBuffer.length),
         'Cache-Control': 'no-store',
+        'Transfer-Encoding': 'chunked',
       },
     })
   } catch (error) {
     console.error('Error exporting package:', error)
+    // Clean up on error
+    if (stagingDir) {
+      try {
+        await fs.remove(stagingDir)
+        console.log(`Cleaned up staging directory after error: ${stagingDir}`)
+      } catch (cleanupError) {
+        console.error('Error during cleanup:', cleanupError)
+      }
+    }
     return NextResponse.json(
       {
         error: 'Failed to export package',
@@ -694,15 +488,368 @@ export async function POST(req: Request) {
       },
       { status: 500 },
     )
-  } finally {
-    // Clean up the temporary directory
-    if (stagingDir) {
-      try {
-        await fs.remove(fileURLToPath(new URL(`file://${stagingDir}`)))
-        console.log(`DEBUG: Cleaned up temporary staging directory: ${stagingDir}`)
-      } catch (cleanupError) {
-        console.error('Error cleaning up temporary staging directory:', cleanupError)
+  }
+}
+
+/**
+ * Export OVMS models to the staging directory
+ */
+async function exportOvmsModels(modelNames: Set<string>, modelsDestDir: string) {
+  console.log(`DEBUG: Exporting ${modelNames.size} OVMS models`)
+
+  // Get OVMS models directory: ~/.ucet/models/ovms/
+  const homeDir = os.homedir()
+  const ovmsModelsDir = path.join(homeDir, '.ucet', 'models', 'ovms')
+
+  console.log(`DEBUG: OVMS models directory: ${ovmsModelsDir}`)
+
+  // Validate OVMS directory exists
+  if (!(await fs.pathExists(fileURLToPath(new URL(`file://${ovmsModelsDir}`))))) {
+    throw new Error(`OVMS models directory not found: ${ovmsModelsDir}`)
+  }
+
+  for (const modelName of modelNames) {
+    // OVMS models use format: "OpenVINO/Qwen2.5-1.5B-Instruct-int8-ov"
+    // Validate model name format
+    const MODEL_NAME_PATTERN = /^[a-zA-Z0-9_\-\.\/]+$/
+    if (!MODEL_NAME_PATTERN.test(modelName)) {
+      console.warn(`Skipping invalid OVMS model name format: ${modelName}`)
+      continue
+    }
+
+    // OVMS directory structure: ~/.ucet/models/ovms/{org}/{model-name}/
+    const modelSourceDir = path.join(ovmsModelsDir, modelName)
+
+    // Validate model directory exists
+    if (!(await fs.pathExists(fileURLToPath(new URL(`file://${modelSourceDir}`))))) {
+      console.warn(`OVMS model directory not found: ${modelSourceDir}`)
+      continue
+    }
+
+    // Create destination directory with same structure
+    const modelDestDir = path.join(modelsDestDir, modelName)
+    await fs.ensureDir(fileURLToPath(new URL(`file://${modelDestDir}`)))
+
+    console.log(`DEBUG: Copying OVMS model from ${modelSourceDir} to ${modelDestDir}`)
+
+    try {
+      // Copy entire model directory (includes all necessary files)
+      await fs.copy(
+        fileURLToPath(new URL(`file://${modelSourceDir}`)),
+        fileURLToPath(new URL(`file://${modelDestDir}`)),
+      )
+      console.log(`DEBUG: Successfully copied OVMS model: ${modelName}`)
+    } catch (error) {
+      throw new Error(`Failed to copy OVMS model ${modelName}: ${error}`)
+    }
+  }
+
+  console.log(`DEBUG: Finished exporting ${modelNames.size} OVMS models`)
+}
+
+/**
+ * Export Ollama models to the staging directory
+ */
+async function exportOllamaModels(
+  modelNames: Set<string>,
+  modelsDestDir: string,
+  platform: string,
+) {
+  console.log(`DEBUG: Exporting ${modelNames.size} Ollama models`)
+
+  const isProd = process.env.NODE_ENV === 'production'
+
+  // Try OLLAMA_DIR environment variable first (most flexible)
+  const envOllamaDir = process.env.OLLAMA_DIR
+  let validatedOllamaDir = ''
+  let cleanOllamaModelDir = ''
+  let cleanOllamaManifestDir = ''
+
+  if (envOllamaDir) {
+    // Validate home directory format for different platforms and usernames
+    const ENV_OLLAMA_VALIDATION_PATTERNS = [
+      '^/root/\\.ollama$', // Linux production
+      '^/home/[a-zA-Z0-9_\\-]+/\\.ollama$', // Linux users
+      '^C:\\\\Users\\\\[a-zA-Z0-9_\\-]+\\\\\\.ollama$', // Windows users
+    ]
+
+    let isValidEnvOllama = false
+    for (const pattern of ENV_OLLAMA_VALIDATION_PATTERNS) {
+      if (new RegExp(pattern).test(envOllamaDir)) {
+        isValidEnvOllama = true
+        break
+      }
+    }
+
+    if (isValidEnvOllama) {
+      console.log(`DEBUG: Using OLLAMA_DIR environment variable: ${envOllamaDir}`)
+      validatedOllamaDir = envOllamaDir
+      cleanOllamaModelDir = path.join(envOllamaDir, 'models', 'blobs')
+      cleanOllamaManifestDir = path.join(
+        envOllamaDir,
+        'models',
+        'manifests',
+        'registry.ollama.ai',
+        'library',
+      )
+
+      console.log(`DEBUG: Constructed cleanOllamaModelDir: ${cleanOllamaModelDir}`)
+      console.log(`DEBUG: Constructed cleanOllamaManifestDir: ${cleanOllamaManifestDir}`)
+    } else {
+      throw new Error(`Invalid OLLAMA_DIR environment variable: ${envOllamaDir}`)
+    }
+  } else {
+    // Fallback to platform-specific defaults based on USERNAME environment variable
+    const envUser = process.env.USER || process.env.USERNAME
+
+    if (envUser) {
+      // VALIDATE USERNAME from environment
+      const USERNAME_PATTERN = /^[a-zA-Z0-9_\-]+$/
+      if (!USERNAME_PATTERN.test(envUser)) {
+        throw new Error(`Invalid username format: ${envUser}`)
+      }
+
+      console.log(`DEBUG: Using username from environment: ${envUser}`)
+
+      let ollamaBase = ''
+      switch (platform) {
+        case 'win32':
+          ollamaBase = `C:\\Users\\${envUser}\\.ollama`
+          break
+        case 'linux':
+        default:
+          ollamaBase = envUser === 'root' ? '/root/.ollama' : `/home/${envUser}/.ollama`
+          break
+      }
+
+      console.log(`DEBUG: Constructed ollamaBase from username: ${ollamaBase}`)
+
+      validatedOllamaDir = ollamaBase
+      cleanOllamaModelDir = path.join(ollamaBase, 'models', 'blobs')
+      cleanOllamaManifestDir = path.join(
+        ollamaBase,
+        'models',
+        'manifests',
+        'registry.ollama.ai',
+        'library',
+      )
+
+      console.log(`DEBUG: Constructed cleanOllamaModelDir from username: ${cleanOllamaModelDir}`)
+      console.log(
+        `DEBUG: Constructed cleanOllamaManifestDir from username: ${cleanOllamaManifestDir}`,
+      )
+    } else {
+      // Final fallback to hardcoded production paths
+      if (isProd) {
+        switch (platform) {
+          case 'win32':
+            validatedOllamaDir = 'C:\\Users\\Administrator\\.ollama'
+            cleanOllamaModelDir = 'C:\\Users\\Administrator\\.ollama\\models\\blobs'
+            cleanOllamaManifestDir =
+              'C:\\Users\\Administrator\\.ollama\\models\\manifests\\registry.ollama.ai\\library'
+            break
+          case 'linux':
+          default:
+            validatedOllamaDir = '/root/.ollama'
+            cleanOllamaModelDir = '/root/.ollama/models/blobs'
+            cleanOllamaManifestDir = '/root/.ollama/models/manifests/registry.ollama.ai/library'
+            break
+        }
+
+        console.log(`DEBUG: Using hardcoded production paths for platform: ${platform}`)
+        console.log(`DEBUG: Hardcoded validatedOllamaDir: ${validatedOllamaDir}`)
+        console.log(`DEBUG: Hardcoded cleanOllamaModelDir: ${cleanOllamaModelDir}`)
+        console.log(`DEBUG: Hardcoded cleanOllamaManifestDir: ${cleanOllamaManifestDir}`)
+      } else {
+        throw new Error(
+          'Unable to determine Ollama directory. Please set OLLAMA_DIR environment variable.',
+        )
       }
     }
   }
+
+  console.log(`DEBUG: Using validated Ollama base directory: ${validatedOllamaDir}`)
+  console.log(`DEBUG: Using validated Ollama model directory: ${cleanOllamaModelDir}`)
+  console.log(`DEBUG: Using validated Ollama manifest directory: ${cleanOllamaManifestDir}`)
+
+  for (const modelName of modelNames) {
+    // VALIDATE MODEL NAME FORMAT - Regex patterns for safe model names
+    const MODEL_NAME_VALIDATION_PATTERNS = [
+      '^[a-zA-Z0-9_\\-\\.]+:[a-zA-Z0-9_\\-\\.]+$', // Format: modelname:version
+    ]
+
+    // Validate model name against patterns
+    let isValidModelName = false
+    for (const pattern of MODEL_NAME_VALIDATION_PATTERNS) {
+      if (new RegExp(pattern).test(modelName)) {
+        isValidModelName = true
+        break
+      }
+    }
+
+    if (!isValidModelName) {
+      console.warn(`Skipping invalid model name format: ${modelName}`)
+      continue
+    }
+
+    const [folderName, version] = modelName.split(':')
+
+    // VALIDATE FOLDER NAME AND VERSION COMPONENTS
+    const FOLDER_NAME_PATTERN = /^[a-zA-Z0-9_\-\.]+$/
+    const VERSION_PATTERN = /^[a-zA-Z0-9_\-\.]+$/
+
+    if (!FOLDER_NAME_PATTERN.test(folderName) || !VERSION_PATTERN.test(version)) {
+      console.warn(`Skipping model with invalid components: ${modelName}`)
+      continue
+    }
+
+    // CREATE CLEAN, VALIDATED COMPONENTS
+    const cleanFolderName = folderName
+    const cleanVersion = version
+
+    const modelDestDir = path.join(modelsDestDir, cleanFolderName)
+    await fs.ensureDir(fileURLToPath(new URL(`file://${modelDestDir}`)))
+
+    try {
+      // SANITIZE OLLAMA MODEL NAME WITH VALIDATION
+      // Create clean model name from validated folder name
+      const validatedModelName = String(cleanFolderName)
+
+      // Apply safe transformations to create clean model name
+      const cleanOllamaModelName = validatedModelName.replace(/:/g, '-').replace(/-latest$/, '')
+
+      // ADDITIONAL VALIDATION - Ensure sanitized name is still safe
+      const CLEAN_MODEL_NAME_PATTERN = /^[a-zA-Z0-9_\-\.]+$/
+      if (!CLEAN_MODEL_NAME_PATTERN.test(cleanOllamaModelName)) {
+        console.warn(`Skipping model with unsafe sanitized name: ${cleanOllamaModelName}`)
+        continue
+      }
+
+      // Construct manifest directory using clean, validated components
+      const modelManifestDir = path.join(cleanOllamaManifestDir, cleanOllamaModelName)
+
+      // ADDITIONAL PATH VALIDATION - Ensure constructed path is safe
+      const normalizedManifestDir = path.normalize(modelManifestDir)
+      const normalizedOllamaDir = path.normalize(cleanOllamaManifestDir)
+
+      if (!normalizedManifestDir.startsWith(normalizedOllamaDir)) {
+        console.warn(`Skipping model with unsafe manifest path: ${cleanOllamaModelName}`)
+        continue
+      }
+
+      if (await fs.pathExists(fileURLToPath(new URL(`file://${normalizedManifestDir}`)))) {
+        const modelDestManifestDir = path.join(
+          modelDestDir,
+          'manifests',
+          'registry.ollama.ai',
+          'library',
+          cleanFolderName,
+        )
+        await fs.ensureDir(fileURLToPath(new URL(`file://${modelDestManifestDir}`)))
+
+        const manifestFilePath = path.join(normalizedManifestDir, cleanVersion)
+
+        // VALIDATE MANIFEST FILE PATH
+        const normalizedManifestFilePath = path.normalize(manifestFilePath)
+        if (!normalizedManifestFilePath.startsWith(normalizedManifestDir)) {
+          console.warn(`Skipping manifest file with unsafe path: ${cleanVersion}`)
+          continue
+        }
+
+        if (await fs.pathExists(fileURLToPath(new URL(`file://${normalizedManifestFilePath}`)))) {
+          await fs.copy(
+            fileURLToPath(new URL(`file://${normalizedManifestFilePath}`)),
+            fileURLToPath(new URL(`file://${path.join(modelDestManifestDir, cleanVersion)}`)),
+          )
+          console.log(`DEBUG: Copied manifest file for model version: ${cleanVersion}`)
+        } else {
+          throw new Error(`Manifest file not found for model: ${cleanOllamaModelName}`)
+        }
+
+        const shaRefs = new Set<string>()
+        try {
+          const content = await fs.readFile(
+            fileURLToPath(new URL(`file://${normalizedManifestFilePath}`)),
+            'utf-8',
+          )
+          const shaMatches = content.match(/sha256:[a-f0-9]+/g) || []
+          for (const sha of shaMatches) {
+            shaRefs.add(sha)
+          }
+        } catch {
+          throw new Error(`Failed to read manifest file for model: ${cleanOllamaModelName}`)
+        }
+
+        console.log(
+          `DEBUG: Found ${shaRefs.size} unique SHA references for model ${cleanOllamaModelName}`,
+        )
+
+        const blobsDestDir = path.join(modelDestDir, 'blobs')
+        await fs.ensureDir(fileURLToPath(new URL(`file://${blobsDestDir}`)))
+
+        for (const shaWithPrefix of shaRefs) {
+          // VALIDATE SHA FORMAT
+          const SHA_PATTERN = /^sha256:[a-f0-9]+$/
+          if (!SHA_PATTERN.test(shaWithPrefix)) {
+            console.warn(`Skipping invalid SHA format: ${shaWithPrefix}`)
+            continue
+          }
+
+          const sha = shaWithPrefix.replace('sha256:', '')
+
+          // VALIDATE EXTRACTED SHA
+          const SHA_HASH_PATTERN = /^[a-f0-9]+$/
+          if (!SHA_HASH_PATTERN.test(sha)) {
+            console.warn(`Skipping invalid SHA hash: ${sha}`)
+            continue
+          }
+
+          let sourceFile = path.join(cleanOllamaModelDir, shaWithPrefix)
+          if (!(await fs.pathExists(fileURLToPath(new URL(`file://${sourceFile}`))))) {
+            sourceFile = path.join(cleanOllamaModelDir, `sha256-${sha}`)
+            if (!(await fs.pathExists(fileURLToPath(new URL(`file://${sourceFile}`))))) {
+              sourceFile = path.join(cleanOllamaModelDir, sha)
+            }
+          }
+
+          if (await fs.pathExists(fileURLToPath(new URL(`file://${sourceFile}`)))) {
+            const relativePath = path.relative(cleanOllamaModelDir, sourceFile)
+            const destFile = path.join(blobsDestDir, relativePath)
+
+            // VALIDATE DESTINATION PATH
+            const normalizedDestFile = path.normalize(destFile)
+            const normalizedBlobsDir = path.normalize(blobsDestDir)
+
+            if (!normalizedDestFile.startsWith(normalizedBlobsDir)) {
+              console.warn(`Skipping blob with unsafe destination path: ${relativePath}`)
+              continue
+            }
+
+            await fs.ensureDir(fileURLToPath(new URL(`file://${path.dirname(normalizedDestFile)}`)))
+            if (!(await fs.pathExists(fileURLToPath(new URL(`file://${normalizedDestFile}`))))) {
+              try {
+                await fs.copy(
+                  fileURLToPath(new URL(`file://${sourceFile}`)),
+                  fileURLToPath(new URL(`file://${normalizedDestFile}`)),
+                )
+                console.log(`DEBUG: Copied blob file: ${relativePath}`)
+              } catch (copyErr) {
+                throw new Error(`Error copying blob file ${relativePath}: ${copyErr}`)
+              }
+            }
+          } else {
+            throw new Error(`Required blob file not found: ${shaWithPrefix}`)
+          }
+        }
+
+        console.log(`DEBUG: Finished copying blobs for model: ${cleanOllamaModelName}`)
+      } else {
+        throw new Error(`Model manifest directory not found: ${normalizedManifestDir}`)
+      }
+    } catch (error) {
+      throw new Error(`Exporting model ${modelName} failed due to ${error}`)
+    }
+  }
+
+  console.log(`DEBUG: Finished exporting ${modelNames.size} Ollama models`)
 }
