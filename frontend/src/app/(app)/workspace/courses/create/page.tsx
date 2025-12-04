@@ -94,6 +94,8 @@ interface CourseCodeOption extends ComboboxOption {
 }
 
 export default function CreateCoursePage() {
+  // Track if user attempted to go to next step
+  const [attemptedNext, setAttemptedNext] = useState(false)
   const router = useRouter()
   const { data: coursesData } = useCourses()
   const { mutateAsync: createCourse, isPending: isCreateCoursePending } = useCreateCourse()
@@ -149,8 +151,8 @@ export default function CreateCoursePage() {
   const form = useForm<CourseFormValues>({
     resolver: standardSchemaResolver(courseFormSchema),
     defaultValues,
-    mode: 'onBlur', // Validate on blur (not on every change)
-    reValidateMode: 'onSubmit', // Only re-validate on submit, not on every change
+    mode: 'onChange',
+    reValidateMode: 'onChange',
   })
 
   // Update course state when courses data changes
@@ -374,8 +376,12 @@ export default function CreateCoursePage() {
     }
   }
 
+  // No custom compulsory field validation; rely on react-hook-form + zod for inline warnings
+
   const handleNext = () => {
-    if (emblaApi) {
+    setAttemptedNext(true)
+    form.trigger()
+    if (form.formState.isValid && emblaApi) {
       emblaApi.scrollNext()
     }
   }
@@ -640,23 +646,32 @@ export default function CreateCoursePage() {
                             <FormField
                               control={form.control}
                               name="description"
-                              render={({ field }) => (
-                                <FormItem>
-                                  <FormLabel>Course Description</FormLabel>
-                                  <FormControl>
-                                    <Textarea
-                                      placeholder="A comprehensive introduction to the fundamental concepts of computer science..."
-                                      className="resize-none"
-                                      {...field}
-                                    />
-                                  </FormControl>
-                                  <FormDescription>
-                                    Provide a brief description of what students will learn in this
-                                    course.
-                                  </FormDescription>
-                                  <FormMessage />
-                                </FormItem>
-                              )}
+                              render={({ field }) => {
+                                const isInvalid =
+                                  attemptedNext && !!form.formState.errors.description
+                                return (
+                                  <FormItem>
+                                    <FormLabel>Course Description</FormLabel>
+                                    <FormControl>
+                                      <Textarea
+                                        placeholder="A comprehensive introduction to the fundamental concepts of computer science..."
+                                        className={cn(
+                                          'resize-none',
+                                          isInvalid
+                                            ? 'border-2 border-red-500 focus:border-red-500'
+                                            : '',
+                                        )}
+                                        {...field}
+                                      />
+                                    </FormControl>
+                                    <FormDescription>
+                                      Provide a brief description of what students will learn in
+                                      this course.
+                                    </FormDescription>
+                                    <FormMessage />
+                                  </FormItem>
+                                )
+                              }}
                             />
 
                             {/* Replace multi-tag UI with single text input for tag */}
@@ -829,12 +844,46 @@ export default function CreateCoursePage() {
             </Button>
           )}
         </div>
-        <div>
+        <div style={{ position: 'relative' }}>
           {currentSlide < 1 ? (
-            <Button onClick={handleNext}>
-              Next
-              <ArrowRight className="ml-2 h-4 w-4" />
-            </Button>
+            <>
+              <Button
+                onClick={handleNext}
+                disabled={!form.formState.isValid}
+                style={{ width: '100%' }}
+              >
+                Next
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+              {!form.formState.isValid && (
+                <div
+                  role="button"
+                  tabIndex={0}
+                  aria-disabled="true"
+                  aria-label="Next (disabled, highlight invalid fields)"
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: '100%',
+                    cursor: 'not-allowed',
+                    zIndex: 10,
+                  }}
+                  onClick={() => {
+                    setAttemptedNext(true)
+                    form.trigger()
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      setAttemptedNext(true)
+                      form.trigger()
+                      e.preventDefault()
+                    }
+                  }}
+                />
+              )}
+            </>
           ) : (
             <Button
               onClick={form.handleSubmit(onSubmit)}
