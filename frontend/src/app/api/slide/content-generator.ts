@@ -1,7 +1,7 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { getProvider } from '@/lib/providers'
+import { getProviderInfo } from '@/lib/providers'
 import { languageDirective, type Lang } from '@/lib/utils/lang'
 import { type ModelMessage, generateText } from 'ai'
 import type { ClientSource } from '@/lib/types/client-source'
@@ -37,8 +37,6 @@ import {
 import { validateAndSanitizeContent } from './content-validator'
 import { createFallbackContent } from './fallback-content'
 
-const provider = getProvider()
-
 // Define the AssessmentQuestion type
 
 export async function generateCourseContent(
@@ -53,6 +51,8 @@ export async function generateCourseContent(
   courseInfo?: CourseInfo,
 ): Promise<LectureContent> {
   try {
+    const { provider } = await getProviderInfo()
+
     // Prepare source content
     console.log('Preparing source content...')
     const hasSelectedSources = Array.isArray(selectedSources) && selectedSources.length > 0

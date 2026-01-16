@@ -1,7 +1,7 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { getProvider } from '@/lib/providers'
+import { getProviderInfo } from '@/lib/providers'
 import { type ModelMessage, generateObject } from 'ai'
 import { NextResponse } from 'next/server'
 import { getStoredChunks } from '@/lib/chunk/get-stored-chunks'
@@ -20,7 +20,6 @@ const TOKEN_MAX = Number.parseInt(process.env.RAG_TOKEN_MAX ?? '2048')
 const TOKEN_RESPONSE_RATIO = Number.parseFloat(process.env.RESPONSE_TOKEN_PERCENTAGE || '0.7')
 const TOKEN_RESPONSE_BUDGET = Math.floor(TOKEN_MAX * TOKEN_RESPONSE_RATIO)
 const TOKEN_CONTEXT_BUDGET = Math.floor(TOKEN_MAX * (1 - TOKEN_RESPONSE_RATIO))
-const provider = getProvider()
 
 // Zod schemas for chunked study plan generation
 // Chunk 1: Core structure - overview, topics, and strategies
@@ -263,6 +262,8 @@ function getDifficultyLevelPrompt(level: string): string {
 
 export async function POST(req: Request) {
   try {
+    const { provider } = await getProviderInfo()
+
     const {
       selectedModel,
       selectedSources,

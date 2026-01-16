@@ -8,7 +8,7 @@ import { NextResponse } from 'next/server'
 import os from 'os'
 import { Readable } from 'stream'
 import { fileURLToPath } from 'url'
-import { getAIService } from '@/lib/providers'
+import { getProviderInfo } from '@/lib/providers'
 
 // Inline abbreviation function to avoid "unknown function" taint
 const createSafeAbbreviation = (name: string): string => {
@@ -251,13 +251,13 @@ export async function POST(req: Request) {
     await fs.ensureDir(fileURLToPath(new URL(`file://${modelsDestDir}`)))
 
     // Detect AI service provider
-    const aiService = getAIService()
-    console.log(`DEBUG: Using AI service: ${aiService}`)
+    const { providerName } = await getProviderInfo()
+    console.log(`DEBUG: Using AI service: ${providerName}`)
 
     const platform = process.platform
 
     // Handle models based on AI service provider
-    if (aiService === 'ovms') {
+    if (providerName === 'ovms') {
       // OVMS MODEL EXPORT
       await exportOvmsModels(modelNames, modelsDestDir)
     } else {

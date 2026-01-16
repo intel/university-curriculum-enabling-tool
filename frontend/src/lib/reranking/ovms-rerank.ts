@@ -68,7 +68,8 @@ async function ensureOVMSRerankModelAvailable(modelId: string): Promise<void> {
 
   try {
     // Check if model exists via OVMS /v1/config endpoint
-    const ovmsBaseUrl = process.env.PROVIDER_URL || 'http://localhost:5950'
+    const { getLLMUrl } = await import('@/lib/getLLMUrl')
+    const ovmsBaseUrl = await getLLMUrl()
     const configUrl = new URL('/v1/config', ovmsBaseUrl)
 
     const configResponse = await fetch(configUrl.href, {
@@ -190,8 +191,9 @@ export async function rerankWithOVMS(
   modelName?: string,
   topN?: number,
 ): Promise<ScoredChunk[]> {
+  const { getLLMUrl } = await import('@/lib/getLLMUrl')
   const rerankerModel = modelName || process.env.OVMS_RERANKING_MODEL || 'BAAI/bge-reranker-large'
-  const ovmsBaseUrl = process.env.PROVIDER_URL || 'http://localhost:5950'
+  const ovmsBaseUrl = await getLLMUrl()
 
   logger.log(`Starting OVMS reranking with model: ${rerankerModel}`)
   logger.log(`Number of chunks to rerank: ${chunks.length}`)

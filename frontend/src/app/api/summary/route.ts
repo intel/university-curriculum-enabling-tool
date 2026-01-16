@@ -1,7 +1,7 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { getProvider } from '@/lib/providers'
+import { getProviderInfo } from '@/lib/providers'
 import { generateObject, ModelMessage } from 'ai'
 import { errorResponse } from '@/lib/api-response'
 import { hybridSearch } from '@/lib/chunk/hybrid-search'
@@ -96,9 +96,9 @@ const topK = 5
 const topN = 3
 const useReranker = false
 const similarityThreshold = 0.8
-const provider = getProvider()
 
 export async function POST(req: Request) {
+  const { provider } = await getProviderInfo()
   const { selectedModel, selectedSources, courseInfo, language } = await req.json()
 
   // Check if we have valid sources

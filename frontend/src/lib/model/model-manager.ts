@@ -33,12 +33,12 @@ import { getProviderInfo } from '@/lib/providers'
  * @returns A promise that resolves to a boolean indicating whether the model is available.
  */
 export async function isModelAvailable(providerUrl: string, modelName: string): Promise<boolean> {
-  const { service } = getProviderInfo()
+  const { providerName } = await getProviderInfo()
 
   try {
-    console.log(`Verifying model: ${modelName} on ${service}`)
+    console.log(`Verifying model: ${modelName} on ${providerName}`)
 
-    if (service === 'ovms') {
+    if (providerName === 'ovms') {
       // OVMS uses /v1/config endpoint
       const configUrl = new URL('/v1/config', providerUrl).href
       const response = await fetch(configUrl)
@@ -107,7 +107,7 @@ export async function isModelAvailable(providerUrl: string, modelName: string): 
       return modelExists
     }
   } catch (error) {
-    console.error(`Error checking ${service} models:`, error)
+    console.error(`Error checking ${providerName} models:`, error)
     return false
   }
 }
@@ -298,17 +298,17 @@ export async function verifyModel(
   model: string,
   weightFormat?: string,
 ): Promise<boolean> {
-  const { service } = getProviderInfo()
+  const { providerName } = await getProviderInfo()
 
   try {
     const modelExists = await isModelAvailable(providerUrl, model)
     if (!modelExists) {
-      if (service === 'ollama') {
+      if (providerName === 'ollama') {
         // For Ollama, try to download the model automatically
         console.log(`Model ${model} not found, attempting to download...`)
         const downloadSuccess = await downloadModel(providerUrl, model)
         return downloadSuccess
-      } else if (service === 'ovms') {
+      } else if (providerName === 'ovms') {
         // For OVMS, automatically download from HuggingFace
         console.log(`OVMS model '${model}' not found, attempting to download from HuggingFace...`)
         console.log(`This may take 10-30 minutes depending on model size and network speed.`)

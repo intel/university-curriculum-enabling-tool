@@ -94,8 +94,12 @@ export interface Config {
   db: {
     defaultIDType: number;
   };
-  globals: {};
-  globalsSelect: {};
+  globals: {
+    'llm-config': LlmConfig;
+  };
+  globalsSelect: {
+    'llm-config': LlmConfigSelect<false> | LlmConfigSelect<true>;
+  };
   locale: null;
   user: User & {
     collection: 'users';
@@ -503,6 +507,34 @@ export interface PayloadMigrationsSelect<T extends boolean = true> {
   batch?: T;
   updatedAt?: T;
   createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "llm-config".
+ */
+export interface LlmConfig {
+  id: number;
+  /**
+   * Select the type of LLM server you are connecting to
+   */
+  providerType?: ('ovms' | 'ollama') | null;
+  /**
+   * Base URL for Ollama or OpenVINO Model Server (OVMS) API (e.g. http://localhost:5950)
+   */
+  llmURL?: string | null;
+  updatedAt?: string | null;
+  createdAt?: string | null;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "llm-config_select".
+ */
+export interface LlmConfigSelect<T extends boolean = true> {
+  providerType?: T;
+  llmURL?: T;
+  updatedAt?: T;
+  createdAt?: T;
+  globalType?: T;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema

@@ -2,15 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { getProviderInfo } from '@/lib/providers'
+import { getLLMUrl } from '@/lib/getLLMUrl'
 import { getOVMSModelDetails } from '@/lib/ovms/ovms-models'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
 export async function GET() {
-  const { service, baseURL } = getProviderInfo()
+  const { providerName, baseURL } = await getProviderInfo()
 
-  if (service === 'ovms') {
+  if (providerName === 'ovms') {
     try {
       // OVMS /v3/models endpoint returns 400 "Invalid request URL"
       // This endpoint may only work with specific OVMS configurations
@@ -36,7 +37,7 @@ export async function GET() {
     }
   } else {
     try {
-      const ollamaUrl = process.env.PROVIDER_URL || 'http://localhost:5950'
+      const ollamaUrl = await getLLMUrl()
       const tagsUrl = new URL('/api/tags', ollamaUrl).href
       const res = await fetch(tagsUrl)
       if (!res.ok) {

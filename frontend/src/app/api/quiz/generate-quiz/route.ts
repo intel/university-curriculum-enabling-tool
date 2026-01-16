@@ -1,7 +1,7 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { getProvider } from '@/lib/providers'
+import { getProviderInfo } from '@/lib/providers'
 import { type ModelMessage, generateObject } from 'ai'
 import { NextResponse } from 'next/server'
 import { getStoredChunks } from '@/lib/chunk/get-stored-chunks'
@@ -18,8 +18,6 @@ const TEMPERATURE = Number.parseFloat(process.env.RAG_TEMPERATURE || '0.1')
 const TOKEN_MAX = Number.parseInt(process.env.RAG_TOKEN_MAX ?? '2048')
 const TOKEN_RESPONSE_BUDGET = 2048
 const TOKEN_CONTEXT_BUDGET = 1024
-
-const provider = getProvider()
 
 // Zod schemas for quiz generation
 const mcqQuestionSchema = z.object({
@@ -72,6 +70,8 @@ const getQuizSchema = (questionType: string) => {
 
 export async function POST(req: Request) {
   try {
+    const { provider } = await getProviderInfo()
+
     const {
       selectedModel,
       selectedSources,
