@@ -3,25 +3,21 @@
 
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 
-// Get OVMS base URL from environment variables
+// Create an OVMS provider instance with a dynamic base URL
+// OVMS OpenAI-compatible endpoints:
 // - Chat Completions: /v3/chat/completions
 // - Embeddings: /v3/embeddings
 // - Models List: /v3/models
-function getOVMSBaseURL(): string {
-  const ovmsUrl = process.env.PROVIDER_URL || 'http://localhost:5950'
-
+export function createOVMSProvider(baseURL: string) {
   // Ensure the URL ends with /v3 for OpenAI compatibility
-  if (ovmsUrl.endsWith('/v3')) {
-    return ovmsUrl
-  }
+  const formattedURL = baseURL.endsWith('/v3') ? baseURL : `${baseURL}/v3`
 
-  return `${ovmsUrl}/v3`
+  const provider = createOpenAICompatible({
+    name: 'ovms',
+    baseURL: formattedURL,
+    includeUsage: true,
+    supportsStructuredOutputs: true,
+  })
+
+  return { provider, baseURL: formattedURL }
 }
-
-// OVMS provider instance configured for OpenAI-compatible API
-export const ovms = createOpenAICompatible({
-  name: 'ovms',
-  baseURL: getOVMSBaseURL(),
-  includeUsage: true,
-  supportsStructuredOutputs: true,
-})

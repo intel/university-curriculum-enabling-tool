@@ -1,7 +1,7 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { getProvider, getProviderInfo } from '@/lib/providers'
+import { getProviderInfo } from '@/lib/providers'
 import { streamText, ModelMessage } from 'ai'
 import { errorHandler } from '@/lib/handler/error-handler'
 import { retrieveContextByEmbedding } from '@/lib/assistant/retrieve-context-by-embedding'
@@ -35,7 +35,7 @@ const TOKEN_CONTEXT_BUDGET = TOKEN_MAX - TOKEN_RESPONSE_BUDGET
  */
 export async function POST(req: Request) {
   const { messages, selectedModel, selectedSources, data, language } = await req.json()
-  const provider = getProvider()
+  const { providerName, provider } = await getProviderInfo()
 
   console.log('DEBUG: CHAT API selectedModel:', selectedModel)
 
@@ -425,10 +425,9 @@ Keep it to 2–3 bullets. Do not reveal internal chain-of-thought or hidden step
   )
 
   // Step 6: Prepare messages based on provider type
-  const { service } = getProviderInfo()
   let messagesToSend: ModelMessage[]
 
-  if (service === 'ovms') {
+  if (providerName === 'ovms') {
     // RAG mode
     if (hasSelectedSources && assistantContent !== 'No relevant knowledge found.') {
       messagesToSend = validatedFullMessages

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getAIService } from '@/lib/providers'
+import { getProviderInfo } from '@/lib/providers'
+import { getLLMUrl } from '@/lib/getLLMUrl'
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
@@ -11,7 +12,7 @@ import os from 'os'
 export async function POST(req: Request) {
   const { name } = await req.json()
 
-  const ollamaUrl = process.env.PROVIDER_URL
+  const ollamaUrl = await getLLMUrl()
 
   const ollamaPullUrl = new URL('/api/pull', ollamaUrl).href
   const response = await fetch(ollamaPullUrl, {
@@ -78,9 +79,9 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: 'Model name is required' }, { status: 400 })
     }
 
-    const aiService = getAIService()
+    const { providerName } = await getProviderInfo()
 
-    if (aiService === 'ovms') {
+    if (providerName === 'ovms') {
       // Handle OVMS model deletion
       return await deleteOVMSModel(model)
     } else {
@@ -101,9 +102,9 @@ export async function DELETE(req: NextRequest) {
  * Delete an Ollama model
  */
 async function deleteOllamaModel(model: string): Promise<NextResponse> {
-  const PROVIDER_URL = process.env.PROVIDER_URL
+  const PROVIDER_URL = await getLLMUrl()
   if (!PROVIDER_URL) {
-    return NextResponse.json({ error: 'PROVIDER_URL is not configured' }, { status: 500 })
+    return NextResponse.json({ error: 'LLM URL is not configured' }, { status: 500 })
   }
 
   const ollamaDeleteUrl = new URL('/api/delete', PROVIDER_URL).href
@@ -294,7 +295,7 @@ async function deleteOVMSModel(modelName: string): Promise<NextResponse> {
 
     // Wait for OVMS to detect the config change (polling interval is 1 second)
     // Give it up to 3 seconds to reload
-    const PROVIDER_URL = process.env.PROVIDER_URL || 'http://localhost:5950'
+    const PROVIDER_URL = await getLLMUrl()
     let reloadSuccess = false
 
     for (let attempt = 0; attempt < 3; attempt++) {

@@ -1,50 +1,23 @@
-import { ollama } from './ollama-provider'
-import { ovms } from './ovms-provider'
+import { createOllamaProvider } from './ollama-provider'
+import { createOVMSProvider } from './ovms-provider'
 
-let providerInfoLogged = false
+export type AIProvider = 'ollama' | 'ovms'
 
-export type AIService = 'ollama' | 'ovms'
+// Provider metadata with dynamically configured provider instance
+export async function getProviderInfo() {
+  // To resolve cicular import issue
+  const { getLLMConfig } = await import('@/lib/getLLMUrl')
+  // Get the provider type and base URL from database configuration
+  const config = await getLLMConfig()
+  const providerName: AIProvider = config.providerType
+  const providerUrl = config.llmURL
 
-// Return configured service (NEXT_PUBLIC_SERVICE or PROVIDER). Default 'ollama'.
-export function getAIService(): AIService {
-  const service = (process.env.NEXT_PUBLIC_SERVICE || process.env.PROVIDER)?.toLowerCase()
-  return service === 'ovms' ? 'ovms' : 'ollama'
+  const { provider, baseURL } =
+    providerName === 'ovms' ? createOVMSProvider(providerUrl) : createOllamaProvider(providerUrl)
+
+  console.log(
+    `[getProviderInfo] providerName=${providerName}, providerUrl=${providerUrl}, formattedBaseURL=${baseURL}`,
+  )
+
+  return { providerName, provider, baseURL }
 }
-
-// Log provider info once for diagnostics
-function logProviderInfo() {
-  if (providerInfoLogged) return
-  providerInfoLogged = true
-  const info = getProviderInfo()
-  console.log('[AI Provider] ', info.service.toUpperCase(), info.baseURL)
-}
-
-// Return the provider implementation based on PROVIDER
-export function getProvider() {
-  logProviderInfo()
-  return getAIService() === 'ovms' ? ovms : ollama
-}
-
-// Get provider by explicit service name
-export function getProviderByService(service: AIService) {
-  return service === 'ovms' ? ovms : ollama
-}
-
-// Return service metadata (service, provider instance, base URL)
-export function getProviderInfo() {
-  const service = getAIService()
-  const provider = getProvider()
-  let baseURL = ''
-  if (service === 'ovms') {
-    const ovmsUrl = process.env.PROVIDER_URL || 'http://localhost:5950'
-    baseURL = ovmsUrl.endsWith('/v3') ? ovmsUrl : `${ovmsUrl}/v3`
-  } else {
-    const ollamaUrl = process.env.PROVIDER_URL || 'http://localhost:5950'
-    baseURL = ollamaUrl.endsWith('/v1') ? ollamaUrl : `${ollamaUrl}/v1`
-  }
-
-  return { service, provider, baseURL }
-}
-
-export { ollama } from './ollama-provider'
-export { ovms } from './ovms-provider'

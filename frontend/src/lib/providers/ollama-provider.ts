@@ -3,20 +3,14 @@
 
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 
-// Get Ollama base URL from environment variables
-function getOllamaBaseURL(): string {
-  const ollamaUrl = process.env.PROVIDER_URL || 'http://localhost:5950'
+// Create an Ollama provider instance with a dynamic base URL
+export function createOllamaProvider(baseURL: string) {
+  const formattedURL = baseURL.endsWith('/v1') ? baseURL : `${baseURL}/v1`
 
-  // Ensure the URL ends with /v1 for OpenAI compatibility
-  if (ollamaUrl.endsWith('/v1')) {
-    return ollamaUrl
-  }
+  const provider = createOpenAICompatible({
+    name: 'ollama',
+    baseURL: formattedURL,
+  })
 
-  return `${ollamaUrl}/v1`
+  return { provider, baseURL: formattedURL }
 }
-
-// Ollama provider instance configured for OpenAI-compatible API
-export const ollama = createOpenAICompatible({
-  name: 'ollama',
-  baseURL: getOllamaBaseURL(),
-})

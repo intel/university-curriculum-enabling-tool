@@ -19,7 +19,7 @@ import { z } from 'zod'
 import { standardSchemaResolver } from '@hookform/resolvers/standard-schema'
 import { throttle } from 'lodash'
 import { Info, Loader2 } from 'lucide-react'
-import type { AIService } from '@/lib/providers'
+import type { AIProvider } from '@/lib/providers'
 
 interface ModelDownloaderProps {
   open: boolean
@@ -34,7 +34,7 @@ const formSchema = z.object({
 })
 
 export function ModelDownloader({ open, onOpenChange }: ModelDownloaderProps) {
-  const [aiService, setAiService] = useState<AIService>('ollama')
+  const [aiService, setAiService] = useState<AIProvider | undefined>()
 
   const {
     isDownloading,
@@ -55,7 +55,7 @@ export function ModelDownloader({ open, onOpenChange }: ModelDownloaderProps) {
         if (response.ok) {
           const data = await response.json()
           if (data.success && data.provider) {
-            setAiService(data.provider.service)
+            setAiService(data.provider.providerName)
           }
         }
       } catch (error) {
@@ -207,6 +207,11 @@ export function ModelDownloader({ open, onOpenChange }: ModelDownloaderProps) {
       mutate() // Fetch models when the download completes
     }
   }, [isDownloading, mutate])
+
+  // Wait for provider info to load
+  if (!aiService) {
+    return null
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

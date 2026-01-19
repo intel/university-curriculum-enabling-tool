@@ -9,7 +9,7 @@ import {
   TypeValidationError,
 } from 'ai'
 import { ContextChunk, ScoredChunk } from '../types/context-chunk'
-import { getProvider, getProviderInfo } from '@/lib/providers'
+import { getProviderInfo } from '@/lib/providers'
 import { EmbeddingChunk } from '../types/embedding-chunk'
 import { z } from 'zod'
 import { effectiveTokenCountForText } from '../utils'
@@ -24,8 +24,6 @@ const rerankingSchema = z.object({
     }),
   ),
 })
-
-const provider = getProvider()
 
 export interface RerankingResult {
   candidate: number
@@ -56,13 +54,13 @@ export async function retrieveContextByReranking(
   tokenMax: number = parseInt(process.env.RAG_TOKEN_MAX ?? '1024'),
 ): Promise<ContextChunk[]> {
   // Get provider info to determine which reranking model to use
-  const { service } = getProviderInfo()
+  const { providerName, provider } = await getProviderInfo()
 
   // Determine the reranking model from environment if not provided
   let effectiveRerankingModel: string
   if (rerankingModel) {
     effectiveRerankingModel = rerankingModel
-  } else if (service === 'ovms') {
+  } else if (providerName === 'ovms') {
     effectiveRerankingModel = process.env.OVMS_RERANKING_MODEL || ''
     if (!effectiveRerankingModel) {
       throw new Error('OVMS_RERANKING_MODEL environment variable is not set')
@@ -123,7 +121,7 @@ export async function retrieveContextByReranking(
   let combinedCandidates: typeof topCandidates = topCandidates // Default to topCandidates
 
   // Choose reranking strategy based on provider
-  if (service === 'ovms') {
+  if (providerName === 'ovms') {
     // OVMS: Use dedicated /v3/rerank endpoint (efficient batch API)
     console.log(`Using OVMS rerank API with model: ${effectiveRerankingModel}`)
 

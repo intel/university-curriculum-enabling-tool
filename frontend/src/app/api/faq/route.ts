@@ -1,7 +1,7 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { getProvider } from '@/lib/providers'
+import { getProviderInfo } from '@/lib/providers'
 import { generateObject, convertToModelMessages, type UIMessage } from 'ai'
 import { NextResponse } from 'next/server'
 import { hybridSearch } from '@/lib/chunk/hybrid-search'
@@ -43,7 +43,6 @@ type Usage = { inputTokens?: number; outputTokens?: number; totalTokens?: number
 const getInputTokens = (u?: Usage | undefined) => u?.inputTokens ?? 0
 const getOutputTokens = (u?: Usage | undefined) => u?.outputTokens ?? 0
 const getTotalTokens = (u?: Usage | undefined) => u?.totalTokens ?? 0
-const provider = getProvider()
 
 export const dynamic = 'force-dynamic'
 
@@ -361,6 +360,8 @@ const createFaqGenerationFunction = (): GenerationFunction<FaqResult> => {
  */
 export async function POST(req: Request) {
   try {
+    const { provider } = await getProviderInfo()
+
     // Parse request data
     const {
       selectedModel,

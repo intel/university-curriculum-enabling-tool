@@ -71,15 +71,14 @@ export async function generateEmbeddings(
   modelName?: string,
 ): Promise<EmbeddingChunk[]> {
   // Get provider info (Ollama or OVMS)
-  const providerInfo = getProviderInfo()
-  const { service, baseURL } = providerInfo
+  const { providerName, baseURL } = await getProviderInfo()
 
   // Get the appropriate model name for embeddings from environment
   // If modelName is provided explicitly, use that; otherwise read from provider-specific env
   let effectiveModelName: string
   if (modelName) {
     effectiveModelName = modelName
-  } else if (service === 'ovms') {
+  } else if (providerName === 'ovms') {
     effectiveModelName = process.env.OVMS_EMBEDDING_MODEL || ''
     if (!effectiveModelName) {
       throw new Error('OVMS_EMBEDDING_MODEL environment variable is not set')
@@ -92,20 +91,20 @@ export async function generateEmbeddings(
   }
 
   console.log(`DEBUG: generateEmbeddings starting with:`)
-  console.log(`  provider: ${service}`)
+  console.log(`  provider: ${providerName}`)
   console.log(`  baseURL: ${baseURL}`)
   console.log(`  modelName: ${effectiveModelName}`)
   console.log(`  text length: ${text.length}`)
 
   // Ensure the embedding model is available before trying to use it
   // verifyModel handles both Ollama and OVMS model availability and downloads
-  console.log(`DEBUG: Verifying model ${effectiveModelName} is available for ${service}...`)
+  console.log(`DEBUG: Verifying model ${effectiveModelName} is available for ${providerName}...`)
   const modelAvailable = await verifyModel(baseURL, effectiveModelName)
 
   if (!modelAvailable) {
     throw new Error(
-      `Failed to verify or download embedding model ${effectiveModelName} for ${service}. ` +
-        `Please check your ${service === 'ovms' ? 'OVMS_EMBEDDING_MODEL' : 'OLLAMA_EMBEDDING_MODEL'} configuration.`,
+      `Failed to verify or download embedding model ${effectiveModelName} for ${providerName}. ` +
+        `Please check your ${providerName === 'ovms' ? 'OVMS_EMBEDDING_MODEL' : 'OLLAMA_EMBEDDING_MODEL'} configuration.`,
     )
   }
 
@@ -179,20 +178,20 @@ Length: ${chunk.length} -> ${sanitized.length}
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         console.log(
-          `DEBUG: ${service.toUpperCase()} API call for chunk ${index + 1}, attempt ${attempt}, model: ${effectiveModelName}, sanitized length: ${sanitized.length}`,
+          `DEBUG: ${providerName.toUpperCase()} API call for chunk ${index + 1}, attempt ${attempt}, model: ${effectiveModelName}, sanitized length: ${sanitized.length}`,
         )
 
         // Construct endpoint URL based on provider
+        const { getLLMUrl } = await import('@/lib/getLLMUrl')
+        const baseUrl = await getLLMUrl()
         let embeddingUrl: URL
-        if (service === 'ovms') {
+        if (providerName === 'ovms') {
           // OVMS uses /v3/embeddings (OpenAI-compatible)
-          const ovmsBaseUrl = process.env.PROVIDER_URL || 'http://localhost:5950'
-          embeddingUrl = new URL('/v3/embeddings', ovmsBaseUrl)
+          embeddingUrl = new URL('/v3/embeddings', baseUrl)
           console.log(`DEBUG: Construct URL to embeddingUrl= ${embeddingUrl}`)
         } else {
           // Ollama uses /api/embed or /v1/embeddings (both work)
-          const ollamaBaseUrl = process.env.PROVIDER_URL || 'http://localhost:5950'
-          embeddingUrl = new URL('/api/embed', ollamaBaseUrl)
+          embeddingUrl = new URL('/api/embed', baseUrl)
         }
 
         console.log('DEBUG: Attempting to call /v3/embeddings for OVMS, checking contents')
@@ -224,7 +223,7 @@ Length: ${chunk.length} -> ${sanitized.length}
         let embedding: number[]
 
         try {
-          if (service === 'ovms') {
+          if (providerName === 'ovms') {
             // OVMS uses OpenAI-compatible format: { data: [{ embedding: [...] }] }
             const ovmsResponse: OVMSEmbedResponse = JSON.parse(responseText)
 

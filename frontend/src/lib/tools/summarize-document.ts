@@ -4,10 +4,8 @@
 import { z } from 'zod'
 import { tool, generateText } from 'ai'
 import { getStoredEmbeddings } from '../embedding/get-stored-embeddings'
-import { getProvider, getProviderInfo } from '@/lib/providers'
+import { getProviderInfo } from '@/lib/providers'
 import { verifyModel } from '../model/model-manager'
-
-const provider = getProvider()
 
 export const summarizeDocument = tool({
   description:
@@ -25,7 +23,7 @@ export const summarizeDocument = tool({
   execute: async (args) => {
     const { selectedSources, query, approach, selectedModel } = args
     // Ensure the model exists before generating text.
-    const { baseURL } = getProviderInfo()
+    const { provider, baseURL } = await getProviderInfo()
 
     await verifyModel(baseURL, selectedModel)
 

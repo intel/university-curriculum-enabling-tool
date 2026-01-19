@@ -57,6 +57,7 @@ if [ "$2" == "--force" ]; then
   FORCE_FLAG="--force"
 fi
 
+
 # Check for development mode environment variable
 DEV_MODE=${DEV_MODE:-false}
 if [ "$DEV_MODE" == "true" ]; then
@@ -232,6 +233,47 @@ if [ ! -f "$JQ_BIN" ]; then
   echo "jq installed locally at $JQ_BIN"
 fi
 
+# Global variable to track GPU compatibility status
+GPU_COMPATIBLE=false
+
+check_gpu_compatibility() {
+  echo ""
+  echo "Checking system GPU compatibility..."
+
+  local GPU_OK=false
+  CPU_MODEL=$(lscpu | grep "Model name" | awk -F: '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}')
+
+  # Detect Intel Core Ultra (iGPU)
+  if echo "$CPU_MODEL" | grep -iq "Core.*Ultra"; then
+    echo "Detected Core Ultra CPU ($CPU_MODEL) — iGPU supported."
+    GPU_OK=true
+  else
+    # Detect Intel discrete GPU
+    DGPU_LINE=$(lspci -nn 2>/dev/null | grep -Ei 'VGA|DISPLAY' | grep -E '8086' | grep -v '00:02.0')
+    if [ -n "$DGPU_LINE" ]; then
+      echo "Intel discrete GPU detected:"
+      echo "   $DGPU_LINE"
+      GPU_OK=true
+    else
+      echo "Warning: No compatible Intel GPU detected."
+      GPU_OK=false
+    fi
+  fi
+  
+  # Set global variable for use at end of installation
+  GPU_COMPATIBLE=$GPU_OK
+  
+  # Return 0 if GPU is OK, 1 if not
+  if [ "$GPU_OK" = true ]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+# Run GPU compatibility check
+check_gpu_compatibility
+
 # Add Node.js to PATH so npm can find it
 export PATH="$NODE_DIR/bin:$PATH"
 
@@ -251,7 +293,7 @@ if [ "$IS_DIST_PACKAGE" = false ]; then
     "fs-extra": "^11.3.0",
     "archiver": "^7.0.1",
     "commander": "^14.0.0",
-    "pm2": "^6.0.8"
+    "pm2": "^6.0.10"
   }
 }' > "$SCRIPT_DIR/package.json"
   fi
@@ -299,6 +341,7 @@ if [ "$IS_DIST_PACKAGE" = false ]; then
     fi
   fi
   
+
   cd .. || exit 1
 
   # Skip build and distribution package creation in development mode
@@ -402,7 +445,6 @@ export PROVIDER=\"$PROVIDER\"
 " > "$DIST_PACKAGE/node_env.sh"
     chmod +x "$DIST_PACKAGE/node_env.sh"
     echo "node_env.sh created successfully at: $DIST_PACKAGE/node_env.sh"
-        
     echo ""
     echo "To continue installation on this system, run the following commands:"
     echo "-----------------------------------------------------------------------"
@@ -463,7 +505,7 @@ else
     "fs-extra": "^11.3.0",
     "archiver": "^7.0.1",
     "commander": "^14.0.0",
-    "pm2": "^6.0.8"
+    "pm2": "^6.0.10"
   }
 }' > "$SCRIPT_DIR/package.json"
   fi
@@ -501,6 +543,16 @@ fi
 
 echo "Installation completed successfully"
 echo ""
+
+# Display GPU compatibility message if no compatible GPU detected
+if [ "$GPU_COMPATIBLE" = false ]; then
+  echo "-----------------------------------------------------------------------"
+  echo "Warning: You have no compatible Intel GPU detected."
+  echo "         You should navigate to settings page to configure to use external AI Provider server"
+  echo "-----------------------------------------------------------------------"
+  echo ""
+fi
+
 echo "To start the application, run the following command:"
 echo "-----------------------------------------------------------------------"
 echo "./run.sh"

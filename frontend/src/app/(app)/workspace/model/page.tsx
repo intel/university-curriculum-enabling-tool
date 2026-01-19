@@ -6,7 +6,6 @@
 import { useState, useMemo, useEffect } from 'react'
 import { usePersonaStore } from '@/lib/store/persona-store'
 import { useModelStore } from '@/lib/store/model-store'
-import { getAIService } from '@/lib/providers'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -77,9 +76,27 @@ export default function ModelPage() {
   const { models, setSelectedModel } = useModelStore()
   const { deleteModelByName } = useDeleteModel()
 
-  // Get the AI service to determine which library to show
-  const aiService = getAIService()
+  // Get the AI service dynamically from the API
+  const [aiService, setAiService] = useState<'ollama' | 'ovms' | undefined>(undefined)
   const modelLibraryName = aiService === 'ovms' ? 'HuggingFace Library' : 'Ollama Library'
+
+  // Fetch provider info on mount
+  useEffect(() => {
+    const fetchProviderInfo = async () => {
+      try {
+        const response = await fetch('/api/provider-info')
+        if (response.ok) {
+          const data = await response.json()
+          if (data.success && data.provider) {
+            setAiService(data.provider.providerName)
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch provider info:', error)
+      }
+    }
+    fetchProviderInfo()
+  }, [])
 
   const [searchTerm, setSearchTerm] = useState('')
   const [isDownloaderOpen, setIsDownloaderOpen] = useState(false)

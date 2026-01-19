@@ -320,7 +320,7 @@ export const ALLOWED_COMMANDS_CONFIG = {
     aliases: ['pm2', pm2Command],
     allowedArgs: new Set([
       'jlist', 'start', 'stop', 'delete', 'restart', 'reload',
-      '--silent', '--namespace', 'all', 'update', 'test', 'test-suite'
+      '--silent', '--namespace', 'all', 'update', 'test', 'test-suite', '--only'
     ]),
   },
   npx: {
@@ -328,7 +328,7 @@ export const ALLOWED_COMMANDS_CONFIG = {
     aliases: ['npx', pm2Command],
     allowedArgs: new Set([
       'pm2', 'start', 'stop', 'delete', 'restart', 'reload',
-      'jlist', '--silent', '--namespace', 'all', 'ecosystem.config.cjs', 'latest', 'test', 'test-suite'
+      'jlist', '--silent', '--namespace', 'all', 'ecosystem.config.cjs', 'latest', 'test', 'test-suite', '--only'
     ]),
   },
   python3: {
@@ -349,7 +349,7 @@ export const ALLOWED_COMMANDS_CONFIG = {
   node: {
     path: nodePath,
     aliases: ['node', nodePath],
-    allowedArgs: new Set(['jlist', 'start', 'stop', 'delete', 'restart', 'reload', '--silent', '--namespace', 'all', 'update', 'test', 'test-suite']),
+    allowedArgs: new Set(['jlist', 'start', 'stop', 'delete', 'restart', 'reload', '--silent', '--namespace', 'all', 'update', 'test', 'test-suite', '--only']),
   },
   curl: {
     path: 'curl',
@@ -404,7 +404,7 @@ export const ALLOWED_COMMANDS_CONFIG = {
   cmd: {
     path: isWindows ? 'cmd' : null,
     aliases: ['cmd'],
-    allowedArgs: new Set(['/c', '/k', 'npx', 'pm2', 'jlist', '--silent', 'start', 'stop', 'delete', 'all', '--namespace']),
+    allowedArgs: new Set(['/c', '/k', 'npx', 'pm2', 'jlist', '--silent', 'start', 'stop', 'delete', 'all', '--namespace', '--only']),
   },
   pm2bin: {
     path: path.join(WORKING_DIR, 'node_modules', 'pm2', 'bin', 'pm2'),
@@ -2543,6 +2543,161 @@ export async function startFrontend(persona) {
 }
 
 /**
+ * Start frontend and backend services only (no AI Provider)
+ */
+export async function startServicesNoProvider(persona) {
+  console.log(`Starting frontend and backend services only for persona: ${persona}`);
+  console.log('Note: AI Provider services (Ollama/OVMS) will not be started.');
+  console.log('Please configure external AI Provider in the settings page.');
+
+  // Kill PM2 daemon to avoid stale state or path issues
+  try {
+    console.log('Killing PM2 daemon to ensure a clean state...');
+    await executePM2Command(['kill']);
+    console.log('PM2 daemon killed successfully.');
+  } catch (err) {
+    console.warn('Failed to kill PM2 daemon (it may not be running):', err);
+  }
+
+  // Get fresh paths with specified persona
+  const { isDistPackage, isRootRepo, root, venv, backend, ecosystem, dist, frontend } = resolvePaths({ persona });
+
+  try {
+    // Get the name and version from frontend package.json
+    const packageJsonPath = path.join(frontend, 'package.json');
+    let packageName = 'university-curriculum-enabling-tool';
+    let packageVersion = '';
+
+    if (fs.existsSync(packageJsonPath)) {
+      try {
+        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+        packageName = packageJson.name || packageName;
+        packageVersion = packageJson.version || '';
+      } catch (error) {
+        console.warn(`Failed to parse package.json: ${error.message}. Using default package name.`);
+      }
+    }
+
+    // Create package directory name with name and version from package.json
+    const versionString = packageVersion ? `-${packageVersion}` : '';
+    // For faculty persona, don't append the persona label
+    const distPackage = persona.toLowerCase() === 'faculty'
+      ? path.join(dist, `${packageName}${versionString}`)
+      : path.join(dist, `${packageName}${versionString}-${persona}`);
+    const distVersionFile = path.join(distPackage, '.version');
+
+    // For repository environment, especially root repo, try to use the distribution package
+    let useDistPackage = false;
+    let distEcosystemConfig = null;
+
+    // If we're in the root repository, we should use the dist package for services
+    if (isRootRepo) {
+      console.log('Running from root repository. Checking for distribution package...');
+
+      // Check if we have a valid distribution package
+      if (fs.existsSync(distPackage) && fs.existsSync(distVersionFile)) {
+        console.log(`Found distribution package at ${distPackage}. Will use it for services.`);
+        useDistPackage = true;
+        distEcosystemConfig = path.join(distPackage, 'ecosystem.config.cjs');
+      } else {
+        console.error('ERROR: No valid distribution package found when running from root repository.');
+        console.error('Please run install.sh/install.bat to create a distribution package first.');
+        process.exit(1);
+      }
+    }
+    // For non-root, non-dist package environments
+    else if (!isDistPackage) {
+      // If we don't have a distribution package with a .version file, refuse to continue
+      if (!fs.existsSync(distPackage) || !fs.existsSync(distVersionFile)) {
+        console.error('ERROR: No valid distribution package found.');
+        console.error('Please run install.sh/install.bat to create a distribution package first.');
+        process.exit(1);
+      } else {
+        console.log(`Found distribution package at ${distPackage}. Continuing...`);
+      }
+    }
+
+    // Get the backend path
+    // If using distribution package from root repo, use the paths from distPackage
+    let backendPath = backend;
+    let venvPath = venv;
+
+    if (useDistPackage) {
+      console.log('Using backend from distribution package...');
+      backendPath = path.join(distPackage, 'backend');
+      venvPath = path.join(distPackage, 'backend', 'venv');
+    }
+
+    // Setup backend if needed - always check the correct path based on our environment
+    if (!fs.existsSync(venvPath)) {
+      console.log('Backend environment not found. Setting up...');
+      const setupResult = await setupBackend(false, backendPath, venvPath);
+      if (!setupResult.success) {
+        console.warn('Failed to setup backend, but continuing...');
+      }
+    }
+
+    // Start backend and frontend services using the ecosystem config
+    console.log('Starting backend and frontend services using PM2 ecosystem config...');
+    console.log(`Current working directory: ${process.cwd()}`);
+
+    // Set the persona in the environment
+    process.env.PERSONA = persona.toLowerCase();
+
+    // Get PM2 namespace
+    const projectTag = getPM2Namespace();
+    console.log(`Using PM2 namespace: ${projectTag}`);
+
+    // Use the distribution package ecosystem config if we're in root repo
+    const configToUse = useDistPackage ? distEcosystemConfig : ecosystem;
+    console.log(`Using ecosystem config at: ${configToUse}`);
+
+    // If using distribution package from root repo, we need to change to that directory
+    if (useDistPackage) {
+      console.log(`Changing directory to distribution package: ${distPackage}`);
+      if (isSafeRelativePath(distPackage)) {
+        process.chdir(fileURLToPath(new URL(`file://${path.resolve(distPackage)}`)));
+        console.log(`New working directory: ${process.cwd()}`);
+      } else {
+        throw new Error(`Unsafe distribution package directory detected: ${distPackage}`);
+      }
+    }
+
+    // Start PM2 services - only backend and frontend (no provider)
+    console.log('Starting backend service...');
+    await executePM2Command(['start', configToUse, '--only', 'backend', '--namespace', projectTag]);
+    
+    console.log(`Starting frontend service for persona: ${persona}...`);
+    await executePM2Command(['start', configToUse, '--only', 'frontend', '--namespace', projectTag]);
+    
+    console.log(`Backend and frontend services started successfully for persona: ${persona}`);
+
+    // Check and display service status using checkServicesStatus instead of running pm2 list directly
+    const serviceStatus = checkServicesStatus();
+
+    if (serviceStatus.success) {
+      console.log(`Services status: ${serviceStatus.running ? 'Running' : 'Not running'}`);
+
+      if (serviceStatus.servicesCount > 0) {
+        console.log(`Total services: ${serviceStatus.servicesCount}`);
+        console.log(`Online services: ${serviceStatus.onlineCount}`);
+
+        if (serviceStatus.errorCount > 0) {
+          console.warn(`Error services: ${serviceStatus.errorCount} (${serviceStatus.errorNames})`);
+        }
+      }
+    } else {
+      console.warn('Failed to check services status:', serviceStatus.error);
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error(`Failed to start services for persona ${persona}:`, error);
+    return { success: false, error };
+  }
+}
+
+/**
  * Start all services for a specific persona
  */
 export async function startServices(persona) {
@@ -3122,6 +3277,9 @@ if (import.meta.url === linuxMetaUrl || import.meta.url === `file:///${normalize
         case 'start':
           await startServices(safePersona);
           break;
+        case 'start-no-provider':
+          await startServicesNoProvider(safePersona);
+          break;
         case 'stop':
           // Check for force flag (either as --force or -f)
           const forceStop = process.argv.includes('--force') || process.argv.includes('-f') || process.env.FORCE === 'true';
@@ -3319,6 +3477,7 @@ Commands:
   create-package <persona> Create a distribution package for a specific persona
   setup-backend            Setup backend environment
   start-backend            Start backend server
+  start-frontend           Start frontend server
   setup-ollama             Setup Ollama
   start-ollama             Start Ollama
   setup-ovms               Setup OpenVINO Model Server (OVMS)

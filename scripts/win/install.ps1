@@ -327,9 +327,62 @@ if (-not (Test-Path $JqBin)) {
 } else {
     Write-Host "jq already available at $JqBin"
 }
+# Global variable to track GPU compatibility status
+$script:GpuCompatible = $false
+# Function to check GPU compatibility
+function Test-GPUCompatibility {
+    Write-Host ""
+    Write-Host "Checking system GPU compatibility..."
+
+    $GpuOk = $false
+
+    # Get CPU model
+    try {
+        $CpuModel = (Get-WmiObject -Class Win32_Processor).Name
+        Write-Host "CPU detected: $CpuModel"
+
+        # Detect Intel Core Ultra (iGPU)
+        if ($CpuModel -match "Core.*Ultra") {
+            Write-Host "Detected Core Ultra CPU - iGPU supported."
+            $GpuOk = $true
+        } else {
+            # Detect Intel discrete GPU
+            $IntelGpu = Get-WmiObject -Class Win32_VideoController | Where-Object {
+                $_.AdapterCompatibility -match "Intel" -and $_.Name -notmatch "UHD Graphics"
+            }
+
+            if ($IntelGpu) {
+                Write-Host "Intel discrete GPU detected:"
+                Write-Host "   $($IntelGpu.Name)"
+                $GpuOk = $true
+            } else {
+                Write-Host "No compatible Intel GPU detected."
+                $GpuOk = $false
+            }
+        }
+    } catch {
+        Write-Host "Warning: Could not detect CPU/GPU information."
+        $GpuOk = $false
+    }
+
+    # Set global variable for use at end of installation
+    $script:GpuCompatible = $GpuOk
+
+    Write-Host ""
+
+    # Return status: $true if GPU is OK, $false if not
+    if ($GpuOk -eq $true) {
+        return $true
+    } else {
+        return $false
+    }
+}
 
 # Add Node.js to PATH so npm can find it
 $env:PATH = "$NodeDir;$env:PATH"
+
+# Check GPU compatibility
+Test-GPUCompatibility
 
 # Install necessary dependencies based on environment
 if ($IsDistPackage -eq $false) {
@@ -463,6 +516,7 @@ if ($IsDistPackage -eq $false) {
         # Set environment variable for proper path resolution
         $env:IS_DIST_PACKAGE = "false"
         $env:DEV_MODE = "true"
+
         try {
             & $NodeBin (Join-Path $ProjectRoot "scripts\utils.mjs") $InstallService
             if ($LASTEXITCODE -ne 0) {
@@ -642,6 +696,7 @@ if ($IsDistPackage -eq $false) {
     # Set environment variable for proper path resolution
     $env:IS_DIST_PACKAGE = "true"
     $env:DEV_MODE = "false"
+
     try {
         & $NodeBin (Join-Path $ProjectRoot "scripts\utils.mjs") $InstallService
         if ($LASTEXITCODE -ne 0) {
@@ -653,6 +708,7 @@ if ($IsDistPackage -eq $false) {
         Write-Host $_.Exception.Message -ForegroundColor Red
         exit 1
     }
+
 
     # Add Node.js bin, jq, and PM2 to local path file for other scripts
     Write-Host "Creating node_env.ps1 script for distribution package environment..."
@@ -673,10 +729,23 @@ if ($IsDistPackage -eq $false) {
 
 Write-Host "Installation completed successfully"
 Write-Host ""
-Write-Host "To complete the installation, double click or run the following command in PowerShell terminal (without administrator privileges):"
+
+# Display GPU compatibility message if no compatible GPU detected
+if ($script:GpuCompatible -eq $false) {
+    Write-Host "-----------------------------------------------------------------------"
+    Write-Host "Note: You have no compatible Intel GPU detected."
+    Write-Host "You should navigate to settings page to configure to use external AI Provider server"
+    Write-Host "-----------------------------------------------------------------------"
+    Write-Host ""
+}
+
+Write-Host "To start application, double click or run the following command in PowerShell terminal (without administrator privileges):"
 Write-Host "-----------------------------------------------------------------------"
 Write-Host ".\run.ps1"
 Write-Host ""
-
+Write-Host "Or if you have run installed with .\install_win.bat, simply double click or run the following command in a terminal (without administrator privileges)."
+Write-Host "-----------------------------------------------------------------------"
+Write-Host ".\run_win.bat"
+Write-Host ""
 # Explicit successful exit
 exit 0

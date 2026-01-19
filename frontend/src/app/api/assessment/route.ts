@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { NextResponse } from 'next/server'
-import { getProvider } from '@/lib/providers'
+import { getProviderInfo } from '@/lib/providers'
 import type { ModelMessage } from 'ai'
 import type { AssessmentQuestion } from '@/lib/types/assessment-types'
 
@@ -41,7 +41,7 @@ export async function POST(req: Request) {
     console.log('Selected Sources Array?:', Array.isArray(selectedSources))
 
     // Get the provider instance (supports both Ollama and OVMS)
-    const provider = getProvider()
+    const { provider } = await getProviderInfo()
 
     // Prepare source content using the modularized service
     const assistantContent = await prepareSourceContent(selectedSources, courseInfo, language)

@@ -6,6 +6,7 @@ import { sqliteAdapter } from '@payloadcms/db-sqlite'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
 import path from 'path'
 import { buildConfig } from 'payload'
+import { LLMConfig } from './globals/llm-config'
 import { fileURLToPath } from 'url'
 import sharp from 'sharp'
 
@@ -29,6 +30,7 @@ export default buildConfig({
     },
   },
   collections: [Users, Sources, Chunks, Embeddings, Media, Programmes, Courses],
+  globals: [LLMConfig],
   editor: lexicalEditor(),
   secret: process.env.PAYLOAD_SECRET || '',
   typescript: {
@@ -38,7 +40,9 @@ export default buildConfig({
     client: {
       url: process.env.DATABASE_URL ?? 'file:./database.db',
     },
-    prodMigrations: migrations,
+    migrationDir:
+      process.env.STANDALONE_BUILD === 'true' ? undefined : path.resolve(dirname, './migrations'),
+    prodMigrations: process.env.STANDALONE_BUILD === 'true' ? undefined : migrations,
   }),
   // collections: [
   //   {
@@ -72,4 +76,41 @@ export default buildConfig({
   plugins: [
     // storage-adapter-placeholder
   ],
+  onInit: async (payload) => {
+    // Initialize LLM config with provider type from installation
+    try {
+      const existingConfig = await payload.findGlobal({
+        slug: 'llm-config',
+      })
+
+      // Only initialize if config doesn't exist yet (first run)
+      if (!existingConfig || !existingConfig.providerType) {
+        const providerType = (
+          process.env.PROVIDER ||
+          process.env.NEXT_PUBLIC_SERVICE ||
+          'ovms'
+        ).toLowerCase()
+        const validProvider =
+          providerType === 'ollama' || providerType === 'ovms' ? providerType : 'ovms'
+
+        payload.logger.info(`[Init] Initializing llm-config with provider: ${validProvider}`)
+
+        await payload.updateGlobal({
+          slug: 'llm-config',
+          data: {
+            providerType: validProvider,
+            llmURL: 'http://localhost:5950',
+          },
+        })
+
+        payload.logger.info(`[Init] Successfully initialized llm-config`)
+      } else {
+        payload.logger.info(
+          `[Init] llm-config already exists with provider: ${existingConfig.providerType}`,
+        )
+      }
+    } catch (error) {
+      payload.logger.error(`[Init] Failed to initialize llm-config: ${error}`)
+    }
+  },
 })

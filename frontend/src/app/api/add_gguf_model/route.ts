@@ -2,15 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { NextRequest, NextResponse } from 'next/server'
+import { getLLMUrl } from '@/lib/getLLMUrl'
 import path from 'path'
 import fs from 'fs/promises'
 
 const localFilePath = path.resolve(process.cwd(), '..', 'models')
-const PROVIDER_URL = process.env.PROVIDER_URL
 
 export async function GET() {
   try {
     // Fetch the list of existing models from Ollama via /api/tags
+    const PROVIDER_URL = await getLLMUrl()
     const urlOllamaTags = new URL('/api/tags', PROVIDER_URL).href
     const tagsResponse = await fetch(urlOllamaTags)
     if (!tagsResponse.ok) {
@@ -97,6 +98,7 @@ export async function POST(req: NextRequest) {
           path: modelfilePath, // Update the path to the newly created Modelfile
         }
 
+        const PROVIDER_URL = await getLLMUrl()
         const apiCreateUrl = new URL('/api/create', PROVIDER_URL).href
         const response = await fetch(apiCreateUrl, {
           method: 'POST',

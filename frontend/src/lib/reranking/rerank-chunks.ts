@@ -3,10 +3,11 @@
 
 import { ModelMessage, generateText } from 'ai'
 import { ScoredChunk } from '../types/context-chunk'
-import { getProvider } from '@/lib/providers'
-// import { ollama } from '../providers/ollama-provider'
+import { getProviderInfo } from '@/lib/providers'
+import { getLLMUrl } from '@/lib/getLLMUrl'
 
-const provider = getProvider()
+const { provider } = await getProviderInfo()
+const ollamaUrl = await getLLMUrl()
 
 // Configuration
 const CONFIG = {
@@ -17,7 +18,7 @@ const CONFIG = {
   batchDelay: parseInt(process.env.RERANK_BATCH_DELAY || '1000', 10),
   maxChunkLength: parseInt(process.env.MAX_RERANK_CHUNK_LENGTH || '1000', 10),
   defaultModel: process.env.RAG_RERANKER_MODEL || 'llama3.2',
-  ollamaUrl: process.env.PROVIDER_URL || 'http://localhost:5950',
+  ollamaUrl,
   debug: process.env.DEBUG_RERANKING === 'true',
 }
 
