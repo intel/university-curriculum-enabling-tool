@@ -11,53 +11,39 @@ import { ClientSource } from '@/lib/types/client-source'
 import { ContextChunk } from '@/lib/types/context-chunk'
 import { z } from 'zod'
 
-// Zod schemas for summary generation using discriminated union for proper validation
-const headingBlockSchema = z.object({
-  type: z.literal('heading'),
-  level: z.number().min(1).max(3),
-  text: z.string().min(1),
+const sectionSchema = z.object({
+  heading: z.string().optional(), // Optional section heading
+  content: z.string(), // Main paragraph content (required)
+  bullet_points: z.array(z.string()).optional(), // Optional list items
+  is_ordered_list: z.boolean().optional(), // If bullet_points present, is it ordered?
 })
-
-const paragraphBlockSchema = z.object({
-  type: z.literal('paragraph'),
-  text: z.string().min(1),
-})
-
-const listBlockSchema = z.object({
-  type: z.literal('list'),
-  ordered: z.boolean(),
-  items: z.array(z.string()).min(1), // items is REQUIRED and must have at least 1 item
-})
-
-// Discriminated union of all block types
-const contentBlockSchema = z.discriminatedUnion('type', [
-  headingBlockSchema,
-  paragraphBlockSchema,
-  listBlockSchema,
-])
 
 const summaryResponseSchema = z.object({
-  title: z.string().min(1),
-  content: z.array(contentBlockSchema).min(1),
-  conclusion: z.string().optional(),
+  title: z.string(), // Summary title
+  sections: z.array(sectionSchema).min(1), // Array of sections
+  conclusion: z.string().optional(), // Optional conclusion paragraph
 })
 
-// Type definitions for summary content
+// Type definitions for summary content (internal representation after normalization)
 interface ContentBlock {
   type: string
   level?: number
-  text?: string
-  content?: unknown
-  items?: unknown[]
+  content: string
+  items?: string[]
   ordered?: boolean
-  [key: string]: unknown
 }
 
-interface SummaryObject {
-  title?: string
-  content?: ContentBlock[]
+interface Section {
+  heading?: string
+  content: string
+  bullet_points?: string[]
+  is_ordered_list?: boolean
+}
+
+interface SummaryResponse {
+  title: string
+  sections: Section[]
   conclusion?: string
-  [key: string]: unknown
 }
 
 interface ChunkReference {
@@ -83,6 +69,15 @@ interface CitationBlockWithEmbedding {
 // Type for chunk after embedding is added (extends ContextChunk)
 interface ContextChunkWithEmbedding extends ContextChunk {
   embedding: number[]
+}
+
+// Type for processed blocks used in citation and rendering
+type Block = {
+  type: string
+  content: string
+  level?: number
+  ordered?: boolean
+  items?: string[]
 }
 
 // Default values
@@ -175,64 +170,52 @@ export async function POST(req: Request) {
 ${strictnessDirective}
 
 INSTRUCTIONS:
-- The summary must be comprehensive, with clear hierarchy (multiple heading levels, sections, and subsections).
-- Use a variety of heading levels (1, 2, 3) to organize the content, and ALWAYS use meaningful, 
-content-based section titles for each heading (e.g., "Architecture Overview", "Performance Improvements", 
-"Software Integration"). Do NOT use generic titles like "heading 1", "heading 2", etc.
-- Use paragraphs for explanations, and both ordered and unordered lists for key points.
-- Make the summary highly detailed, with technical depth, examples, and clear explanations. 
-Include all relevant facts, numbers, and comparisons from ${hasValidSources ? 'the context' : 'your knowledge'}.
-- Do NOT use any markdown or bold/italic formatting (such as **, __, *, _ or similar) in any field.
-- Do NOT use any special formatting for headings or titles; just provide plain text for all fields.
-- Make the summary engaging and easy to scan, with short sections and clear structure.
-- Do NOT include images, tables, or charts.
-- Do NOT use markdown in the title.
-- Do NOT return any text outside the JSON object.
-- Each heading must have a descriptive, content-based title. Do NOT use generic titles like "heading 1", "heading 2", etc.
+- The summary must be comprehensive with clear sections and subsections
+- Each section should have a descriptive heading (e.g., "Architecture Overview", "Performance Improvements")
+- Use paragraphs for explanations and bullet points for key facts
+- Make the summary detailed with technical depth, examples, and clear explanations
+- Include all relevant facts, numbers, and comparisons from ${hasValidSources ? 'the context' : 'your knowledge'}
+- Do NOT use any markdown formatting (**, __, *, _) - use plain text only
+- Do NOT include images, tables, or charts
+- Aim for 5-10 main sections
 
 RESPONSE FORMAT:
 Return your response as a JSON object with this structure:
 {
-  "title": string, // The title of the summary (plain text, no markdown)
-  "content": [
-    // Array of content blocks, each block is one of:
-    { "type": "heading", "level": 1|2|3, "text": string },
-    { "type": "paragraph", "text": string },
-    { "type": "list", "ordered": true|false, "items": [string, string, ...] } // items array is REQUIRED for lists
+  "title": "Summary Title (plain text)",
+  "sections": [
+    {
+      "heading": "Section Name (optional)",
+      "content": "Main paragraph explaining this section",
+      "bullet_points": ["Key point 1", "Key point 2"],  // optional
+      "is_ordered_list": false  // optional, true for numbered lists
+    }
   ],
-  "conclusion": string // Short conclusion (optional)
+  "conclusion": "Brief conclusion (optional)"
 }
 
-IMPORTANT SCHEMA RULES:
-- For "list" type blocks, the "items" field is REQUIRED and must contain at least one string item
-- Do NOT create list blocks without items
-- Keep the summary focused and concise to ensure it fits within token limits
-- Aim for 5-10 key sections maximum
+SCHEMA RULES:
+- "content" field is REQUIRED for every section
+- "heading", "bullet_points", and "is_ordered_list" are OPTIONAL
+- You can mix sections with headings, content paragraphs, and bullet points
+- Keep it focused to fit within token limits
 
-CRITICAL: Your response MUST be valid JSON only. Do not include any text, markdown, explanations, or other content outside the JSON object. Do not include backticks or code block markers.`
+CRITICAL: Your response MUST be valid JSON only. Do not include any text outside the JSON object.`
 
     const UserPrompt = hasValidSources
-      ? `Generate a focused, structured summary of the provided academic content. Use the format and instructions above. The summary should:
-- Start with a clear, descriptive title (no markdown)
-- Use multiple heading levels (1, 2, 3) for sections and subsections
-- Include both paragraphs and lists (ordered and unordered)
-- For EVERY list block, you MUST include the "items" array with actual list items - do not create empty lists
-- Do NOT use any markdown or bold/italic formatting (such as **, __, *, _ or similar) in any field.
-- Be comprehensive but focused - aim for 5-10 main sections
+      ? `Generate a focused, structured summary of the provided academic content. The summary should:
+- Start with a clear, descriptive title
+- Organize content into 5-10 main sections
+- Each section should have an optional heading, required paragraph content, and optional bullet points
 - Include technical detail, facts, and examples from the context
-- End with a short, insightful conclusion
-STRICTNESS: Only use the provided context. Do not invent facts or add content from outside the provided context.
-CRITICAL: Every list MUST have items. If you cannot provide items for a list, use a paragraph instead.`
-      : `Generate a focused, structured summary${courseInfo?.courseName ? ` for students in ${courseInfo.courseName}` : ''}. ${courseInfo?.courseDescription ? `Use this course context to guide your summary: ${courseInfo.courseDescription}. ` : ''}The summary should:
-- Start with a clear, descriptive title (no markdown)
-- Use multiple heading levels (1, 2, 3) for sections and subsections
-- Include both paragraphs and lists (ordered and unordered)
-- For EVERY list block, you MUST include the "items" array with actual list items - do not create empty lists
-- Do NOT use any markdown or bold/italic formatting (such as **, __, *, _ or similar) in any field.
-- Be comprehensive but focused - aim for 5-10 main sections
+- End with a short conclusion if appropriate
+STRICTNESS: Only use the provided context. Do not invent facts.`
+      : `Generate a focused, structured summary${courseInfo?.courseName ? ` for students in ${courseInfo.courseName}` : ''}. ${courseInfo?.courseDescription ? `Course context: ${courseInfo.courseDescription}. ` : ''}The summary should:
+- Start with a clear, descriptive title
+- Organize content into 5-10 main sections
+- Each section should have an optional heading, required paragraph content, and optional bullet points
 - Include technical detail, facts, and examples from general academic knowledge
-- End with a short, insightful conclusion
-CRITICAL: Every list MUST have items. If you cannot provide items for a list, use a paragraph instead.`
+- End with a short conclusion if appropriate`
 
     const systemMessage: ModelMessage = { role: 'system', content: SystemPrompt }
     const userMessage: ModelMessage = { role: 'user', content: UserPrompt }
@@ -248,8 +231,7 @@ CRITICAL: Every list MUST have items. If you cannot provide items for a list, us
 
     const startFinalSummarizeTime = Date.now()
 
-    // Both OVMS and Ollama use the same approach with schema validation
-    // OVMS is OpenAI-compatible and supports structured outputs via json_schema
+    // Generate summary using robust schema - works across all models
     const result = await generateObject({
       model: provider(selectedModel),
       schema: summaryResponseSchema,
@@ -263,188 +245,70 @@ CRITICAL: Every list MUST have items. If you cannot provide items for a list, us
       },
     })
 
-    const summaryObj = result.object
+    const summaryObj = result.object as SummaryResponse
     const finalUsage = result.usage
     const endFinalSummarizeTime = Date.now()
     const finalTimeTakenMs = endFinalSummarizeTime - startFinalSummarizeTime
     const finalTimeTakenSeconds = finalTimeTakenMs / 1000
-    // Safely derive total tokens else fall back to input+output (coerce to number)
     const finalTotalTokens =
       typeof finalUsage?.totalTokens === 'number'
         ? finalUsage.totalTokens
         : Number(finalUsage?.inputTokens ?? 0) + Number(finalUsage?.outputTokens ?? 0)
 
-    // Guard divide-by-zero when computing generation speed
     const finalTokenGenerationSpeed =
       finalTimeTakenSeconds > 0 ? finalTotalTokens / finalTimeTakenSeconds : 0
 
     console.log(
       `Progress: 100.00 % | ` +
-        `Tokens: ` +
-        `promptEst(?) ` +
-        `prompt(${finalUsage?.inputTokens ?? 0}) ` +
-        `completion(${finalUsage?.outputTokens ?? 0}) | ` +
+        `Tokens: prompt(${finalUsage?.inputTokens ?? 0}) completion(${finalUsage?.outputTokens ?? 0}) | ` +
         `${finalTokenGenerationSpeed.toFixed(2)} t/s | ` +
-        `Duration: ${finalTimeTakenSeconds} s`,
+        `Duration: ${finalTimeTakenSeconds.toFixed(2)} s`,
     )
 
     console.log('DEBUG: LLM summary JSON object:', summaryObj)
 
-    // Post processing: ensure summaryObj is a valid object
-    function isSummaryObject(obj: unknown): obj is SummaryObject {
-      return (
-        obj !== null &&
-        typeof obj === 'object' &&
-        ('title' in obj || 'content' in obj || 'conclusion' in obj)
-      )
-    }
+    // Normalize summary response to content blocks for citation processing
+    function normalizeToBlocks(summary: SummaryResponse): ContentBlock[] {
+      const blocks: ContentBlock[] = []
 
-    // Helper: recursively extract all text from any object/array for robust flattening
-    function extractText(obj: unknown): string {
-      if (typeof obj === 'string') return obj
-      if (typeof obj === 'number' || typeof obj === 'boolean') return String(obj)
-      if (Array.isArray(obj)) return obj.map(extractText).join(' ')
-      if (obj && typeof obj === 'object') {
-        let result = ''
-        const record = obj as Record<string, unknown>
-        if (typeof record.text === 'string') result += record.text + ' '
-        if (typeof record.content === 'string') result += record.content + ' '
-        if (Array.isArray(record.content)) result += record.content.map(extractText).join(' ')
-        if (Array.isArray(record.items)) result += record.items.map(extractText).join(' ')
-        for (const key in record) {
-          if (
-            typeof record[key] === 'string' ||
-            typeof record[key] === 'number' ||
-            typeof record[key] === 'boolean'
-          ) {
-            result += String(record[key]) + ' '
-          } else if (
-            Array.isArray(record[key]) ||
-            (typeof record[key] === 'object' && record[key] !== null)
-          ) {
-            result += extractText(record[key]) + ' '
-          }
+      // Add title as level-1 heading
+      if (summary.title) {
+        blocks.push({ type: 'heading', level: 1, content: summary.title })
+      }
+
+      // Convert each section to blocks
+      summary.sections.forEach((section) => {
+        // Add heading if present
+        if (section.heading) {
+          blocks.push({ type: 'heading', level: 2, content: section.heading })
         }
-        return result.trim()
-      }
-      return ''
-    }
 
-    // Helper: flatten content blocks, recursively handle all nested objects/lists
-    type Block = {
-      type: string
-      content: string
-      level?: number
-      ordered?: boolean
-      items?: string[]
-    }
-    const blocks: Block[] = []
-    function flattenBlocks(content: ContentBlock[], parentLevel = 1) {
-      for (const block of content) {
-        if (!block) continue
-        if (block.type === 'heading' && typeof block.text === 'string') {
-          blocks.push({ type: 'heading', content: block.text, level: block.level || parentLevel })
-        } else if (block.type === 'paragraph' && typeof block.text === 'string') {
-          blocks.push({ type: 'paragraph', content: block.text })
-        } else if (block.type === 'list' && Array.isArray(block.items)) {
-          const flatItems: string[] = block.items.map((item: unknown) =>
-            typeof item === 'string' ? item : extractText(item),
-          )
-          blocks.push({ type: 'list', content: '', ordered: block.ordered, items: flatItems })
-          for (const item of block.items) {
-            if (
-              typeof item === 'object' &&
-              item !== null &&
-              'type' in item &&
-              (item.type === 'list' || item.type === 'section')
-            ) {
-              flattenBlocks([item as ContentBlock], parentLevel + 1)
-            }
-          }
-        } else if (block.type === 'section' && Array.isArray(block.content)) {
-          flattenBlocks(block.content as ContentBlock[], (block.level || parentLevel) + 1)
-        } else if (typeof block === 'string') {
-          blocks.push({ type: 'paragraph', content: block })
-        } else if (typeof block === 'object' && block !== null) {
-          if (Array.isArray(block.content)) {
-            flattenBlocks(block.content as ContentBlock[], parentLevel + 1)
-          } else if (Array.isArray(block.items)) {
-            flattenBlocks(block.items as ContentBlock[], parentLevel + 1)
-          } else if (typeof block.text === 'string') {
-            blocks.push({ type: 'paragraph', content: block.text })
-          } else {
-            const text = extractText(block)
-            if (text) blocks.push({ type: 'paragraph', content: text })
-          }
+        // Add content paragraph
+        if (section.content) {
+          blocks.push({ type: 'paragraph', content: section.content })
         }
+
+        // Add bullet points as list if present
+        if (section.bullet_points && section.bullet_points.length > 0) {
+          blocks.push({
+            type: 'list',
+            ordered: section.is_ordered_list || false,
+            items: section.bullet_points,
+            content: '',
+          })
+        }
+      })
+
+      // Add conclusion if present
+      if (summary.conclusion) {
+        blocks.push({ type: 'heading', level: 2, content: conclusionHeadingLabel })
+        blocks.push({ type: 'paragraph', content: summary.conclusion })
       }
+
+      return blocks
     }
 
-    // Start flattening the summaryObj content
-    if (
-      isSummaryObject(summaryObj) &&
-      (summaryObj.title || summaryObj.content || summaryObj.conclusion)
-    ) {
-      if (summaryObj.title) {
-        blocks.push({ type: 'heading', content: summaryObj.title, level: 1 })
-      }
-      if (Array.isArray(summaryObj.content) && summaryObj.content.length > 0) {
-        // Filter out generic headings like 'heading 1', 'heading 2', etc.
-        const filteredContent = summaryObj.content.filter(
-          (block: ContentBlock) =>
-            !(
-              block.type === 'heading' &&
-              typeof block.text === 'string' &&
-              block.text
-                .trim()
-                .toLowerCase()
-                .match(/^heading \d+$/)
-            ),
-        )
-        flattenBlocks(filteredContent, 2)
-      }
-      const conclusionCount = blocks.filter(
-        (block) => block.type === 'heading' && isConclusionHeadingText(block.content),
-      ).length
-
-      if (conclusionCount > 0) {
-        console.log(`DEBUG: Found ${conclusionCount} conclusion heading(s) in content blocks`)
-      }
-
-      if (summaryObj.conclusion) {
-        console.log(`DEBUG: Also found conclusion in summaryObj.conclusion field`)
-      }
-      const hasExistingConclusion = blocks.some(
-        (block) => block.type === 'heading' && isConclusionHeadingText(block.content),
-      )
-
-      if (summaryObj.conclusion && !hasExistingConclusion) {
-        console.log(`DEBUG: Adding conclusion from summaryObj.conclusion`)
-        blocks.push({ type: 'heading', content: conclusionHeadingLabel, level: 2 })
-        blocks.push({ type: 'paragraph', content: summaryObj.conclusion })
-      } else if (summaryObj.conclusion && hasExistingConclusion) {
-        console.log(`DEBUG: Not adding conclusion - already exists in content blocks`)
-      } else if (!summaryObj.conclusion) {
-        console.log(`DEBUG: No conclusion in summaryObj.conclusion field`)
-      }
-    } else {
-      // fallback: treat as plain text, even if summaryObj is null/undefined
-      const fallbackText = extractText(summaryObj)
-      if (fallbackText && fallbackText.trim().length > 0) {
-        blocks.push({ type: 'paragraph', content: fallbackText })
-      } else {
-        blocks.push({
-          type: 'paragraph',
-          content: isID
-            ? 'Tidak ada ringkasan yang dihasilkan.'
-            : 'No summary content was generated.',
-        })
-      }
-      console.warn(
-        'WARNING: LLM summary object was missing or malformed. Fallback to plain text.',
-        summaryObj,
-      )
-    }
+    const blocks = normalizeToBlocks(summaryObj)
 
     // Citation Logic (embedding-based, semantic similarity)
     // Helper: break paragraph into sentences (simple split, can be improved)
@@ -457,6 +321,13 @@ CRITICAL: Every list MUST have items. If you cannot provide items for a list, us
       )
     }
 
+    // Helper: extract text from any value (for list items)
+    function extractText(value: unknown): string {
+      if (typeof value === 'string') return value
+      if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+      return ''
+    }
+
     // Prepare citation blocks (split paragraphs/lists into sentences) - only if source is selected
     type CitationBlock = { type: string; content: string; blockIdx: number; itemIdx?: number }
     const citationBlocks: CitationBlock[] = []
@@ -464,7 +335,7 @@ CRITICAL: Every list MUST have items. If you cannot provide items for a list, us
     if (hasValidSources) {
       blocks.forEach((block, idx) => {
         if (block.type === 'paragraph') {
-          const sentences = splitIntoSentences(block.content)
+          const sentences = splitIntoSentences(block.content || '')
           sentences.forEach((sentence) => {
             citationBlocks.push({ type: 'sentence', content: sentence, blockIdx: idx })
           })
@@ -655,7 +526,7 @@ CRITICAL: Every list MUST have items. If you cannot provide items for a list, us
       console.log(`\nBlock #${i} [${block.type}]`)
       if (block.type === 'paragraph') {
         console.log(`Content: ${block.content}`)
-        const paraSentences = splitIntoSentences(block.content)
+        const paraSentences = splitIntoSentences(block.content || '')
         paraSentences.forEach((sentence, sidx) => {
           const found = blockCitations.find(
             (citationBlock: CitationBlockWithEmbedding) =>
