@@ -7,7 +7,7 @@ python-dotenv==1.0.0
 torch
 transformers==4.53.0
 pathlib==1.0.1
-python-multipart==0.0.20
+python-multipart==0.0.22
 scipy==1.15.3
 imagehash==4.3.2
 requests>=2.31.0
