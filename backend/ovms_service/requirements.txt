@@ -7,7 +7,7 @@ openvino-tokenizers==2025.3.0.0
 openvino==2025.3.0
 nncf>=2.11.0 
 sentence_transformers
-sentencepiece==0.2.0
+sentencepiece==0.2.1
 openai 
 transformers==4.53.3
 einops
