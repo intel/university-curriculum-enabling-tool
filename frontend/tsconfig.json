@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "target": "ES2017",
+    "target": "ES2022",
     "lib": [
       "dom",
       "dom.iterable",
@@ -15,7 +15,7 @@
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "jsx": "preserve",
+    "jsx": "react-jsx",
     "incremental": true,
     "plugins": [
       {
@@ -41,7 +41,10 @@
     "next-faculty/types/**/*.ts",
     "next.config.mjs",
     "next/types/**/*.ts",
-    "test/data/05-versions-space.pdf"
+    "test/data/05-versions-space.pdf",
+    "next-lecturer/dev/types/**/*.ts",
+    "next-student/dev/types/**/*.ts",
+    "next-faculty/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",
