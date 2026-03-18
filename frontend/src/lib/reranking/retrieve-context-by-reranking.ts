@@ -209,7 +209,7 @@ Example Correct Response:
       // Generate the reranking result using the model.
       const { object, usage } = await generateObject({
         model: provider(effectiveRerankingModel),
-        mode: 'json',
+        //mode: 'json',
         schema: rerankingSchema,
         prompt: rerankingPrompt,
         maxOutputTokens: tokenMax,
