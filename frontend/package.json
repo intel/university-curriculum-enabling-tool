@@ -27,7 +27,7 @@
     "@emoji-mart/data": "^1.2.1",
     "@hookform/resolvers": "^5.2.2",
     "@payloadcms/db-sqlite": "3.75.0",
-    "@payloadcms/next": "3.75.0",
+    "@payloadcms/next": "3.78.0",
     "@payloadcms/richtext-lexical": "3.75.0",
     "@radix-ui/react-accordion": "^1.2.3",
     "@radix-ui/react-alert-dialog": "^1.1.6",
