@@ -9,7 +9,7 @@ nncf>=2.11.0
 sentence_transformers
 sentencepiece==0.2.1
 openai 
-transformers==4.53.3
+transformers==5.5.1
 einops
 torchvision
 timm==1.0.15

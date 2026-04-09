@@ -5,7 +5,7 @@ PyMuPDF==1.26.4
 Pillow==12.1.1
 python-dotenv==1.0.0
 torch
-transformers==4.53.0
+transformers==5.5.1
 pathlib==1.0.1
 python-multipart==0.0.22
 scipy==1.15.3
