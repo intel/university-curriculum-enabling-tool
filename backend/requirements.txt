@@ -3,7 +3,7 @@ fastapi==0.115.11
 uvicorn==0.34.0
 PyMuPDF==1.26.4
 Pillow==12.1.1
-python-dotenv==1.0.0
+python-dotenv==1.2.2
 torch
 transformers==5.5.1
 pathlib==1.0.1
