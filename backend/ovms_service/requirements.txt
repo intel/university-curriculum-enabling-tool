@@ -13,7 +13,7 @@ transformers==5.5.1
 einops
 torchvision
 timm==1.0.15
-diffusers==0.33.1
+diffusers==0.38.0
 black
 uvicorn
 huggingface_hub[cli]==0.36.0
