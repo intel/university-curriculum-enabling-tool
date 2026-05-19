@@ -3,131 +3,325 @@
 
 Write-Host "Setting up system-level dependencies (requires administrator privileges)..."
 
-# Function to check if running as administrator
 function Test-Administrator {
     $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-# Install winget if not available
-function Install-Winget {
-    Write-Host "Checking if winget is available..."
+function Download-File {
+    param(
+        [string]$Url,
+        [string]$OutputPath,
+        [int]$MaxRetries = 3
+    )
 
-    try {
-        $wingetVersion = winget --version 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "winget is already available: $wingetVersion"
-            return
+    $attempt = 0
+    while ($attempt -lt $MaxRetries) {
+        $attempt++
+        Write-Host "Downloading from $Url (attempt $attempt of $MaxRetries)..."
+        try {
+            $webClient = New-Object System.Net.WebClient
+            $webClient.DownloadFile($Url, $OutputPath)
+            Write-Host "Download completed: $OutputPath"
+            return $true
+        } catch {
+            Write-Warning "Download attempt $attempt failed: $_"
+            if (Test-Path $OutputPath) {
+                Remove-Item $OutputPath -Force
+            }
+            if ($attempt -lt $MaxRetries) {
+                Write-Host "Retrying in 5 seconds..."
+                Start-Sleep -Seconds 5
+            }
+        } finally {
+            if ($webClient) { $webClient.Dispose() }
         }
-    } catch {
-        # winget not found, continue with installation
     }
-    
-    Write-Host "Installing winget (App Installer)..."
-    try {
-        # Install App Installer package which includes winget
-        Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe
-        Write-Host "winget installed successfully."
-    } catch {
-        Write-Warning "Failed to install winget automatically. Please install manually from Microsoft Store (App Installer)."
+    return $false
+}
+
+function Refresh-Path {
+    Write-Host "Refreshing PATH environment variable..."
+    $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+    $userPath    = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+    $env:PATH    = "$machinePath;$userPath"
+
+    # Broadcast WM_SETTINGCHANGE so Explorer and new shells pick up the updated PATH
+    if (-not ([System.Management.Automation.PSTypeName]'WinAPI.NativeMethods').Type) {
+        Add-Type -Namespace WinAPI -Name NativeMethods -MemberDefinition @"
+            [DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Auto)]
+            public static extern IntPtr SendMessageTimeout(
+                IntPtr hWnd, uint Msg, UIntPtr wParam,
+                string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+"@
+    }
+
+    $HWND_BROADCAST   = [IntPtr]0xffff
+    $WM_SETTINGCHANGE = 0x001A
+    $result           = [UIntPtr]::Zero
+    [WinAPI.NativeMethods]::SendMessageTimeout(
+        $HWND_BROADCAST,
+        $WM_SETTINGCHANGE,
+        [UIntPtr]::Zero,
+        "Environment",
+        2,
+        5000,
+        [ref]$result
+    ) | Out-Null
+
+    Write-Host "PATH refreshed and broadcast to system."
+}
+
+function Add-ToSystemPath {
+    param([string]$Directory)
+
+    if (-not (Test-Path $Directory)) {
+        Write-Warning "Directory does not exist, skipping PATH addition: $Directory"
+        return
+    }
+
+    $currentPath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+    $pathEntries = $currentPath -split ";" | ForEach-Object { $_.TrimEnd("\") }
+
+    if ($pathEntries -notcontains $Directory.TrimEnd("\")) {
+        $newPath = "$currentPath;$Directory"
+        [System.Environment]::SetEnvironmentVariable("PATH", $newPath, "Machine")
+        Write-Host "Added to system PATH: $Directory"
+    } else {
+        Write-Host "Already in system PATH: $Directory"
+    }
+
+    # Also update the current session immediately
+    if (($env:PATH -split ";" | ForEach-Object { $_.TrimEnd("\") }) -notcontains $Directory.TrimEnd("\")) {
+        $env:PATH = "$env:PATH;$Directory"
+        Write-Host "Updated current session PATH: $Directory"
     }
 }
 
-# Install Python 3.12 using winget
 function Install-Python {
-    Write-Host "Checking if Python 3.12 or higher is installed..."
+    Write-Host ""
+    Write-Host "=== Installing Python 3.12 ==="
 
-    try {
-        $pythonVersion = python --version 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            if ($pythonVersion -match "Python (\d+)\.(\d+)") {
-                $major = [int]$matches[1]
-                $minor = [int]$matches[2]
+    $pythonCandidates = @("python", "python3", "python3.12")
+    foreach ($candidate in $pythonCandidates) {
+        try {
+            $ver = & $candidate --version 2>&1
+            if ($LASTEXITCODE -eq 0 -and $ver -match "Python (\d+)\.(\d+)") {
+                $major = [int]$Matches[1]
+                $minor = [int]$Matches[2]
                 if ($major -gt 3 -or ($major -eq 3 -and $minor -ge 12)) {
-                    Write-Host "Python $major.$minor is already installed: $pythonVersion"
+                    Write-Host "Python $major.$minor is already installed ($candidate): $ver"
+                    Ensure-PythonInPath
                     return
                 }
             }
-        }
-        Write-Host "Installing Python 3.12..."
-        winget install --id Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "Python 3.12 installed successfully."
-        } else {
-            Write-Warning "Failed to install Python 3.12 via winget. Please install manually from python.org"
-        }
-    } catch {
-        Write-Host "Installing Python 3.12..."
-        try {
-            winget install --id Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "Python 3.12 installed successfully."
-            } else {
-                Write-Warning "Failed to install Python 3.12 via winget. Please install manually from python.org"
-            }
-        } catch {
-            Write-Warning "Failed to install Python 3.12. Please install manually from python.org"
+        } catch { }
+    }
+
+    $pythonVersion = "3.12.10"
+    $installerUrl  = "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-amd64.exe"
+    $installerPath = "$env:TEMP\python-$pythonVersion-amd64.exe"
+
+    Write-Host "Downloading Python $pythonVersion installer from python.org..."
+    $downloaded = Download-File -Url $installerUrl -OutputPath $installerPath
+
+    if (-not $downloaded) {
+        Write-Error "Failed to download Python installer after multiple attempts. Please install manually from https://www.python.org/downloads/"
+        return
+    }
+
+    Write-Host "Installing Python $pythonVersion (machine-wide, added to PATH)..."
+    $installArgs = @(
+        "/quiet",
+        "InstallAllUsers=1",
+        "PrependPath=1",
+        "Include_pip=1",
+        "Include_launcher=1",
+        "Include_test=0",
+        "SimpleInstall=0"
+    )
+
+    $process = Start-Process -FilePath $installerPath -ArgumentList $installArgs -Wait -PassThru
+    if ($process.ExitCode -eq 0) {
+        Write-Host "Python $pythonVersion installed successfully."
+    } else {
+        Write-Error "Python installer exited with code $($process.ExitCode). Please install manually from https://www.python.org/downloads/"
+        return
+    }
+
+    Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+
+    Refresh-Path
+    Ensure-PythonInPath
+}
+
+function Ensure-PythonInPath {
+    $candidateDirs = @(
+        "C:\Program Files\Python312",
+        "C:\Program Files\Python312\Scripts",
+        "$env:LOCALAPPDATA\Programs\Python\Python312",
+        "$env:LOCALAPPDATA\Programs\Python\Python312\Scripts"
+    )
+
+    foreach ($dir in $candidateDirs) {
+        if (Test-Path $dir) {
+            Add-ToSystemPath -Directory $dir
         }
     }
 
-    # Create python3 alias using symbolic link
-    Write-Host "Creating python3 alias..."
-    try {
-        # Get the Python installation path
-        $pythonPath = (Get-Command python -ErrorAction SilentlyContinue).Source
-        if ($pythonPath) {
-            $python3SymlinkPath = "$env:USERPROFILE\AppData\Local\Microsoft\WindowsApps\python3.exe"
+    Refresh-Path
 
-            # Create symbolic link if it doesn't exist
-            if (-not (Test-Path $python3SymlinkPath)) {
-                New-Item -ItemType SymbolicLink -Path $python3SymlinkPath -Target $pythonPath -Force
-                Write-Host "Created python3.exe symbolic link successfully."
-            } else {
-                Write-Host "python3.exe symbolic link already exists."
-            }
-        } else {
-            Write-Warning "Could not find python.exe to create python3 alias."
-        }
-    } catch {
-        Write-Warning "Could not create python3 alias. You may need to use 'python' instead of 'python3'."
+    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+    $pythonExe = if ($pythonCmd) { $pythonCmd.Source } else { $null }
+    if ($pythonExe) {
+        Write-Host "Python found on PATH: $pythonExe"
+    } else {
+        Write-Warning "python.exe not found on PATH after installation. You may need to restart your shell."
     }
 }
 
-# Enable long path support
+function Install-Git {
+    Write-Host ""
+    Write-Host "=== Installing Git ==="
+
+    try {
+        $gitVer = & git --version 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Git is already installed: $gitVer"
+            Ensure-GitInPath
+            return
+        }
+    } catch { }
+
+    Write-Host "Resolving latest Git for Windows release..."
+    $installerUrl = $null
+
+    try {
+        $apiUrl   = "https://api.github.com/repos/git-for-windows/git/releases/latest"
+        $headers  = @{ "User-Agent" = "PowerShell-Setup-Script" }
+        $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -TimeoutSec 30
+        $asset    = $response.assets | Where-Object { 
+            $_.name -match "Git-[\d\.]+-64-bit\.exe" 
+        } | Select-Object -First 1
+        if ($asset) {
+            $installerUrl = $asset.browser_download_url
+            Write-Host "Latest Git version: $($response.tag_name)"
+        }
+    } catch {
+        Write-Warning "Could not query GitHub API: $_"
+    }
+
+    if (-not $installerUrl) {
+        $gitVersion   = "2.49.0"
+        $installerUrl = "https://github.com/git-for-windows/git/releases/download/v$gitVersion.windows.1/Git-$gitVersion-64-bit.exe"
+        Write-Host "Using fallback Git version: $gitVersion"
+    }
+
+    $installerPath = "$env:TEMP\Git-64-bit.exe"
+
+    Write-Host "Downloading Git installer..."
+    $downloaded = Download-File -Url $installerUrl -OutputPath $installerPath
+
+    if (-not $downloaded) {
+        Write-Error "Failed to download Git installer after multiple attempts. Please install manually from https://git-scm.com/download/win"
+        return
+    }
+
+    Write-Host "Installing Git (added to system PATH)..."
+
+    $installArgs = @(
+        "/VERYSILENT",
+        "/NORESTART",
+        "/NOCANCEL",
+        "/SP-",
+        "/PathOption=Cmd",
+        "/CRLFOption=CRLFAlways",
+        "/BashTerminalOption=MinTTY",
+        "/NoAutoCrlf=true"
+    )
+
+    $process = Start-Process -FilePath $installerPath -ArgumentList $installArgs -Wait -PassThru
+    if ($process.ExitCode -eq 0) {
+        Write-Host "Git installed successfully."
+    } else {
+        Write-Error "Git installer exited with code $($process.ExitCode). Please install manually from https://git-scm.com/download/win"
+        return
+    }
+
+    Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+
+    Refresh-Path
+    Ensure-GitInPath
+}
+
+function Ensure-GitInPath {
+    $candidateDirs = @(
+        "C:\Program Files\Git\cmd",
+        "C:\Program Files\Git\bin",
+        "C:\Program Files\Git\usr\bin",
+        "C:\Program Files (x86)\Git\cmd",
+        "C:\Program Files (x86)\Git\bin",
+        "$env:LOCALAPPDATA\Programs\Git\cmd",
+        "$env:LOCALAPPDATA\Programs\Git\bin"
+    )
+
+    foreach ($dir in $candidateDirs) {
+        if (Test-Path $dir) {
+            Add-ToSystemPath -Directory $dir
+        }
+    }
+
+    Refresh-Path
+
+    try {
+        $gitVer = & git --version 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Git verified on PATH: $gitVer"
+        } else {
+            Write-Warning "Git still not found on PATH. Please open a new PowerShell window."
+        }
+    } catch {
+        Write-Warning "Git still not found on PATH. Please open a new PowerShell window."
+    }
+}
+
 function Enable-LongPaths {
-    Write-Host "Enabling long path support..."
+    Write-Host ""
+    Write-Host "=== Enabling Long Path Support ==="
     try {
         $regPath = "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem"
-        $regKey = "LongPathsEnabled"
-        $regValue = 1
-
-        Set-ItemProperty -Path $regPath -Name $regKey -Value $regValue -Force
+        Set-ItemProperty -Path $regPath -Name "LongPathsEnabled" -Value 1 -Force
         Write-Host "Long path support enabled."
+        try {
+            & git config --system core.longpaths true 2>&1 | Out-Null
+            Write-Host "Git long paths enabled."
+        } catch { }
     } catch {
-        Write-Warning "Failed to enable long path support. This may cause issues with deep directory structures."
+        Write-Warning "Failed to enable long path support: $_"
     }
 }
 
-# Detect environment - repository or distribution package
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+# ── Entry Point ───────────────────────────────────────────────────────────────
+
+$ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $ProjectRoot = Split-Path (Split-Path $ScriptDir -Parent) -Parent
+
 if (Test-Path (Join-Path $ProjectRoot ".version")) {
-    # This is a distribution package
     $Version = Get-Content (Join-Path $ProjectRoot ".version")
     Write-Host "Detected distribution package environment (version: $Version)"
 } else {
     Write-Host "Detected repository environment"
 }
 
-# Check if running as administrator
 if (-not (Test-Administrator)) {
-    Write-Host "This script requires administrator privileges. Please run as administrator."
-    Write-Host "Right-click on PowerShell and select 'Run as administrator', then run this script again."
+    Write-Host ""
+    Write-Host "This script requires administrator privileges."
+    Write-Host "Right-click PowerShell and select 'Run as administrator', then run this script again."
+    Read-Host "Press Enter to close this window..."
     exit 1
 }
 
-# Enable PowerShell script execution if needed
 $executionPolicy = Get-ExecutionPolicy
 if ($executionPolicy -eq "Restricted") {
     Write-Host "Enabling PowerShell script execution..."
@@ -135,12 +329,24 @@ if ($executionPolicy -eq "Restricted") {
 }
 
 Enable-LongPaths
-Install-Winget
 Install-Python
+Install-Git
 
+Write-Host ""
+Write-Host "======================================================================="
 Write-Host "System-level setup completed successfully."
+Write-Host "======================================================================="
 Write-Host ""
-Write-Host "To complete the installation, double click or run the following command in PowerShell terminal (without administrator privileges):"
+
+try { Write-Host "  Python : $( & python --version 2>&1 )" } catch { Write-Host "  Python : (restart shell to verify)" }
+try { Write-Host "  Git    : $( & git    --version 2>&1 )" } catch { Write-Host "  Git    : (restart shell to verify)" }
+
+Write-Host ""
+Write-Host "IMPORTANT: Open a NEW PowerShell window (non-admin) so the updated"
+Write-Host "           PATH is picked up, then run:"
 Write-Host "-----------------------------------------------------------------------"
-Write-Host ".\install.ps1"
+Write-Host "  .\install.ps1"
+Write-Host "-----------------------------------------------------------------------"
 Write-Host ""
+Write-Host "Press Enter to close this window..."
+Read-Host

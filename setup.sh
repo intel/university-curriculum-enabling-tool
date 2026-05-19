@@ -3,11 +3,6 @@
 # Copyright (C) 2025 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-# setup.sh: System-level setup (requires sudo privileges)
-# This script installs system dependencies required for the application
-# It handles ONLY dependencies that require root/sudo privileges
-# User-level dependencies are handled by install.sh
-
 echo "Setting up system-level dependencies (requires sudo)..."
 
 install_packages(){
@@ -36,21 +31,19 @@ verify_dependencies(){
         python3-venv
         python3-dev
         curl
+        git
     )
     install_packages "${DEPENDENCIES_PACKAGES[@]}"
     echo "$S_VALID Dependencies installed"
 }
 
-# Detect environment - repository or distribution package
 if [ -f "$(pwd)/.version" ]; then
-  # This is a distribution package
   VERSION=$(cat "$(pwd)/.version")
   echo "Detected distribution package environment (version: $VERSION)"
 else
   echo "Detected repository environment"
 fi
 
-# Check if running as root
 if [ "$(id -u)" -ne 0 ]; then
   echo "This script requires sudo privileges. Please run with sudo."
   exit 1
@@ -58,7 +51,6 @@ fi
 
 verify_dependencies
 
-# Note: Node.js is now installed locally by the install.sh script
 echo "System-level setup completed successfully."
 echo ""
 echo "To complete the installation, run the following command (without sudo):"

@@ -1,9 +1,9 @@
 # Copyright (C) 2025 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
-
+ 
 # Set error action preference to stop on any error
 $ErrorActionPreference = "Stop"
-
+ 
 # Add global error handler
 trap {
     Write-Host "ERROR: An unexpected error occurred during installation:" -ForegroundColor Red
@@ -13,36 +13,100 @@ trap {
     Write-Host $_.Exception.ToString() -ForegroundColor Red
     exit 1
 }
-
+ 
 Write-Host "Installing application components..."
+ 
+Write-Host "Refreshing PATH from system registry..."
+$machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+$userPath    = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+$env:PATH    = "$machinePath;$userPath"
+
+function Find-AndRegisterGit {
+    $gitCmd = Get-Command git -ErrorAction SilentlyContinue
+    if ($gitCmd) {
+        Write-Host "Git found on PATH: $($gitCmd.Source)"
+        return $true
+    }
+
+    Write-Host "Git not found on PATH, searching known locations..."
+    $candidatePaths = @(
+        "C:\Program Files\Git\cmd\git.exe",
+        "C:\Program Files\Git\bin\git.exe",
+        "C:\Program Files (x86)\Git\cmd\git.exe",
+        "C:\Program Files (x86)\Git\bin\git.exe",
+        "$env:LOCALAPPDATA\Programs\Git\cmd\git.exe",
+        "$env:LOCALAPPDATA\Programs\Git\bin\git.exe"
+    )
+
+    foreach ($candidate in $candidatePaths) {
+        if (Test-Path $candidate) {
+            $gitDir = Split-Path $candidate -Parent
+            Write-Host "Found Git at: $candidate"
+            $env:PATH = "$gitDir;$env:PATH"
+            $mp      = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+            $entries = $mp -split ";" | ForEach-Object { $_.TrimEnd("\") }
+            if ($entries -notcontains $gitDir.TrimEnd("\")) {
+                [System.Environment]::SetEnvironmentVariable("PATH", "$mp;$gitDir", "Machine")
+                Write-Host "Added Git to system PATH: $gitDir"
+            }
+            return $true
+        }
+    }
+
+    Write-Host "WARNING: Git not found. Some pip packages may fail to install." -ForegroundColor Yellow
+    Write-Host "Please run setup.ps1 as Administrator first, then open a new PowerShell window." -ForegroundColor Yellow
+    return $false
+}
+
+Find-AndRegisterGit | Out-Null
+
+function Invoke-NodeScript {
+    param(
+        [string]$Script,
+        [string[]]$Arguments
+    )
+
+    $gitDirs = @(
+        "C:\Program Files\Git\cmd",
+        "C:\Program Files\Git\bin"
+    ) | Where-Object { Test-Path $_ }
+
+    foreach ($gitDir in $gitDirs) {
+        if ($env:PATH -notlike "*$gitDir*") {
+            $env:PATH = "$gitDir;$env:PATH"
+        }
+    }
+
+    $allArgs = @($Script) + ($Arguments | Where-Object { $_ -ne "" })
+    & $NodeBin $allArgs
+    return $LASTEXITCODE
+}
 
 # Default persona is faculty if not specified
 $Persona = if ($args[0]) { $args[0] } else { "faculty" }
 $ForceFlag = ""
-
-# Check if force flag is provided
+ 
 if ($args[1] -eq "--force") {
     $ForceFlag = "--force"
 }
-
-# Check for development mode environment variable
+ 
 $DevMode = if ($env:DEV_MODE) { $env:DEV_MODE } else { "false" }
 if ($DevMode -eq "true") {
     Write-Host "Development mode enabled - installing minimal dependencies for development"
 }
-
+ 
 # Function to read input with timeout
 function Read-HostWithTimeout {
     param(
         [string]$Prompt,
         [int]$TimeoutSeconds = 15
     )
-
+ 
     Write-Host "$Prompt : " -NoNewline
-
+ 
     $endTime = (Get-Date).AddSeconds($TimeoutSeconds)
     $input = ""
-
+ 
     while ((Get-Date) -lt $endTime) {
         if ([Console]::KeyAvailable) {
             $key = [Console]::ReadKey($true)
@@ -61,30 +125,29 @@ function Read-HostWithTimeout {
         }
         Start-Sleep -Milliseconds 50
     }
-
+ 
     Write-Host ""
     return $null
 }
-
+ 
 # Prompt for PROVIDER if not set
 if (-not $env:PROVIDER) {
     Write-Host "Which backend do you want to install?"
     Write-Host "  [1] Ollama (default)"
-    Write-Host "  [2] OVMS"
-
-    $ServiceChoice = Read-HostWithTimeout -Prompt "Enter 1 for Ollama or 2 for OVMS (auto-selects Ollama after 15s)" -TimeoutSeconds 15
-
+    Write-Host "  [2] " -NoNewline
+    Write-Host "OVMS Not Available For Now" -ForegroundColor DarkGray
+ 
+    $ServiceChoice = Read-HostWithTimeout `
+        -Prompt "Enter 1 for Ollama" `
+        -TimeoutSeconds 15
+ 
     if (-not $ServiceChoice) {
         Write-Host "`nNo response after 15 seconds. Defaulting to Ollama."
         $env:PROVIDER = "ollama"
     } else {
         switch ($ServiceChoice.Trim()) {
-            {$_ -in @("2", "ovms", "OVMS")} {
-                $env:PROVIDER = "ovms"
-            }
-            {$_ -in @("", "1", "ollama", "OLLAMA")} {
-                $env:PROVIDER = "ollama"
-            }
+            {$_ -in @("2", "ovms", "OVMS")} { $env:PROVIDER = "ovms" }
+            {$_ -in @("", "1", "ollama", "OLLAMA")} { $env:PROVIDER = "ollama" }
             default {
                 Write-Host "Invalid selection. Defaulting to Ollama."
                 $env:PROVIDER = "ollama"
@@ -92,8 +155,7 @@ if (-not $env:PROVIDER) {
         }
     }
 }
-
-# Set install service based on PROVIDER environment variable
+ 
 $InstallService = ""
 if ($env:PROVIDER -eq "ovms") {
     Write-Host "PROVIDER=ovms detected. Installing OVMS..."
@@ -107,79 +169,73 @@ if ($env:PROVIDER -eq "ovms") {
     $env:PROVIDER = "ollama"
     $InstallService = "setup-ollama"
 }
-
-# Get script directory and project root
+ 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $ProjectRoot = Split-Path (Split-Path $ScriptDir -Parent) -Parent
 Set-Location $ProjectRoot
-
+ 
 # Function to find the dist package directory for a given persona
 function Find-DistPackage {
     param($persona)
-
+ 
     $distDir = Join-Path $ProjectRoot "dist"
-    $packageName = ""
-
-    # If we're running from the root repository and it's explicitly specified,
-    # we shouldn't use any existing distribution package
+ 
     if ($script:IsRootRepo -eq $true -and $args[1] -eq "--from-root") {
         return $null
     }
-
+ 
     if (-not (Test-Path $distDir)) {
         return $null
     }
-
+ 
     if ($persona -eq "faculty") {
-        # For faculty persona, find directories that don't end with persona names
         $packageName = Get-ChildItem $distDir -Directory |
-            Where-Object { $_.Name -notmatch "-lecturer$" -and $_.Name -notmatch "-student$" -and $_.Name -ne "dist" } |
+            Where-Object {
+                $_.Name -notmatch "-lecturer$" -and
+                $_.Name -notmatch "-student$" -and
+                $_.Name -ne "dist"
+            } |
             Sort-Object Name | Select-Object -Last 1
     } else {
-        # For other personas, find directories that end with the persona name
         $packageName = Get-ChildItem $distDir -Directory |
             Where-Object { $_.Name -match "-$persona$" } |
             Sort-Object Name | Select-Object -Last 1
     }
-
+ 
     if ($packageName -and (Test-Path (Join-Path $packageName.FullName ".version"))) {
         return $packageName.FullName
     } else {
         return $null
     }
 }
-
-# Detect environment - repository or distribution package
+ 
+# Detect environment
 $IsDistPackage = $false
 $IsRootRepo = $false
-
-# Check if this is the root repository by looking for specific development directories
+ 
 if (Test-Path (Join-Path $ProjectRoot "frontend\src")) {
     $IsRootRepo = $true
     Write-Host "Detected root repository environment"
 }
-
-# Check if this is a distribution package by looking for the .version file
+ 
 if (Test-Path (Join-Path $ProjectRoot ".version")) {
     $IsDistPackage = $true
     $Version = Get-Content (Join-Path $ProjectRoot ".version")
     Write-Host "Detected distribution package environment (version: $Version)"
 } else {
-    if ((Test-Path (Join-Path $ProjectRoot "thirdparty\node")) -and -not (Test-Path (Join-Path $ProjectRoot ".version"))) {
+    if ((Test-Path (Join-Path $ProjectRoot "thirdparty\node")) -and
+        -not (Test-Path (Join-Path $ProjectRoot ".version"))) {
         Write-Host "Detected repository environment (with Node.js installed)"
     } else {
         Write-Host "Detected repository environment"
     }
 }
-
-# Create directory structure in project root
+ 
 $null = New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot "scripts")
 $null = New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot "thirdparty\node")
 $null = New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot "thirdparty\ollama")
 $null = New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot "thirdparty\jq")
-$null = New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot "thirdparty\pm2")
-$null = New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot "node_modules")
-
+ 
 # Create root .env file from template if it doesn't exist
 $EnvFile = Join-Path $ProjectRoot ".env"
 $EnvTemplate = Join-Path $ProjectRoot ".env.template"
@@ -192,19 +248,15 @@ if (-not (Test-Path $EnvFile) -and (Test-Path $EnvTemplate)) {
 } else {
     Write-Host "Root .env file already exists."
 }
-
-# Always update PROVIDER in .env to match current PROVIDER value
+ 
+# Always update PROVIDER in .env
 if (Test-Path $EnvFile) {
     Write-Host "Updating PROVIDER=$($env:PROVIDER) in root .env file..."
     $envContent = Get-Content $EnvFile -Raw
     if ($envContent -match '(?m)^PROVIDER=.*$') {
-        # Update existing PROVIDER line
         $envContent = $envContent -replace '(?m)^PROVIDER=.*$', "PROVIDER=$($env:PROVIDER)"
     } else {
-        # Add PROVIDER if it doesn't exist
-        if (-not $envContent.EndsWith("`n")) {
-            $envContent += "`n"
-        }
+        if (-not $envContent.EndsWith("`n")) { $envContent += "`n" }
         $envContent += "PROVIDER=$($env:PROVIDER)`n"
     }
     $envContent | Set-Content $EnvFile -NoNewline
@@ -212,145 +264,107 @@ if (Test-Path $EnvFile) {
 } else {
     Write-Host "Warning: .env file not found, PROVIDER not set."
 }
-
+ 
 # Check for local Node.js installation
 $NodeDir = Join-Path $ProjectRoot "thirdparty\node"
 $NodeBin = Join-Path $NodeDir "node.exe"
-$NpmBin = Join-Path $NodeDir "npm.cmd"
-
-# If Node.js is not installed locally, download and install it
+$NpmBin  = Join-Path $NodeDir "npm.cmd"
+ 
 if (-not (Test-Path $NodeBin)) {
     Write-Host "Installing Node.js locally..."
-
-    # Create Node.js directory
     $null = New-Item -ItemType Directory -Force -Path $NodeDir
-
-    # Determine system architecture
+ 
     $Arch = $env:PROCESSOR_ARCHITECTURE
-    if ($Arch -eq "AMD64") {
-        $NodeArch = "x64"
-    } elseif ($Arch -eq "ARM64") {
-        $NodeArch = "arm64"
-    } else {
+    if ($Arch -eq "AMD64")     { $NodeArch = "x64" }
+    elseif ($Arch -eq "ARM64") { $NodeArch = "arm64" }
+    else {
         Write-Host "Unsupported architecture: $Arch"
         exit 1
     }
-
-    # Download and extract Node.js
+ 
     $NodeVersion = "22.16.0"
-    $NodeZip = "node-v$NodeVersion-win-$NodeArch.zip"
-    $NodeUrl = "https://nodejs.org/dist/v$NodeVersion/$NodeZip"
-    $TempZip = Join-Path $env:TEMP $NodeZip
-
+    $NodeZip     = "node-v$NodeVersion-win-$NodeArch.zip"
+    $NodeUrl     = "https://nodejs.org/dist/v$NodeVersion/$NodeZip"
+    $TempZip     = Join-Path $env:TEMP $NodeZip
+ 
     Write-Host "Downloading Node.js from $NodeUrl..."
     Invoke-WebRequest -Uri $NodeUrl -OutFile $TempZip
-
+ 
     Write-Host "Extracting Node.js..."
     Expand-Archive -Path $TempZip -DestinationPath $env:TEMP -Force
     $ExtractedDir = Join-Path $env:TEMP "node-v$NodeVersion-win-$NodeArch"
-
-    # Use robocopy for better handling of long paths and deep directory structures
+ 
     Write-Host "Copying Node.js files (this may take a moment)..."
     $RobocopyArgs = @(
-        "`"$ExtractedDir`"",
-        "`"$NodeDir`"",
-        "/E",           # Copy subdirectories, including empty ones
-        "/R:3",         # Retry 3 times on failed copies
-        "/W:1",         # Wait 1 second between retries
-        "/NFL",         # No file list (reduce output)
-        "/NDL",         # No directory list
-        "/NJH",         # No job header
-        "/NJS",         # No job summary
-        "/NC",          # No class
-        "/NS",          # No size
-        "/NP"           # No progress
+        "`"$ExtractedDir`"", "`"$NodeDir`"",
+        "/E", "/R:3", "/W:1",
+        "/NFL", "/NDL", "/NJH", "/NJS", "/NC", "/NS", "/NP"
     )
-
-    $RobocopyResult = & robocopy @RobocopyArgs
-    $RobocopyExitCode = $LASTEXITCODE
-
-    # Robocopy exit codes 0-7 are success, 8+ are errors
-    if ($RobocopyExitCode -ge 8) {
-        Write-Host "Warning: Some files may not have been copied correctly (robocopy exit code: $RobocopyExitCode)"
-        Write-Host "Attempting fallback copy method..."
-
-        # Fallback to PowerShell copy with error handling
+    & robocopy @RobocopyArgs
+    if ($LASTEXITCODE -ge 8) {
+        Write-Host "Warning: robocopy exit code $LASTEXITCODE - attempting fallback..."
         try {
             Copy-Item -Path "$ExtractedDir\*" -Destination $NodeDir -Recurse -Force -ErrorAction Stop
         } catch {
             Write-Host "Error during Node.js installation: $($_.Exception.Message)"
-            Write-Host "Some files with very long paths may not have been copied."
-            Write-Host "Node.js should still function correctly for basic operations."
         }
     } else {
         Write-Host "Node.js files copied successfully."
     }
-
+ 
     Remove-Item $TempZip -Force
     Remove-Item $ExtractedDir -Recurse -Force
-
     Write-Host "Node.js installed locally at $NodeDir"
 } else {
     Write-Host "Node.js already available at $NodeDir"
 }
-
+ 
 # Check for local jq installation
 $JqDir = Join-Path $ProjectRoot "thirdparty\jq"
 $JqBin = Join-Path $JqDir "jq.exe"
-
-# If jq is not installed locally, download and install it
+ 
 if (-not (Test-Path $JqBin)) {
     Write-Host "Installing jq locally..."
-
-    # Create jq directory
     $null = New-Item -ItemType Directory -Force -Path $JqDir
-
-    # Determine system architecture
+ 
     $Arch = $env:PROCESSOR_ARCHITECTURE
-    if ($Arch -eq "AMD64") {
-        $JqArch = "amd64"
-    } elseif ($Arch -eq "ARM64") {
-        $JqArch = "arm64"
-    } else {
+    if ($Arch -eq "AMD64")     { $JqArch = "amd64" }
+    elseif ($Arch -eq "ARM64") { $JqArch = "arm64" }
+    else {
         Write-Host "Unsupported architecture: $Arch"
         exit 1
     }
-
-    # Download jq
+ 
     $JqVersion = "1.7"
     $JqUrl = "https://github.com/jqlang/jq/releases/download/jq-$JqVersion/jq-windows-$JqArch.exe"
-
+ 
     Write-Host "Downloading jq from $JqUrl..."
     Invoke-WebRequest -Uri $JqUrl -OutFile $JqBin
-
     Write-Host "jq installed locally at $JqBin"
 } else {
     Write-Host "jq already available at $JqBin"
 }
-# Global variable to track GPU compatibility status
+ 
+# GPU compatibility check
 $script:GpuCompatible = $false
-# Function to check GPU compatibility
+ 
 function Test-GPUCompatibility {
     Write-Host ""
     Write-Host "Checking system GPU compatibility..."
-
     $GpuOk = $false
-
-    # Get CPU model
+ 
     try {
         $CpuModel = (Get-WmiObject -Class Win32_Processor).Name
         Write-Host "CPU detected: $CpuModel"
-
-        # Detect Intel Core Ultra (iGPU)
+ 
         if ($CpuModel -match "Core.*Ultra") {
             Write-Host "Detected Core Ultra CPU - iGPU supported."
             $GpuOk = $true
         } else {
-            # Detect Intel discrete GPU
             $IntelGpu = Get-WmiObject -Class Win32_VideoController | Where-Object {
-                $_.AdapterCompatibility -match "Intel" -and $_.Name -notmatch "UHD Graphics"
+                $_.AdapterCompatibility -match "Intel" -and
+                $_.Name -notmatch "UHD Graphics"
             }
-
             if ($IntelGpu) {
                 Write-Host "Intel discrete GPU detected:"
                 Write-Host "   $($IntelGpu.Name)"
@@ -364,36 +378,21 @@ function Test-GPUCompatibility {
         Write-Host "Warning: Could not detect CPU/GPU information."
         $GpuOk = $false
     }
-
-    # Set global variable for use at end of installation
+ 
     $script:GpuCompatible = $GpuOk
-
     Write-Host ""
-
-    # Return status: $true if GPU is OK, $false if not
-    if ($GpuOk -eq $true) {
-        return $true
-    } else {
-        return $false
-    }
+    return $GpuOk
 }
-
-# Add Node.js to PATH so npm can find it
+ 
+# Add Node.js to PATH
 $env:PATH = "$NodeDir;$env:PATH"
-
+ 
 # Check GPU compatibility
 Test-GPUCompatibility
 
-# Install necessary dependencies based on environment
-if ($IsDistPackage -eq $false) {
-    # Repository environment - install all dependencies and build from source
-    Write-Host "Installing for repository environment..."
-
-    # Create a package.json for script dependencies if it doesn't exist
-    $PackageJsonPath = Join-Path $ProjectRoot "package.json"
-    if (-not (Test-Path $PackageJsonPath)) {
-        Write-Host "Creating package.json for script dependencies..."
-        $PackageJson = @'
+function Write-ScriptsPackageJson {
+    param([string]$TargetPath)
+    @'
 {
   "name": "ci-scripts",
   "private": true,
@@ -401,26 +400,60 @@ if ($IsDistPackage -eq $false) {
   "dependencies": {
     "fs-extra": "^11.3.0",
     "archiver": "^7.0.1",
-    "commander": "^14.0.0",
-    "pm2": "^6.0.8"
+    "commander": "^14.0.0"
   }
 }
-'@
-        $PackageJson | Out-File -FilePath $PackageJsonPath -Encoding UTF8
+'@ | Out-File -FilePath $TargetPath -Encoding UTF8
+}
+ 
+function Write-RuntimePackageJson {
+    param([string]$TargetPath)
+    @'
+{
+  "name": "ci-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "fs-extra": "^11.3.0",
+    "archiver": "^7.0.1",
+    "commander": "^14.0.0"
+  }
+}
+'@ | Out-File -FilePath $TargetPath -Encoding UTF8
+}
+ 
+if ($IsDistPackage -eq $false) {
+    Write-Host "Installing for repository environment..."
+ 
+    $PackageJsonPath = Join-Path $ProjectRoot "package.json"
+ 
+    $needsRegeneration = $false
+    if (-not (Test-Path $PackageJsonPath)) {
+        $needsRegeneration = $true
+    } else {
+        $existingContent = Get-Content $PackageJsonPath -Raw
+        if ($existingContent -match '"pm2"') {
+            Write-Host "Detected PM2 in existing package.json - regenerating ..."
+            $needsRegeneration = $true
+        }
     }
-
-    # Install script dependencies if needed or forced
+    if ($needsRegeneration) {
+        Write-Host "Creating package.json for script dependencies ..."
+        Write-ScriptsPackageJson -TargetPath $PackageJsonPath
+    }
+ 
     $NodeModulesPath = Join-Path $ProjectRoot "node_modules"
-    $FsExtraPath = Join-Path $NodeModulesPath "fs-extra"
-
-    if ($ForceFlag -eq "--force" -or -not (Test-Path $NodeModulesPath) -or -not (Test-Path $FsExtraPath)) {
+    $FsExtraPath     = Join-Path $NodeModulesPath "fs-extra"
+ 
+    if ($ForceFlag -eq "--force" -or
+        -not (Test-Path $NodeModulesPath) -or
+        -not (Test-Path $FsExtraPath)) {
         Write-Host "Installing script dependencies..."
         & $NpmBin install --no-progress --no-color
     } else {
         Write-Host "Script dependencies already installed. Use --force to reinstall."
     }
-
-    # Install frontend dependencies if needed or forced
+ 
     Set-Location "frontend"
     $FrontendNodeModules = Join-Path $ProjectRoot "frontend\node_modules"
     if ($ForceFlag -eq "--force" -or -not (Test-Path $FrontendNodeModules)) {
@@ -429,33 +462,29 @@ if ($IsDistPackage -eq $false) {
     } else {
         Write-Host "Frontend dependencies already installed. Use --force to reinstall."
     }
-
-    # Create .env file from .env.template if it doesn't exist
-    $FrontendEnv = ".env"
+ 
+    # Create frontend .env
+    $FrontendEnv         = ".env"
     $FrontendEnvTemplate = ".env.template"
-
+ 
     if (-not (Test-Path $FrontendEnv) -and (Test-Path $FrontendEnvTemplate)) {
         Write-Host "Creating frontend/.env file from template..."
         Copy-Item $FrontendEnvTemplate $FrontendEnv
-
-        # Generate a random secret for Payload CMS
+ 
         Write-Host "Generating Payload CMS secret"
         $RNG = [System.Security.Cryptography.RandomNumberGenerator]::Create()
         $RandomBytes = New-Object byte[] 32
         $RNG.GetBytes($RandomBytes)
         $PayloadSecret = [Convert]::ToBase64String($RandomBytes)
         $RNG.Dispose()
-
-        # Set PAYLOAD_SECRET only if it is empty (matches install.sh pattern)
+ 
         $envContent = Get-Content $FrontendEnv
         $envContent = $envContent -replace '^PAYLOAD_SECRET=$', ('PAYLOAD_SECRET="' + $PayloadSecret + '"')
         $envContent | Set-Content $FrontendEnv
-
         Write-Host "Frontend .env file created successfully."
     } elseif (-not (Test-Path $FrontendEnv) -and -not (Test-Path $FrontendEnvTemplate)) {
         Write-Host "Warning: No .env.template found in frontend directory. Skipping .env creation."
     } else {
-        # If .env exists and PAYLOAD_SECRET is empty, update it
         $envContent = Get-Content $FrontendEnv
         if ($envContent -match '^PAYLOAD_SECRET=$') {
             Write-Host "Updating PAYLOAD_SECRET in existing frontend .env file"
@@ -471,16 +500,14 @@ if ($IsDistPackage -eq $false) {
             Write-Host "Frontend .env file already exists and PAYLOAD_SECRET is set."
         }
     }
-
+ 
     Set-Location ".."
-
-    # Skip build and distribution package creation in development mode
+ 
     if ($DevMode -eq "true") {
-        # Add Node.js bin, jq, and PM2 to local path file for other scripts in development mode
         Write-Host "Creating node_env.ps1 script for development mode..."
         $NodeEnvContent = @"
-# node_env.ps1
-`$env:PATH = "$NodeDir;$JqDir;$(Join-Path $ProjectRoot 'node_modules\.bin');`$env:PATH"
+# node_env.ps1 - generated by install_win.ps1
+`$env:PATH = "$NodeDir;$JqDir;`$env:PATH"
 `$env:THIRDPARTY_DIR = "$(Join-Path $ProjectRoot 'thirdparty')"
 `$env:IS_DIST_PACKAGE = "false"
 `$env:DEV_MODE = "true"
@@ -489,232 +516,207 @@ if ($IsDistPackage -eq $false) {
         $NodeEnvPath = Join-Path $ProjectRoot "node_env.ps1"
         $NodeEnvContent | Out-File -FilePath $NodeEnvPath -Encoding UTF8
         Write-Host "node_env.ps1 created successfully at: $NodeEnvPath"
-
-        # Source the environment file to ensure paths are available for setup scripts
+ 
         . $NodeEnvPath
-
-        # Setup backend environment - ensure we're in the root directory
+ 
         Set-Location $ProjectRoot
         $ForceArg = if ($ForceFlag) { $ForceFlag } else { "" }
-        # Set environment variable for proper path resolution
         $env:IS_DIST_PACKAGE = "false"
         $env:DEV_MODE = "true"
+ 
         try {
             & $NodeBin (Join-Path $ProjectRoot "scripts\utils.mjs") "setup-backend" $ForceArg
-            if ($LASTEXITCODE -ne 0) {
-                throw "Backend setup failed with exit code: $LASTEXITCODE"
-            }
+            if ($LASTEXITCODE -ne 0) { throw "Backend setup failed with exit code: $LASTEXITCODE" }
             Write-Host "Backend setup completed successfully."
         } catch {
             Write-Host "ERROR: Backend setup failed:" -ForegroundColor Red
             Write-Host $_.Exception.Message -ForegroundColor Red
             exit 1
         }
-
-        # Setup AI service (Ollama or OVMS) - ensure we're in the root directory
+ 
         Set-Location $ProjectRoot
-        # Set environment variable for proper path resolution
         $env:IS_DIST_PACKAGE = "false"
         $env:DEV_MODE = "true"
-
+ 
         try {
             & $NodeBin (Join-Path $ProjectRoot "scripts\utils.mjs") $InstallService
-            if ($LASTEXITCODE -ne 0) {
-                throw "$InstallService failed with exit code: $LASTEXITCODE"
-            }
+            if ($LASTEXITCODE -ne 0) { throw "$InstallService failed with exit code: $LASTEXITCODE" }
             Write-Host "$InstallService completed successfully."
         } catch {
             Write-Host "ERROR: $InstallService failed:" -ForegroundColor Red
             Write-Host $_.Exception.Message -ForegroundColor Red
             exit 1
         }
-
+ 
         Write-Host "Development environment installation completed."
         Write-Host ""
         Write-Host "To start development:"
         Write-Host "1. Source the environment: . .\node_env.ps1"
         if ($env:PROVIDER -eq "ollama") {
-            Write-Host "2. Start Ollama with required environment variables:"
-            Write-Host "   cd thirdparty\ollama"
-            Write-Host "   # Set environment variables from .env file"
-            Write-Host "   .\ollama.exe serve"
+            Write-Host "2. Start Ollama: cd thirdparty\ollama && .\ollama.exe serve"
         } else {
-            Write-Host "2. Start OVMS with required environment variables:"
-            Write-Host "   cd backend\ovms_service"
-            Write-Host "   .\venv\Scripts\Activate.ps1"
-            Write-Host "   python ovms_start.py"
+            Write-Host "2. Start OVMS: cd backend\ovms_service && .\venv\Scripts\Activate.ps1 && python ovms_start.py"
         }
-        Write-Host "3. In one terminal - Start frontend: cd frontend && npm run dev"
-        Write-Host "4. In another terminal - Start backend: cd backend && python main.py --debug"
+        Write-Host "3. Start frontend: cd frontend && npm run dev"
+        Write-Host "4. Start backend: cd backend && python main.py --debug"
         exit 0
     }
-
-    # If we're running from the root repo, build and create distribution package then exit
+ 
     if ($IsRootRepo -eq $true) {
-        # Build the application
+ 
+        Write-Host "Running database migrations before build..."
+        Set-Location (Join-Path $ProjectRoot "frontend")
+        & $NpmBin run migrate
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: Database migration failed. Aborting build." -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "Database migration completed successfully."
+        Set-Location $ProjectRoot
+        # ────────────────────────────────────────────────────────────────────
+ 
         Write-Host "Building the application for persona: $Persona..."
         & $NodeBin (Join-Path $ProjectRoot "scripts\utils.mjs") "build" $Persona $ForceFlag
-
-        # Create distribution package
+ 
         Write-Host "Creating distribution package for persona: $Persona..."
         & $NodeBin (Join-Path $ProjectRoot "scripts\utils.mjs") "create-package" $Persona $ForceFlag
-
-        # Exit after creating distribution package (like install.sh does)
+ 
         exit 0
     } else {
-        # For non-root repository environments, show guidance
         Write-Host "Non-root repository environment detected."
-        Write-Host "Please run this script from the root repository directory to build and create distribution packages."
-        Write-Host "Or manually build the application first with:"
+        Write-Host "Please run this script from the root repository directory."
+        Write-Host "Or manually build with:"
         Write-Host "& `"$NodeBin`" `"$(Join-Path $ProjectRoot 'scripts\utils.mjs')`" build $Persona"
         Write-Host "& `"$NodeBin`" `"$(Join-Path $ProjectRoot 'scripts\utils.mjs')`" create-package $Persona"
         exit 1
     }
 } else {
-    # Distribution package environment - already built, just install runtime dependencies
     Write-Host "Installing for distribution package environment..."
-
-    # Create a minimal package.json for runtime dependencies if it doesn't exist
+ 
     $PackageJsonPath = Join-Path $ProjectRoot "package.json"
+ 
+    $needsRegeneration = $false
     if (-not (Test-Path $PackageJsonPath)) {
-        Write-Host "Creating package.json for runtime dependencies..."
-        $PackageJson = @'
-{
-  "name": "ci-runtime",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "fs-extra": "^11.3.0",
-    "archiver": "^7.0.1",
-    "commander": "^14.0.0",
-    "pm2": "^6.0.8"
-  }
-}
-'@
-        $PackageJson | Out-File -FilePath $PackageJsonPath -Encoding UTF8
+        $needsRegeneration = $true
+    } else {
+        $existingContent = Get-Content $PackageJsonPath -Raw
+        if ($existingContent -match '"pm2"') {
+            Write-Host "Detected PM2 in existing package.json - regenerating ..."
+            $needsRegeneration = $true
+        }
     }
-
-    # Install minimal runtime dependencies if needed or forced
+    if ($needsRegeneration) {
+        Write-Host "Creating package.json for runtime dependencies ..."
+        Write-RuntimePackageJson -TargetPath $PackageJsonPath
+    }
+ 
     $NodeModulesPath = Join-Path $ProjectRoot "node_modules"
-    $FsExtraPath = Join-Path $NodeModulesPath "fs-extra"
-
-    if ($ForceFlag -eq "--force" -or -not (Test-Path $NodeModulesPath) -or -not (Test-Path $FsExtraPath)) {
+    $FsExtraPath     = Join-Path $NodeModulesPath "fs-extra"
+ 
+    if ($ForceFlag -eq "--force" -or
+        -not (Test-Path $NodeModulesPath) -or
+        -not (Test-Path $FsExtraPath)) {
         Write-Host "Installing runtime dependencies..."
         & $NpmBin install --no-progress --no-color
     } else {
         Write-Host "Runtime dependencies already installed. Use --force to reinstall."
     }
-
+ 
     # Generate PAYLOAD_SECRET for distribution package .env files
     Write-Host "Setting up PayloadCMS secrets for distribution package..."
-
-    # Check if this is a faculty distribution package (default persona)
-    $StandaloneEnvPath = Join-Path $ScriptDir "next-faculty\standalone\.env"
-    if (Test-Path $StandaloneEnvPath) {
-        $envContent = Get-Content $StandaloneEnvPath -Raw
-        if ($envContent -match 'PAYLOAD_SECRET=""' -or $envContent -match '^PAYLOAD_SECRET=$') {
-            Write-Host "Generating Payload CMS secret for next-faculty/standalone/.env"
-            $RNG = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-            $RandomBytes = New-Object byte[] 32
-            $RNG.GetBytes($RandomBytes)
-            $PayloadSecret = [Convert]::ToBase64String($RandomBytes)
-            $RNG.Dispose()
-
-            # Replace empty PAYLOAD_SECRET with generated secret
-            $envContent = $envContent -replace 'PAYLOAD_SECRET=""', ('PAYLOAD_SECRET="' + $PayloadSecret + '"')
-            $envContent = $envContent -replace '^PAYLOAD_SECRET=$', ('PAYLOAD_SECRET="' + $PayloadSecret + '"')
-            $envContent | Set-Content $StandaloneEnvPath -NoNewline
-            Write-Host "PAYLOAD_SECRET generated successfully for next-faculty/standalone/.env"
-        } else {
-            Write-Host "PAYLOAD_SECRET already set in next-faculty/standalone/.env"
+ 
+    foreach ($persona in @("faculty", "lecturer", "student")) {
+        $StandaloneEnvPath = Join-Path $ScriptDir "next-$persona\standalone\.env"
+        if (Test-Path $StandaloneEnvPath) {
+            $envContent = Get-Content $StandaloneEnvPath -Raw
+            if ($envContent -match 'PAYLOAD_SECRET=""' -or $envContent -match '(?m)^PAYLOAD_SECRET=$') {
+                Write-Host "Generating Payload CMS secret for next-$persona/standalone/.env"
+                $RNG = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+                $RandomBytes = New-Object byte[] 32
+                $RNG.GetBytes($RandomBytes)
+                $PayloadSecret = [Convert]::ToBase64String($RandomBytes)
+                $RNG.Dispose()
+                $envContent = $envContent -replace 'PAYLOAD_SECRET=""', ('PAYLOAD_SECRET="' + $PayloadSecret + '"')
+                $envContent = $envContent -replace '(?m)^PAYLOAD_SECRET=$', ('PAYLOAD_SECRET="' + $PayloadSecret + '"')
+                $envContent | Set-Content $StandaloneEnvPath -NoNewline
+                Write-Host "PAYLOAD_SECRET generated for next-$persona/standalone/.env"
+            } else {
+                Write-Host "PAYLOAD_SECRET already set in next-$persona/standalone/.env"
+            }
         }
     }
-
-    # Check for other persona distribution packages (lecturer, student)
-    $LecturerStandaloneEnvPath = Join-Path $ScriptDir "next-lecturer\standalone\.env"
-    if (Test-Path $LecturerStandaloneEnvPath) {
-        $envContent = Get-Content $LecturerStandaloneEnvPath -Raw
-        if ($envContent -match 'PAYLOAD_SECRET=""' -or $envContent -match '^PAYLOAD_SECRET=$') {
-            Write-Host "Generating Payload CMS secret for next-lecturer/standalone/.env"
-            $RNG = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-            $RandomBytes = New-Object byte[] 32
-            $RNG.GetBytes($RandomBytes)
-            $PayloadSecret = [Convert]::ToBase64String($RandomBytes)
-            $RNG.Dispose()
-
-            # Replace empty PAYLOAD_SECRET with generated secret
-            $envContent = $envContent -replace 'PAYLOAD_SECRET=""', ('PAYLOAD_SECRET="' + $PayloadSecret + '"')
-            $envContent = $envContent -replace '^PAYLOAD_SECRET=$', ('PAYLOAD_SECRET="' + $PayloadSecret + '"')
-            $envContent | Set-Content $LecturerStandaloneEnvPath -NoNewline
-            Write-Host "PAYLOAD_SECRET generated successfully for next-lecturer/standalone/.env"
-        } else {
-            Write-Host "PAYLOAD_SECRET already set in next-lecturer/standalone/.env"
-        }
-    }
-
-    $StudentStandaloneEnvPath = Join-Path $ScriptDir "next-student\standalone\.env"
-    if (Test-Path $StudentStandaloneEnvPath) {
-        $envContent = Get-Content $StudentStandaloneEnvPath -Raw
-        if ($envContent -match 'PAYLOAD_SECRET=""' -or $envContent -match '^PAYLOAD_SECRET=$') {
-            Write-Host "Generating Payload CMS secret for next-student/standalone/.env"
-            $RNG = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-            $RandomBytes = New-Object byte[] 32
-            $RNG.GetBytes($RandomBytes)
-            $PayloadSecret = [Convert]::ToBase64String($RandomBytes)
-            $RNG.Dispose()
-
-            # Replace empty PAYLOAD_SECRET with generated secret
-            $envContent = $envContent -replace 'PAYLOAD_SECRET=""', ('PAYLOAD_SECRET="' + $PayloadSecret + '"')
-            $envContent = $envContent -replace '^PAYLOAD_SECRET=$', ('PAYLOAD_SECRET="' + $PayloadSecret + '"')
-            $envContent | Set-Content $StudentStandaloneEnvPath -NoNewline
-            Write-Host "PAYLOAD_SECRET generated successfully for next-student/standalone/.env"
-        } else {
-            Write-Host "PAYLOAD_SECRET already set in next-student/standalone/.env"
-        }
-    }
-
+ 
     # Setup backend environment
     Write-Host "Setting up backend environment..."
     $ForceArg = if ($ForceFlag) { $ForceFlag } else { "" }
-    # Set environment variable for proper path resolution
     $env:IS_DIST_PACKAGE = "true"
     $env:DEV_MODE = "false"
+ 
     try {
         & $NodeBin (Join-Path $ProjectRoot "scripts\utils.mjs") "setup-backend" $ForceArg
-        if ($LASTEXITCODE -ne 0) {
-            throw "Backend setup failed with exit code: $LASTEXITCODE"
-        }
+        if ($LASTEXITCODE -ne 0) { throw "Backend setup failed with exit code: $LASTEXITCODE" }
         Write-Host "Backend setup completed successfully."
     } catch {
         Write-Host "ERROR: Backend setup failed:" -ForegroundColor Red
         Write-Host $_.Exception.Message -ForegroundColor Red
         exit 1
     }
-
-    # Setup AI service (Ollama or OVMS)
+ 
+    # Setup AI service
     Write-Host "Setting up $($env:PROVIDER.ToUpper())..."
-    # Set environment variable for proper path resolution
     $env:IS_DIST_PACKAGE = "true"
     $env:DEV_MODE = "false"
-
+ 
     try {
         & $NodeBin (Join-Path $ProjectRoot "scripts\utils.mjs") $InstallService
-        if ($LASTEXITCODE -ne 0) {
-            throw "$InstallService failed with exit code: $LASTEXITCODE"
-        }
+        if ($LASTEXITCODE -ne 0) { throw "$InstallService failed with exit code: $LASTEXITCODE" }
         Write-Host "$InstallService completed successfully."
     } catch {
         Write-Host "ERROR: $InstallService failed:" -ForegroundColor Red
         Write-Host $_.Exception.Message -ForegroundColor Red
         exit 1
     }
-
-
-    # Add Node.js bin, jq, and PM2 to local path file for other scripts
+ 
+    # Reinstall sharp for correct Windows platform
+    Write-Host "Reinstalling sharp for Windows platform..."
+    foreach ($persona in @("faculty", "lecturer", "student")) {
+        $StandaloneDir = Join-Path $ProjectRoot "next-$persona\standalone"
+        $SharpSrc = Join-Path $StandaloneDir "node_modules\@img\sharp-win32-x64"
+        $SharpDest = Join-Path $StandaloneDir "next-$persona\node_modules\@img"
+ 
+        if (Test-Path $StandaloneDir) {
+            Write-Host "Reinstalling sharp for next-$persona..."
+ 
+            # Remove empty/incomplete sharp directory first
+            if (Test-Path $SharpSrc) {
+                Remove-Item $SharpSrc -Recurse -Force
+            }
+ 
+            # Install sharp into standalone\node_modules
+            Push-Location $StandaloneDir
+            $ErrorActionPreference = "Continue"
+            & $NpmBin install --os=win32 --cpu=x64 sharp --no-save 2>$null
+            $ErrorActionPreference = "Stop"
+            Pop-Location
+ 
+            # Copy sharp to where Next.js actually looks for it
+            if (Test-Path $SharpSrc) {
+                $null = New-Item -ItemType Directory -Force -Path $SharpDest
+                Copy-Item $SharpSrc -Destination $SharpDest -Recurse -Force
+                Write-Host "sharp copied to next-$persona\node_modules\@img"
+            } else {
+                Write-Host "WARNING: sharp install failed for next-$persona"
+            }
+ 
+            Write-Host "sharp reinstalled for next-$persona."
+        }
+    }
+    Write-Host "sharp reinstallation completed."
+ 
     Write-Host "Creating node_env.ps1 script for distribution package environment..."
     $NodeEnvContent = @"
-# node_env.ps1
-`$env:PATH = "$NodeDir;$JqDir;$(Join-Path $ProjectRoot 'node_modules\.bin');`$env:PATH"
+# node_env.ps1 - generated by install_win.ps1
+`$env:PATH = "$NodeDir;$JqDir;`$env:PATH"
 `$env:THIRDPARTY_DIR = "$(Join-Path $ProjectRoot 'thirdparty')"
 `$env:IS_DIST_PACKAGE = "true"
 `$env:DEV_MODE = "false"
@@ -723,14 +725,13 @@ if ($IsDistPackage -eq $false) {
     $NodeEnvPath = Join-Path $ProjectRoot "node_env.ps1"
     $NodeEnvContent | Out-File -FilePath $NodeEnvPath -Encoding UTF8
     Write-Host "node_env.ps1 created successfully at: $NodeEnvPath"
-
+ 
     Write-Host "Distribution package environment setup completed."
 }
-
+ 
 Write-Host "Installation completed successfully"
 Write-Host ""
-
-# Display GPU compatibility message if no compatible GPU detected
+ 
 if ($script:GpuCompatible -eq $false) {
     Write-Host "-----------------------------------------------------------------------"
     Write-Host "Note: You have no compatible Intel GPU detected."
@@ -738,14 +739,14 @@ if ($script:GpuCompatible -eq $false) {
     Write-Host "-----------------------------------------------------------------------"
     Write-Host ""
 }
-
-Write-Host "To start application, double click or run the following command in PowerShell terminal (without administrator privileges):"
+ 
+Write-Host "To start the application, run:"
 Write-Host "-----------------------------------------------------------------------"
 Write-Host ".\run.ps1"
 Write-Host ""
-Write-Host "Or if you have run installed with .\install_win.bat, simply double click or run the following command in a terminal (without administrator privileges)."
+Write-Host "Or if installed with .\install_win.bat:"
 Write-Host "-----------------------------------------------------------------------"
 Write-Host ".\run_win.bat"
 Write-Host ""
-# Explicit successful exit
+ 
 exit 0
