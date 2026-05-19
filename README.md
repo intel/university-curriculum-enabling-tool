@@ -92,7 +92,7 @@ Powered by Intel CPUs and GPUs, the tool ensures accurate, contextually relevant
    ```
 
 ## Quick Start Windows
-
+> **Pre-requisite:** Install the necessary drivers for Intel® GPUs and Intel® NPUs from [GPU Driver Installer](https://www.intel.com/content/www/us/en/download/785597/intel-arc-graphics-windows.html) and [NPU Driver Installer](https://www.intel.com/content/www/us/en/download/794734/intel-npu-driver-windows.html)
 1. System-level setup (Adminstrator required)
 
    ```powershell
@@ -146,6 +146,7 @@ On Windows, when running `run_win.bat`, PM2 launches several command prompt wind
 
 2. Running OVMS on Windows
 
+OVMS permission requirement pop up will show 5-10 seconds after starting the application. (OVMS Permission has to be accepted to run OVMS service)
 When running any workloads in Windows (e.g. Summary generation), additional command prompts may pop-up repeatingly until the workload has successfully completed.
 
 ## Troubleshooting

@@ -8,7 +8,7 @@
     "dev:lecturer": "cross-env NODE_OPTIONS=--no-deprecation PERSONA=lecturer next dev -p 8080",
     "dev:student": "cross-env NODE_OPTIONS=--no-deprecation PERSONA=student next dev -p 8080",
     "build": "cross-env NODE_OPTIONS=--no-deprecation next build",
-    "prebuild:faculty": "npm run ensure-deps && npm run migrate && npm run build:lecturer && npm run build:student",
+    "prebuild:faculty": "npm run ensure-deps && npm run build:lecturer && npm run build:student",
     "ensure-deps": "npm install",
     "migrate": "cross-env NODE_OPTIONS=--no-deprecation PAYLOAD_CONFIG_PATH=src/payload.config.ts payload migrate",
     "build:faculty": "cross-env NODE_OPTIONS=--no-deprecation STANDALONE_BUILD=true next build",

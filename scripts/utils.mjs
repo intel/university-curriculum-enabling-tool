@@ -15,6 +15,15 @@ import { createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
 import { Readable } from 'stream';
 
+import {
+  startProcess,
+  stopProcess,
+  deleteProcess,
+  killDaemon,
+  listProcesses,
+  startEcosystem,
+} from './process-manager.mjs';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
@@ -24,14 +33,11 @@ const allowedPersonaMap = {
   student: 'student',
 };
 
-// Get the persona from command line or default to 'faculty'
 const personaArg = process.argv[3];
 const persona = allowedPersonaMap[personaArg] || 'faculty';
 
-// Use path resolver to get paths based on environment
 const paths = resolvePaths({ persona });
 
-// Destructure paths for easier access
 const {
   root: WORKING_DIR,
   frontend: FRONTEND_DIR,
@@ -52,29 +58,18 @@ const {
   isRootRepo: IS_ROOT_REPO
 } = paths;
 
-// Platform detection
 const isWindows = process.platform === 'win32';
 
-/**
- * Find available Python command on the system - Simplified
- */
 function getPythonCommand() {
   if (isWindows) {
-    // Just try the most common commands, let the shell handle the rest
     const pythonCommands = ['python', 'python3', 'py'];
     for (const cmd of pythonCommands) {
       try {
-        const result = spawnSync(cmd, ['--version'], {
-          stdio: 'ignore',
-        });
-        if (result.status === 0) {
-          return cmd;
-        }
-      } catch (error) {
-        // Continue to next command
-      }
+        const result = spawnSync(cmd, ['--version'], { stdio: 'ignore' });
+        if (result.status === 0) return cmd;
+      } catch (_) {}
     }
-    return 'python'; // fallback - let it fail naturally if not found
+    return 'python';
   } else {
     return 'python3';
   }
@@ -91,10 +86,6 @@ const ovmsVenvPip = isWindows
   ? path.join(OVMS_VENV_DIR, 'Scripts', 'pip.exe')
   : path.join(OVMS_VENV_DIR, 'bin', 'pip');
 
-// PowerShell path for Windows
-const powerShellCommand = isWindows ? 'powershell' : null;
-
-// Use local Node.js binaries if available
 const nodeBin = isWindows
   ? path.join(NODE_DIR, 'node.exe')
   : path.join(NODE_DIR, 'bin', 'node');
@@ -105,88 +96,57 @@ const npmBin = isWindows
 
 const npmCommand = fs.existsSync(npmBin) ? npmBin : (isWindows ? 'npm.cmd' : 'npm');
 const nodePath = fs.existsSync(nodeBin) ? nodeBin : (isWindows ? 'node.exe' : 'node');
-const pm2Command = isWindows
-  ? (fs.existsSync(nodeBin) ? path.join(NODE_DIR, 'npx.cmd') : 'npx.cmd')
-  : (fs.existsSync(nodeBin) ? path.join(NODE_DIR, 'bin', 'npx') : 'npx');
 
-// Allow list of characters for directory names and filenames for security purposes (i.e. to prevent directory traversal attacks)
 const ALLOWED_PATH_REGEX = /^[a-zA-Z0-9_\-\.\/]+$/;
-
-// Allow list of safe characters for command arguments (including Windows paths)
 const SAFE_ARG_REGEX = /^[a-zA-Z0-9_\-\/\.=:@+\\]+$/;
-
-// Allow URLs for curl
 const SAFE_URL_REGEX = /^https?:\/\/[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+$/;
 
-
-/**
- * Safely validate a Python executable path to prevent command injection
- */
 function isValidPythonPath(pythonPath) {
   if (!pythonPath || typeof pythonPath !== 'string') return false;
-
-  // Check for basic path safety - no command injection characters
   const dangerousChars = /[;&|`$(){}[\]<>]/;
   if (dangerousChars.test(pythonPath)) return false;
-
-  // Must be an absolute path on Windows
   if (isWindows && !path.isAbsolute(pythonPath)) return false;
-
-  // Must end with python.exe on Windows or python/python3 on Unix
   const validEndings = isWindows
     ? [/python\.exe$/i, /python3\.exe$/i]
-    : [/\/python$/, /\/python3$/];
-
-  if (!validEndings.some(pattern => pattern.test(pythonPath))) return false;
-
-  // Path must exist
+    : [/\/python$/, /\/python3$/, /\/python3\.\d+$/];
+  if (!validEndings.some((pattern) => pattern.test(pythonPath))) return false;
   if (!fs.existsSync(pythonPath)) return false;
-
-  // Additional Windows-specific validation
   if (isWindows) {
-    // Must be in expected locations
     const allowedPrefixes = [
       'C:\\Python',
       'C:\\Program Files\\Python',
       'C:\\Program Files (x86)\\Python',
-      process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'AppData\\Local\\Programs\\Python') : null,
-      process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'AppData\\Local\\Microsoft\\WindowsApps') : null
+      process.env.USERPROFILE
+        ? path.join(process.env.USERPROFILE, 'AppData\\Local\\Programs\\Python')
+        : null,
+      process.env.USERPROFILE
+        ? path.join(process.env.USERPROFILE, 'AppData\\Local\\Microsoft\\WindowsApps')
+        : null,
     ].filter(Boolean);
-
-    const isInAllowedLocation = allowedPrefixes.some(prefix =>
+    const isInAllowedLocation = allowedPrefixes.some((prefix) =>
       pythonPath.toLowerCase().startsWith(prefix.toLowerCase())
     );
-
     if (!isInAllowedLocation) {
       console.log(`Python path not in allowed location: ${pythonPath}`);
       return false;
     }
   }
-
   return true;
 }
 
-/**
- * Get Python command dynamically at runtime
- */
 function getDynamicPythonCommand() {
   if (isWindows) {
     console.log('Searching for Python installation...');
-
-    // First try to get the full path using 'where' command
     try {
-      const whereResult = spawnSync('where', ['python'], {
-        encoding: 'utf8',
-      });
-
+      const whereResult = spawnSync('where', ['python'], { encoding: 'utf8' });
       if (whereResult.status === 0 && whereResult.stdout) {
-        const pythonPaths = whereResult.stdout.trim().split('\n').map(p => p.trim()).filter(Boolean);
-
-        // Validate each path returned by 'where' command
+        const pythonPaths = whereResult.stdout
+          .trim()
+          .split('\n')
+          .map((p) => p.trim())
+          .filter(Boolean);
         for (const pythonPath of pythonPaths) {
           if (isValidPythonPath(pythonPath)) {
-            console.log(`Found Python with 'where python': ${pythonPath}`);
-            // Test if it actually works using spawn instead of execSync for safety
             try {
               const result = spawnSync(pythonPath, ['--version'], {
                 stdio: ['ignore', 'pipe', 'pipe'],
@@ -196,115 +156,136 @@ function getDynamicPythonCommand() {
                 console.log(`Verified Python works: ${pythonPath}`);
                 return pythonPath;
               }
-            } catch (testError) {
-              console.log(`Python path failed verification: ${pythonPath} - ${testError.message}`);
-            }
-          } else {
-            console.log(`Skipping invalid Python path: ${pythonPath}`);
+            } catch (_) {}
           }
         }
       }
-    } catch (error) {
-      console.log(`'where python' failed: ${error.message}`);
-    }
+    } catch (_) {}
 
-    const pythonCommands = [
-      'python',
-      'python3',
-      'py'
-    ];
-
-    // Allow list of python paths
+    const pythonCommands = ['python', 'python3', 'py'];
     const userProfile = process.env.USERPROFILE || '';
     const pythonPathPatterns = [
-      'C:\\Python*\\python.exe',  // System root
-      'C:\\Program Files\\Python*\\python.exe', // 64-bit
-      'C:\\Program Files (x86)\\Python*\\python.exe'  // 32-bit
+      'C:\\Python*\\python.exe',
+      'C:\\Program Files\\Python*\\python.exe',
+      'C:\\Program Files (x86)\\Python*\\python.exe',
     ];
-
-    // Add user-specific patterns if userProfile is available
     if (userProfile) {
       pythonPathPatterns.push(
-        path.join(userProfile, 'AppData\\Local\\Programs\\Python\\Python*\\python.exe'),  // User installation
-        path.join(userProfile, 'AppData\\Local\\Microsoft\\WindowsApps\\python*.exe') // Microsoft store
+        path.join(userProfile, 'AppData\\Local\\Programs\\Python\\Python*\\python.exe'),
+        path.join(userProfile, 'AppData\\Local\\Microsoft\\WindowsApps\\python*.exe')
       );
     }
 
     for (const pattern of pythonPathPatterns) {
       try {
-        // Extract base directory and pattern from the path
         const basePath = pattern.substring(0, pattern.lastIndexOf('\\'));
         const baseDir = basePath.substring(0, basePath.lastIndexOf('\\'));
-
         if (fs.existsSync(baseDir)) {
           const entries = fs.readdirSync(baseDir);
-
-          // Different matching logic based on the pattern
           let matchingEntries;
           if (pattern.includes('WindowsApps')) {
-            // For Microsoft Store: match python*.exe files directly
             matchingEntries = entries
-              .filter(file => /^python(3(\.\d+)?)?\.exe$/i.test(file))
-              .map(file => path.join(baseDir, file));
+              .filter((file) => /^python(3(\.\d+)?)?\.exe$/i.test(file))
+              .map((file) => path.join(baseDir, file));
           } else {
-            // For other patterns: match Python* directories containing python.exe
             matchingEntries = entries
-              .filter(dir => /^Python(\d+(\.\d+)?)?$/i.test(dir))
-              .map(dir => path.join(baseDir, dir, 'python.exe'))
-              .filter(pythonExe => fs.existsSync(pythonExe));
+              .filter((dir) => /^Python(\d+(\.\d+)?)?$/i.test(dir))
+              .map((dir) => path.join(baseDir, dir, 'python.exe'))
+              .filter((exe) => fs.existsSync(exe));
           }
-
           pythonCommands.push(...matchingEntries);
         }
-      } catch (error) {
-        // Continue if we can't read the directory
-      }
+      } catch (_) {}
     }
 
     for (const cmd of pythonCommands) {
       try {
-        // Check if the command exists as a file
         if (cmd.includes(path.sep) && isValidPythonPath(cmd)) {
-          console.log(`Found Python executable at: ${cmd}`);
-          // Test if it actually works using spawn for safety
           const result = spawnSync(cmd, ['--version'], {
             stdio: ['ignore', 'pipe', 'pipe'],
             encoding: 'utf8',
           });
-          if (result.status === 0) {
-            console.log(`Verified Python works: ${cmd}`);
-            return cmd;
-          }
+          if (result.status === 0) return cmd;
         } else if (!cmd.includes(path.sep)) {
-          // Test command in PATH using spawn for safety
-          console.log(`Testing Python command in PATH: ${cmd}`);
           const result = spawnSync(cmd, ['--version'], {
             stdio: ['ignore', 'pipe', 'pipe'],
             encoding: 'utf8',
           });
-          if (result.status === 0) {
-            console.log(`Verified Python works from PATH: ${cmd}`);
-            return cmd;
-          }
+          if (result.status === 0) return cmd;
         }
-      } catch (error) {
-        console.log(`Python command failed: ${cmd} - ${error.message || 'Command not found'}`);
-        // Continue to next command
-      }
+      } catch (_) {}
     }
 
     console.warn('No working Python installation found!');
-    console.warn('Tried the following commands:');
-    pythonCommands.forEach(cmd => console.warn(`  - ${cmd}`));
-    console.warn('Please install Python using setup.ps1 or manually install Python 3.12+');
-
-    return 'python'; // fallback
+    return 'python';
   } else {
+    const checkSnippet = [
+      'import ensurepip, os;',
+      'b = os.path.join(os.path.dirname(ensurepip.__file__), "_bundled");',
+      'exit(0 if os.path.isdir(b) and any(f.endswith(".whl") for f in os.listdir(b)) else 1)',
+    ].join(' ');
+
+    const candidates = [
+      '/usr/local/bin/python3.12',
+      '/usr/local/bin/python3.11',
+      '/usr/local/bin/python3.10',
+      '/usr/local/bin/python3.9',
+      '/usr/local/bin/python3',
+      '/usr/bin/python3.12',
+      '/usr/bin/python3.11',
+      '/usr/bin/python3.10',
+      '/usr/bin/python3.9',
+      '/usr/bin/python3',
+      'python3',
+    ];
+
+    for (const candidate of candidates) {
+      if (candidate.startsWith('/') && !fs.existsSync(candidate)) continue;
+
+      try {
+        const ver = spawnSync(candidate, ['--version'], {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          encoding: 'utf8',
+        });
+        if (ver.status !== 0) continue;
+
+        const check = spawnSync(candidate, ['-c', checkSnippet], {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          encoding: 'utf8',
+        });
+
+        if (check.status === 0) {
+          console.log(`Using Python with working ensurepip: ${candidate}`);
+          return candidate;
+        }
+
+        console.log(`Skipping ${candidate}: ensurepip has no bundled pip wheel`);
+      } catch (_) {
+        continue;
+      }
+    }
+
+    console.warn('No Python with bundled ensurepip found, falling back to python3');
     return 'python3';
   }
 }
 
-// Define a whitelist of allowed commands
+// ── All known Python path aliases used in whitelist ──────────────────────────
+const LINUX_PYTHON_PATHS = [
+  '/usr/local/bin/python3.12',
+  '/usr/local/bin/python3.11',
+  '/usr/local/bin/python3.10',
+  '/usr/local/bin/python3.9',
+  '/usr/local/bin/python3',
+  '/usr/bin/python3.12',
+  '/usr/bin/python3.11',
+  '/usr/bin/python3.10',
+  '/usr/bin/python3.9',
+  '/usr/bin/python3',
+  '/usr/bin/python',
+  '/usr/local/bin/python',
+];
+
 export const ALLOWED_COMMANDS_CONFIG = {
   npm: {
     path: npmCommand,
@@ -312,29 +293,20 @@ export const ALLOWED_COMMANDS_CONFIG = {
     allowedArgs: new Set([
       'install', 'run', 'list',
       'build:faculty', 'build:lecturer', 'build:student',
-      '--no-progress', '--no-color'
-    ]),
-  },
-  pm2: {
-    path: pm2Command,
-    aliases: ['pm2', pm2Command],
-    allowedArgs: new Set([
-      'jlist', 'start', 'stop', 'delete', 'restart', 'reload',
-      '--silent', '--namespace', 'all', 'update', 'test', 'test-suite', '--only'
-    ]),
-  },
-  npx: {
-    path: pm2Command,
-    aliases: ['npx', pm2Command],
-    allowedArgs: new Set([
-      'pm2', 'start', 'stop', 'delete', 'restart', 'reload',
-      'jlist', '--silent', '--namespace', 'all', 'ecosystem.config.cjs', 'latest', 'test', 'test-suite', '--only'
+      '--no-progress', '--no-color',
     ]),
   },
   python3: {
     path: getDynamicPythonCommand(),
-    aliases: ['python', 'python3', pythonCommand],
-    allowedArgs: new Set(['-m', 'pip', 'install', 'venv']),
+    aliases: [
+      'python', 'python3', pythonCommand,
+      getDynamicPythonCommand(),
+      ...LINUX_PYTHON_PATHS,
+    ],
+    allowedArgs: new Set([
+      '-m', 'pip', 'install', 'venv',
+      '--without-pip', '--copies',
+    ]),
   },
   pip: {
     path: venvPip,
@@ -349,14 +321,14 @@ export const ALLOWED_COMMANDS_CONFIG = {
   node: {
     path: nodePath,
     aliases: ['node', nodePath],
-    allowedArgs: new Set(['jlist', 'start', 'stop', 'delete', 'restart', 'reload', '--silent', '--namespace', 'all', 'update', 'test', 'test-suite', '--only']),
+    allowedArgs: new Set([]),
   },
   curl: {
     path: 'curl',
     aliases: ['curl'],
     allowedArgs: new Set([
       '-L', '-o', '--location', '--output', '--fail', '--retry', '--retry-delay',
-      '--connect-timeout', '--max-time', '--progress-bar'
+      '--connect-timeout', '--max-time', '--progress-bar',
     ]),
   },
   tar: {
@@ -370,136 +342,116 @@ export const ALLOWED_COMMANDS_CONFIG = {
     allowedArgs: new Set(['+x']),
   },
   powershell: {
-    path: isWindows ? (() => {
-      // Try multiple PowerShell locations
-      const powerShellPaths = [
-        'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
-        'C:\\Windows\\SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe',
-        'powershell.exe',
-        'powershell'
-      ];
-
-      for (const psPath of powerShellPaths) {
-        if (psPath.includes('\\') && fs.existsSync(psPath)) {
-          return psPath;
-        } else if (!psPath.includes('\\')) {
-          // Try to find in PATH
-          try {
-            const result = spawnSync('where', [psPath], {
-              stdio: 'ignore',
-            });
-            if (result.status === 0) {
-              return psPath;
+    path: isWindows
+      ? (() => {
+          const powerShellPaths = [
+            'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+            'C:\\Windows\\SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe',
+            'powershell.exe',
+            'powershell',
+          ];
+          for (const psPath of powerShellPaths) {
+            if (psPath.includes('\\') && fs.existsSync(psPath)) return psPath;
+            else if (!psPath.includes('\\')) {
+              try {
+                const r = spawnSync('where', [psPath], { stdio: 'ignore' });
+                if (r.status === 0) return psPath;
+              } catch (_) {}
             }
-          } catch (error) {
-            // Continue to next path
           }
-        }
-      }
-      return 'powershell'; // fallback
-    })() : null,
+          return 'powershell';
+        })()
+      : null,
     aliases: ['powershell'],
-    allowedArgs: new Set(['-Command', 'Expand-Archive', '-Path', '-DestinationPath', '-Force', 'Invoke-WebRequest', '-Uri', '-OutFile']),
+    allowedArgs: new Set([
+      '-Command', 'Expand-Archive', '-Path', '-DestinationPath', '-Force',
+      'Invoke-WebRequest', '-Uri', '-OutFile',
+    ]),
   },
   cmd: {
     path: isWindows ? 'cmd' : null,
     aliases: ['cmd'],
-    allowedArgs: new Set(['/c', '/k', 'npx', 'pm2', 'jlist', '--silent', 'start', 'stop', 'delete', 'all', '--namespace', '--only']),
+    allowedArgs: new Set(['/c', '/k']),
   },
-  pm2bin: {
-    path: path.join(WORKING_DIR, 'node_modules', 'pm2', 'bin', 'pm2'),
-    aliases: [path.join(WORKING_DIR, 'node_modules', 'pm2', 'bin', 'pm2')],
-    allowedArgs: new Set(['jlist', 'start', 'stop', 'delete', 'restart', 'reload', '--silent', '--namespace', 'all', 'update', 'test', 'test-suite']),
-  }
 };
 
-/**
- * Finds the ALLOWED_COMMANDS_CONFIG entry that has the given alias.
- */
 export function lookupCommandInfo(cmdAlias) {
-  // For Python commands, refresh the path dynamically
-  if (['python', 'python3'].includes(cmdAlias) ||
-      (cmdAlias.toLowerCase().includes('python') && cmdAlias.toLowerCase().endsWith('.exe'))) {
+  if (
+    ['python', 'python3'].includes(cmdAlias) ||
+    (typeof cmdAlias === 'string' &&
+      cmdAlias.toLowerCase().includes('python') &&
+      (cmdAlias.toLowerCase().endsWith('.exe') ||
+       /python[\d.]*$/.test(cmdAlias))
+    )
+  ) {
     const pythonPath = getDynamicPythonCommand();
     return {
       path: pythonPath,
-      aliases: ['python', 'python3', pythonPath],
-      allowedArgs: new Set(['-m', 'pip', 'install', 'venv'])
+      aliases: [
+        'python', 'python3', pythonPath, cmdAlias,
+        ...LINUX_PYTHON_PATHS,
+      ],
+      allowedArgs: new Set([
+        '-m', 'pip', 'install', 'venv',
+        '--without-pip', '--copies',
+      ]),
     };
   }
 
-  // Special handling for PowerShell full paths on Windows
   if (isWindows && cmdAlias.toLowerCase().includes('powershell.exe')) {
     const powerShellConfig = ALLOWED_COMMANDS_CONFIG.powershell;
     if (powerShellConfig && powerShellConfig.path) {
       return {
-        path: cmdAlias, // Use the full path as provided
+        path: cmdAlias,
         aliases: [cmdAlias, 'powershell.exe', 'powershell'],
-        allowedArgs: powerShellConfig.allowedArgs
+        allowedArgs: powerShellConfig.allowedArgs,
       };
     }
   }
 
-  // Special handling for Node.js full paths
   if (cmdAlias.toLowerCase().includes('node.exe') || cmdAlias.toLowerCase().endsWith('node')) {
     const nodeConfig = ALLOWED_COMMANDS_CONFIG.node;
     if (nodeConfig && nodeConfig.path) {
       return {
-        path: cmdAlias, // Use the full path as provided
+        path: cmdAlias,
         aliases: [cmdAlias, 'node.exe', 'node', nodeConfig.path],
-        allowedArgs: nodeConfig.allowedArgs
+        allowedArgs: nodeConfig.allowedArgs,
       };
     }
   }
 
-  return Object.values(ALLOWED_COMMANDS_CONFIG).find((entry) =>
-    entry.aliases.includes(cmdAlias)
-  ) || null;
+  return (
+    Object.values(ALLOWED_COMMANDS_CONFIG).find((entry) =>
+      entry.aliases.includes(cmdAlias)
+    ) || null
+  );
 }
 
-/**
- * Path resolver function to read environment variables.
- * Checks if a path is within the project root directory.
- * Disallows '..' in the path & only allows safe characters.
- */
 function isSafeRelativePath(inputPath) {
   const resolvedRoot = path.resolve(ROOT_DIR);
   const resolvedInput = path.resolve(inputPath);
-
   if (
     resolvedInput !== resolvedRoot &&
     !resolvedInput.startsWith(resolvedRoot + path.sep)
   ) {
     return false;
   }
-
   if (inputPath.includes('..')) return false;
-
   const segments = path.relative(resolvedRoot, resolvedInput).split(path.sep);
   for (const segment of segments) {
-    if (segment && !ALLOWED_PATH_REGEX.test(segment)) {
-      return false;
-    }
+    if (segment && !ALLOWED_PATH_REGEX.test(segment)) return false;
   }
   return true;
 }
 
-
 function getPersonaFromKey(persona) {
   const normalized = persona.toLowerCase().trim();
   const safePersona = allowedPersonaMap[normalized];
-  if (!safePersona) {
-    throw new Error(`Invalid persona: ${persona}`);
-  }
+  if (!safePersona) throw new Error(`Invalid persona: ${persona}`);
   return safePersona;
 }
 
-
-/**
- * Get environment variables for Ollama from root .env file
- */
 function getOllamaEnvironmentVariables(rootDir) {
-  // Default environment variables
   const envVars = {
     OLLAMA_NUM_GPU: 999,
     no_proxy: 'localhost,127.0.0.1',
@@ -507,286 +459,271 @@ function getOllamaEnvironmentVariables(rootDir) {
     SYCL_CACHE_PERSISTENT: 1,
     OLLAMA_KEEP_ALIVE: '10m',
     SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS: 1,
-    ONEAPI_DEVICE_SELECTOR: 'level_zero:0'
+    ONEAPI_DEVICE_SELECTOR: 'level_zero:0',
   };
-
-  // Define all Ollama-related environment variables to look for
   const ollamaEnvVars = [
-    'OLLAMA_NUM_GPU',
-    'no_proxy',
-    'ZES_ENABLE_SYSMAN',
-    'SYCL_CACHE_PERSISTENT',
-    'OLLAMA_KEEP_ALIVE',
-    'SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS',
-    'ONEAPI_DEVICE_SELECTOR',
-    'PROVIDER_HOST',
-    'OLLAMA_MODELS',
-    'OLLAMA_DEBUG',
-    'http_proxy',
-    'https_proxy',
-    'OLLAMA_ORIGINS'
+    'OLLAMA_NUM_GPU', 'no_proxy', 'ZES_ENABLE_SYSMAN', 'SYCL_CACHE_PERSISTENT',
+    'OLLAMA_KEEP_ALIVE', 'SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS',
+    'ONEAPI_DEVICE_SELECTOR', 'PROVIDER_HOST', 'OLLAMA_MODELS', 'OLLAMA_DEBUG',
+    'http_proxy', 'https_proxy', 'OLLAMA_ORIGINS',
   ];
-
-  // Read each environment variable using the shared function
-  ollamaEnvVars.forEach(varName => {
-    const defaultValue = envVars[varName];
-    const value = readEnvVariable(varName, defaultValue);
+  ollamaEnvVars.forEach((varName) => {
+    const value = readEnvVariable(varName, envVars[varName]);
     if (value !== undefined) {
       console.log(`Using ${varName}: ${value}`);
       envVars[varName] = value;
     }
   });
-
   return envVars;
 }
 
-/**
- * Parse port number from PROVIDER_HOST (format: "host:port")
- * @param {string} providerHost - The provider host string (e.g., "127.0.0.1:5950")
- * @param {number} defaultPort - Default port if parsing fails
- * @returns {number} The parsed port number
- */
 function parsePortFromProviderHost(providerHost, defaultPort = 5950) {
-  if (!providerHost || typeof providerHost !== 'string') {
-    return defaultPort;
-  }
-
+  if (!providerHost || typeof providerHost !== 'string') return defaultPort;
   const parts = providerHost.split(':');
   if (parts.length === 2) {
     const port = parseInt(parts[1], 10);
-    if (!isNaN(port) && port > 0 && port <= 65535) {
-      return port;
-    }
+    if (!isNaN(port) && port > 0 && port <= 65535) return port;
   }
-
   return defaultPort;
 }
 
-/**
- * Get environment variables for OVMS from root .env file
- */
 function getOvmsEnvironmentVariables(rootDir) {
-  // Default environment variables
   const envVars = {
     PROVIDER_HOST: '127.0.0.1:5950',
     OVMS_LOG_LEVEL: 'INFO',
     OVMS_POLL_INTERVAL: 1,
-    no_proxy: 'localhost,127.0.0.1'
+    no_proxy: 'localhost,127.0.0.1',
   };
-
-  // Define all OVMS-related environment variables to look for
   const ovmsEnvVars = [
-    'PROVIDER_HOST',
-    'OVMS_LOG_LEVEL',
-    'OVMS_POLL_INTERVAL',
-    'OVMS_DEVICE',
-    'no_proxy',
-    'http_proxy',
-    'https_proxy'
+    'PROVIDER_HOST', 'OVMS_LOG_LEVEL', 'OVMS_POLL_INTERVAL',
+    'OVMS_DEVICE', 'no_proxy', 'http_proxy', 'https_proxy',
   ];
-
-  // Read each environment variable using the shared function
-  ovmsEnvVars.forEach(varName => {
-    const defaultValue = envVars[varName];
-    const value = readEnvVariable(varName, defaultValue);
+  ovmsEnvVars.forEach((varName) => {
+    const value = readEnvVariable(varName, envVars[varName]);
     if (value !== undefined) {
       console.log(`Using ${varName}: ${value}`);
       envVars[varName] = value;
     }
   });
-
   return envVars;
 }
 
-/**
- * Final validation of command path before execution (for Coverity taint analysis)
- */
 function validateExecutablePath(commandPath) {
   if (!commandPath || typeof commandPath !== 'string') {
     throw new Error('Invalid command path: must be a non-empty string');
   }
-
-  // Check for dangerous characters that could enable command injection
   const dangerousChars = /[;&|`$(){}[\]<>]/;
   if (dangerousChars.test(commandPath)) {
     throw new Error(`Invalid command path: contains dangerous characters: ${commandPath}`);
   }
-
-  // For absolute paths, ensure they're in safe locations
   if (path.isAbsolute(commandPath)) {
-    // Use static project paths based on __dirname to avoid process.cwd() dependency
-    const projectBasePaths = [
-      ROOT_DIR, // Project root directory (statically defined)
-      path.dirname(ROOT_DIR), // Allow parent of project root for workspace scenarios
-    ];
+    const projectBasePaths = [ROOT_DIR, path.dirname(ROOT_DIR)];
+    const safePrefixes = isWindows
+      ? [
+          'C:\\Windows\\System32\\',
+          'C:\\Windows\\SysWOW64\\',
+          'C:\\Program Files\\',
+          'C:\\Program Files (x86)\\',
+          'C:\\Python',
+          process.env.USERPROFILE
+            ? path.join(process.env.USERPROFILE, 'AppData\\Local\\Programs\\')
+            : null,
+          process.env.USERPROFILE
+            ? path.join(process.env.USERPROFILE, 'AppData\\Local\\Microsoft\\WindowsApps\\')
+            : null,
+          ...projectBasePaths,
+        ].filter(Boolean)
+      : [
+          '/usr/bin/', '/usr/local/bin/', '/bin/', '/opt/',
+          ...projectBasePaths,
+        ];
 
-    const safePrefixes = isWindows ? [
-      'C:\\Windows\\System32\\',
-      'C:\\Windows\\SysWOW64\\',
-      'C:\\Program Files\\',
-      'C:\\Program Files (x86)\\',
-      'C:\\Python',
-      process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'AppData\\Local\\Programs\\') : null,
-      process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'AppData\\Local\\Microsoft\\WindowsApps\\') : null,
-      ...projectBasePaths, // Add static project paths
-    ].filter(Boolean) : [
-      '/usr/bin/',
-      '/usr/local/bin/',
-      '/bin/',
-      '/opt/',
-      ...projectBasePaths, // Add static project paths
-    ];
-
-    const isInSafeLocation = safePrefixes.some(prefix =>
+    const isInSafeLocation = safePrefixes.some((prefix) =>
       commandPath.toLowerCase().startsWith(prefix.toLowerCase())
     );
-
     if (!isInSafeLocation) {
       throw new Error(`Invalid command path: not in safe location: ${commandPath}`);
     }
   }
-
   return true;
 }
 
-/**
- * Sanitized command path wrapper to break taint flow for Coverity
- * This function validates the path and returns a clean object
- */
 function getSanitizedCommandPath(commandPath) {
-  // First validate the path through our existing validation
   validateExecutablePath(commandPath);
-
-  // Explicit whitelist check
   if (!validateCommandPath(commandPath)) {
     throw new Error(`Command path not in whitelist: ${commandPath}`);
   }
-
-  // Return a clean path object that breaks the taint flow
-  // Using a simple object wrapper to contain the validated path
-  return {
-    executablePath: String(commandPath), // Create a new string to break taint
-    isValidated: true
-  };
+  return { executablePath: String(commandPath), isValidated: true };
 }
 
-/**
- * Function to validate executable command paths
- */
 function validateCommandPath(commandPath) {
-  // Explicit hardcoded whitelist of allowed command paths
   const ALLOWED_COMMAND_PATHS = [
-    // System commands (Windows)
     'C:\\Windows\\System32\\cmd.exe',
     'C:\\Windows\\SysWOW64\\cmd.exe',
     'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
     'C:\\Windows\\SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe',
-    'powershell.exe',
-    'powershell',
-    'cmd',
-    'curl',
-    'tar',
-    'chmod',
-    'where',
-    'robocopy',
-
-    // Node.js commands
-    'node',
-    'node.exe',
-    'npm',
-    'npm.cmd',
-    'npx',
-    'npx.cmd',
-
-    // Python commands
-    'python',
-    'python3',
-    'python.exe',
-    'python3.exe',
-    'py',
-    'pip',
-    'pip3',
-    'pip.exe',
-
-    // PM2 commands
-    'pm2',
-
-    // Unix/Linux system commands
-    '/usr/bin/python3',
-    '/usr/bin/python',
-    '/usr/local/bin/python3',
-    '/usr/local/bin/python',
-    '/bin/bash',
-    '/bin/sh',
-    '/usr/bin/curl',
-    '/usr/bin/tar',
-    '/usr/bin/chmod'
+    'powershell.exe', 'powershell', 'cmd', 'curl', 'tar', 'chmod', 'where', 'robocopy',
+    'node', 'node.exe', 'npm', 'npm.cmd', 'npx', 'npx.cmd',
+    'python', 'python3', 'python.exe', 'python3.exe', 'py', 'pip', 'pip3', 'pip.exe',
+    '/usr/bin/python3', '/usr/bin/python',
+    '/usr/local/bin/python3', '/usr/local/bin/python',
+    '/usr/local/bin/python3.12',
+    '/usr/local/bin/python3.11',
+    '/usr/local/bin/python3.10',
+    '/usr/local/bin/python3.9',
+    '/usr/bin/python3.12',
+    '/usr/bin/python3.11',
+    '/usr/bin/python3.10',
+    '/usr/bin/python3.9',
+    '/bin/bash', '/bin/sh', '/usr/bin/curl', '/usr/bin/tar', '/usr/bin/chmod',
   ];
+  if (ALLOWED_COMMAND_PATHS.includes(commandPath)) return true;
 
-  // Check if the command path is in our explicit whitelist
-  if (ALLOWED_COMMAND_PATHS.includes(commandPath)) {
-    return true;
-  }
-
-  // Check if it's a path within our project directories
-  const projectBasePaths = [
-    ROOT_DIR,
-    path.dirname(ROOT_DIR)
-  ];
-
+  const projectBasePaths = [ROOT_DIR, path.dirname(ROOT_DIR)];
   for (const basePath of projectBasePaths) {
-    if (commandPath.startsWith(basePath)) {
-      return true;
-    }
+    if (commandPath.startsWith(basePath)) return true;
   }
 
-  // Check if it's in standard system directories
-  const systemPrefixes = isWindows ? [
-    'C:\\Windows\\System32\\',
-    'C:\\Windows\\SysWOW64\\',
-    'C:\\Program Files\\',
-    'C:\\Program Files (x86)\\',
-    'C:\\Python',
-  ] : [
-    '/usr/bin/',
-    '/usr/local/bin/',
-    '/bin/',
-    '/opt/',
-  ];
-
+  const systemPrefixes = isWindows
+    ? ['C:\\Windows\\System32\\', 'C:\\Windows\\SysWOW64\\', 'C:\\Program Files\\',
+       'C:\\Program Files (x86)\\', 'C:\\Python']
+    : ['/usr/bin/', '/usr/local/bin/', '/bin/', '/opt/'];
   for (const prefix of systemPrefixes) {
-    if (commandPath.startsWith(prefix)) {
-      return true;
-    }
+    if (commandPath.startsWith(prefix)) return true;
   }
 
-  // Check user directories (Python installations)
   if (isWindows && process.env.USERPROFILE) {
     const userPrefixes = [
       path.join(process.env.USERPROFILE, 'AppData\\Local\\Programs\\'),
-      path.join(process.env.USERPROFILE, 'AppData\\Local\\Microsoft\\WindowsApps\\')
+      path.join(process.env.USERPROFILE, 'AppData\\Local\\Microsoft\\WindowsApps\\'),
     ];
-
     for (const prefix of userPrefixes) {
-      if (commandPath.startsWith(prefix)) {
-        return true;
-      }
+      if (commandPath.startsWith(prefix)) return true;
     }
   }
-
   return false;
+}
+
+const SAFE_PATH_ENTRY_REGEX = /^[a-zA-Z]:\\(?:[a-zA-Z0-9_\-\. \\]+)?$/;
+
+const WINDOWS_SAFE_PATH_PREFIXES = [
+  'C:\\Windows\\',
+  'C:\\Program Files\\',
+  'C:\\Program Files (x86)\\',
+  'C:\\Python',
+  ...(process.env.USERPROFILE ? [
+    path.join(process.env.USERPROFILE, 'AppData\\Local\\Programs\\'),
+    path.join(process.env.USERPROFILE, 'AppData\\Local\\Microsoft\\WindowsApps\\'),
+    path.join(process.env.USERPROFILE, 'AppData\\Roaming\\npm'),
+  ] : []),
+  ROOT_DIR,
+  path.dirname(ROOT_DIR),
+];
+
+function isSafeWindowsPathEntry(entry) {
+  if (!entry || typeof entry !== 'string') return false;
+  const trimmed = entry.trim();
+  if (!trimmed) return false;
+
+  // Must not contain shell metacharacters
+  const dangerousChars = /[;&|`$(){}[\]<>"']/;
+  if (dangerousChars.test(trimmed)) return false;
+
+  // Must match basic Windows absolute path pattern
+  if (!SAFE_PATH_ENTRY_REGEX.test(trimmed)) return false;
+
+  // Must start with a known safe prefix (case-insensitive)
+  const lower = trimmed.toLowerCase();
+  return WINDOWS_SAFE_PATH_PREFIXES.some(
+    (prefix) => lower.startsWith(prefix.toLowerCase())
+  );
+}
+
+function sanitizeWindowsPath(rawPath) {
+  if (!rawPath || typeof rawPath !== 'string') return '';
+
+  const entries = rawPath.split(';');
+  const sanitized = entries.filter((entry) => {
+    const trimmed = entry.trim();
+    if (!trimmed) return false;
+    const safe = isSafeWindowsPathEntry(trimmed);
+    if (!safe) {
+      console.warn(`Removing unsafe PATH entry: ${trimmed}`);
+    }
+    return safe;
+  });
+
+  return sanitized.join(';');
+}
+
+function buildSafeEnv(baseEnv = process.env) {
+  const env = { ...baseEnv };
+
+  if (isWindows) {
+    const rawPath = getRefreshedWindowsPath();   // may return tainted data
+    const safePath = sanitizeWindowsPath(rawPath); // explicit sanitization
+    if (safePath) {
+      env.PATH = safePath;
+      console.log('PATH refreshed and sanitized from Windows registry.');
+    }
+    // If sanitization produced nothing, env.PATH retains the inherited value.
+  }
+
+  if (fs.existsSync(NODE_DIR)) {
+    const nodeBinPath = isWindows ? NODE_DIR : path.join(NODE_DIR, 'bin');
+    env.PATH = nodeBinPath + (isWindows ? ';' : ':') + (env.PATH || '');
+  }
+
+  return env;
+}
+
+function getRefreshedWindowsPath() {
+  if (!isWindows) return process.env.PATH || '';
+
+  try {
+    const machinePathResult = spawnSync(
+      'reg',
+      [
+        'query',
+        'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment',
+        '/v',
+        'PATH',
+      ],
+      { encoding: 'utf8' }
+    );
+
+    const userPathResult = spawnSync(
+      'reg',
+      ['query', 'HKCU\\Environment', '/v', 'PATH'],
+      { encoding: 'utf8' }
+    );
+
+    const extractPath = (regOutput) => {
+      if (!regOutput) return '';
+      const match = regOutput.match(/PATH\s+REG(?:_EXPAND)?_SZ\s+(.+)/i);
+      return match ? match[1].trim() : '';
+    };
+
+    const machinePath = extractPath(machinePathResult.stdout);
+    const userPath    = extractPath(userPathResult.stdout);
+
+    const combined = [machinePath, userPath].filter(Boolean).join(';');
+    if (combined) {
+      const sanitized = sanitizeWindowsPath(combined);
+      if (sanitized) {
+        return sanitized;
+      }
+      console.warn('No safe PATH entries found after sanitization, falling back to process PATH');
+    }
+  } catch (e) {
+    console.warn('Could not refresh PATH from registry:', e.message);
+  }
+
+  return process.env.PATH || '';
 }
 
 function execCommand(command, options = {}) {
   try {
-    // Ensure NODE_DIR is in the PATH environment variable
-    const env = { ...process.env };
-    if (fs.existsSync(NODE_DIR)) {
-      const nodeBinPath = isWindows ? NODE_DIR : path.join(NODE_DIR, 'bin');
-
-      env.PATH = nodeBinPath + (isWindows ? ';' : ':') + (env.PATH || '');
-    }
-
     let cmd, args;
     if (Array.isArray(command)) {
       [cmd, ...args] = command;
@@ -794,24 +731,32 @@ function execCommand(command, options = {}) {
       [cmd, ...args] = command.split(' ');
     }
 
-    // Filter to only run allowed commands
     const commandInfo = lookupCommandInfo(cmd);
     if (!commandInfo) {
       throw new Error(`Blocked execution: command '${cmd}' is not allowed.`);
     }
 
-    // Explicitly check all arguments with SAFE_ARG_REGEX
-    if (!Array.isArray(args)){
-      throw new Error('Arguments must be in an array');
-    }
+    if (!Array.isArray(args)) throw new Error('Arguments must be in an array');
     for (const arg of args) {
       if (typeof arg !== 'string' || !SAFE_ARG_REGEX.test(arg)) {
         throw new Error(`Blocked execution: unsafe argument '${arg}'`);
       }
     }
 
-    // Final validation of executable commands and its respective paths to prevent command injection
     const sanitizedCommand = getSanitizedCommandPath(commandInfo.path);
+
+    // Build a clean env from scratch instead of inheriting process.env
+    const env = Object.create(null);
+    const safeEnv = buildSafeEnv();
+    env.PATH = safeEnv.PATH || '';
+
+    // Preserve proxy settings needed for network access
+    const proxyVars = ['http_proxy', 'https_proxy', 'no_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY'];
+    for (const key of proxyVars) {
+      if (process.env[key] !== undefined) {
+        env[key] = process.env[key];
+      }
+    }
 
     const result = spawnSync(sanitizedCommand.executablePath, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -831,74 +776,51 @@ function execCommand(command, options = {}) {
   }
 }
 
-/**
- * Strictly validate if an argument is safe to use in a command.
- */
 function isSafeArg(command, commandInfo, arg, index, args) {
   if (typeof arg !== 'string') return false;
   if (command === 'curl' && SAFE_URL_REGEX.test(arg)) return true;
   if (command === 'curl' && args && (args[index - 1] === '-o' || args[index - 1] === '--output')) {
     return SAFE_ARG_REGEX.test(arg);
   }
-  if (command === 'curl' && (
-    arg === '-L' || arg === '-o' || arg === '--location' || arg === '--output' ||
-    arg === '--fail' || arg === '--retry' || arg === '--retry-delay' ||
-    arg === '--connect-timeout' || arg === '--max-time' || arg === '--progress-bar'
-  )) return true;
+  if (
+    command === 'curl' &&
+    ['-L', '-o', '--location', '--output', '--fail', '--retry', '--retry-delay',
+     '--connect-timeout', '--max-time', '--progress-bar'].includes(arg)
+  ) return true;
+  if (
+    command === 'curl' &&
+    args &&
+    ['--retry', '--retry-delay', '--connect-timeout', '--max-time'].includes(args[index - 1]) &&
+    /^\d+$/.test(arg)
+  ) return true;
 
-  // Allow numeric values for timeout and retry arguments
-  if (command === 'curl' && args && (
-    args[index - 1] === '--retry' || args[index - 1] === '--retry-delay' ||
-    args[index - 1] === '--connect-timeout' || args[index - 1] === '--max-time'
-  ) && /^\d+$/.test(arg)) return true;
-
-  // PowerShell command validation - check both command name and path
-  const isPowerShellCommand = command === 'powershell' ||
-                              command.toLowerCase().includes('powershell.exe') ||
-                              path.basename(command).toLowerCase() === 'powershell.exe';
+  const isPowerShellCommand =
+    command === 'powershell' ||
+    command.toLowerCase().includes('powershell.exe') ||
+    path.basename(command).toLowerCase() === 'powershell.exe';
 
   if (isPowerShellCommand) {
-    // Allow URLs for Invoke-WebRequest
     if (SAFE_URL_REGEX.test(arg)) return true;
-    // Allow file paths
     if (arg.match(/^[a-zA-Z0-9_\-\.\\\/\s\:]+$/)) return true;
-    // Allow PowerShell command strings with comprehensive character set
-    if (arg.includes('Invoke-WebRequest') || arg.includes('Expand-Archive')) {
-      // Allow PowerShell commands with all necessary characters: letters, numbers, spaces, quotes,
-      // paths, URLs, parameters, equals signs, colons, periods, hyphens, slashes, backslashes
-      if (arg.match(/^[a-zA-Z0-9_\-\.\\\/\s\:\"'=@+\?\&\[\](){}]+$/)) return true;
-    }
-    // Allow individual PowerShell parameters (like -Command, -Uri, -OutFile, etc.)
+    if (
+      (arg.includes('Invoke-WebRequest') || arg.includes('Expand-Archive')) &&
+      arg.match(/^[a-zA-Z0-9_\-\.\\\/\s\:\"'=@+\?\&\[\](){}]+$/)
+    ) return true;
     if (arg.match(/^-[a-zA-Z0-9]+$/)) return true;
-    // Allow quoted strings and file paths
     if (arg.match(/^\"[^\"]*\"$/) || arg.match(/^'[^']*'$/)) return true;
-    // Allow simple PowerShell parameter values
     if (arg.match(/^[a-zA-Z0-9_\-\.\\\/\s\:]+$/)) return true;
-    // If none of the PowerShell-specific patterns match, check allowedArgs
     if (commandInfo.allowedArgs && !commandInfo.allowedArgs.has(arg)) return false;
-    // For PowerShell, return false if it doesn't match any allowed pattern
     return false;
   }
 
   if (commandInfo.allowedArgs && arg.startsWith('-')) {
-    // If the argument is in allowedArgs, allow it; if not, reject it
     return commandInfo.allowedArgs.has(arg);
   }
   if (!SAFE_ARG_REGEX.test(arg)) return false;
   if (command === 'tar' && (arg === '-xzf' || arg === '--strip-components=1')) return true;
-  if (
-    (command === 'npx' || path.basename(commandInfo.path) === 'npx' || commandInfo.aliases.includes('npx')) &&
-    ((index === 0 && arg === 'pm2') || (index > 0 && (arg.endsWith('ecosystem.config.cjs') || arg === 'latest')))
-  ) return true;
-  if ((command === 'pm2' || command === 'npx') && args && args[index - 1] === '--namespace') {
-    return SAFE_ARG_REGEX.test(arg);
-  }
   return true;
 }
 
-/**
- * Sanitize command arguments to ensure they are safe and allowed.
- */
 function sanitizeArgs(command, commandInfo, args) {
   if (!Array.isArray(args)) return [];
   const sanitized = [];
@@ -912,27 +834,13 @@ function sanitizeArgs(command, commandInfo, args) {
   return sanitized;
 }
 
-/**
- * Execute a command with real-time output - Uses lookupCommandInfo and sanitizeArgs
- */
 function spawnCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    // Use the system's default PATH environment
-    const env = { ...process.env };
-
-    // Only add Node.js to PATH if we have local installation
-    if (fs.existsSync(NODE_DIR)) {
-      const nodeBinPath = isWindows ? NODE_DIR : path.join(NODE_DIR, 'bin');
-      env.PATH = nodeBinPath + (isWindows ? ';' : ':') + (env.PATH || '');
-    }
-
-    // Validate command with list of allowed commands
     const commandInfo = lookupCommandInfo(command);
     if (!commandInfo) {
       return reject(new Error(`Blocked execution: command '${command}' is not allowed.`));
     }
 
-    // Sanitize arguments using the existing sanitizeArgs function
     let sanitizedArgs;
     try {
       sanitizedArgs = sanitizeArgs(command, commandInfo, args || []);
@@ -940,33 +848,36 @@ function spawnCommand(command, args, options = {}) {
       return reject(error);
     }
 
-    // Handle Windows .cmd/.bat files securely without shell injection
     let finalCommand = commandInfo.path;
     let finalArgs = sanitizedArgs;
 
     if (isWindows && (commandInfo.path.endsWith('.cmd') || commandInfo.path.endsWith('.bat'))) {
-      // Use hardcoded cmd.exe path to avoid environment variable injection
-      // Common safe locations for cmd.exe on Windows
       const safeCmdPaths = [
         'C:\\Windows\\System32\\cmd.exe',
-        'C:\\Windows\\SysWOW64\\cmd.exe'
+        'C:\\Windows\\SysWOW64\\cmd.exe',
       ];
-
-      let cmdPath = 'cmd.exe'; // fallback
+      let cmdPath = 'cmd.exe';
       for (const safePath of safeCmdPaths) {
-        if (fs.existsSync(safePath)) {
-          cmdPath = safePath;
-          break;
-        }
+        if (fs.existsSync(safePath)) { cmdPath = safePath; break; }
       }
-
       finalCommand = cmdPath;
       finalArgs = ['/d', '/s', '/c', commandInfo.path, ...sanitizedArgs];
     }
 
-    // Final validation of executable commands and its respective paths to prevent command injection
-    const sanitizedCommand = getSanitizedCommandPath(finalCommand);
+    // Build a clean env from scratch instead of inheriting process.env
+    const env = Object.create(null);
+    const safeEnv = buildSafeEnv();
+    env.PATH = safeEnv.PATH || '';
 
+    // Preserve proxy settings needed for network access
+    const proxyVars = ['http_proxy', 'https_proxy', 'no_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY'];
+    for (const key of proxyVars) {
+      if (process.env[key] !== undefined) {
+        env[key] = process.env[key];
+      }
+    }
+
+    const sanitizedCommand = getSanitizedCommandPath(finalCommand);
     const proc = spawn(sanitizedCommand.executablePath, finalArgs, {
       stdio: 'inherit',
       shell: false,
@@ -975,47 +886,15 @@ function spawnCommand(command, args, options = {}) {
     });
 
     proc.on('close', (code) => {
-      if (code === 0) {
-        resolve({ success: true });
-      } else {
-        reject({ success: false, code });
-      }
+      if (code === 0) resolve({ success: true });
+      else reject({ success: false, code });
     });
-
-    proc.on('error', (err) => {
-      reject({ success: false, error: err });
-    });
+    proc.on('error', (err) => reject({ success: false, error: err }));
   });
 }
 
-/**
- * Execute a PM2 command with proper Windows/Linux compatibility
- */
-function executePM2Command(pm2Args, options = {}) {
-  if (isWindows) {
-    // On Windows, try to run PM2 directly using Node.js
-    const nodePath = fs.existsSync(path.join(NODE_DIR, 'node.exe')) ? path.join(NODE_DIR, 'node.exe') : 'node';
-    const pm2BinPath = path.join(WORKING_DIR, 'node_modules', 'pm2', 'bin', 'pm2');
-
-    if (fs.existsSync(pm2BinPath)) {
-      // Use Node.js to run PM2 directly
-      return spawnCommand(nodePath, [pm2BinPath, ...pm2Args], options);
-    } else {
-      // Fallback to npx using cmd.exe
-      return spawnCommand('cmd', ['/c', 'npx', 'pm2', ...pm2Args], options);
-    }
-  } else {
-    return spawnCommand(pm2Command, ['pm2', ...pm2Args], options);
-  }
-}
-
-/**
- * Check if a persona build exists
- */
 function checkBuildExists(persona) {
-  // Get fresh paths for the specified persona
   const { frontend } = resolvePaths({ persona });
-
   const personaDir = path.join(frontend, `next-${persona.toLowerCase()}`);
   const buildIdFile = path.join(personaDir, 'BUILD_ID');
   if (fs.existsSync(buildIdFile)) {
@@ -1026,722 +905,532 @@ function checkBuildExists(persona) {
   return false;
 }
 
-/**
- * Check if a distribution package exists
- */
 function checkDistExists(persona) {
-  // Get fresh paths with the specific persona
   const { dist, frontend } = resolvePaths({ persona });
-
-  // Get the name and version from frontend package.json
   const packageJsonPath = path.join(frontend, 'package.json');
   let packageName = 'university-curriculum-enabling-tool';
   let packageVersion = '';
-
   if (fs.existsSync(packageJsonPath)) {
     try {
       const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
       packageName = packageJson.name || packageName;
       packageVersion = packageJson.version || '';
     } catch (error) {
-      console.warn(`Failed to parse package.json: ${error.message}. Using default package name.`);
+      console.warn(`Failed to parse package.json: ${error.message}.`);
     }
   }
-
-  // Create dist directory name with name and version from package.json
   const versionString = packageVersion ? `-${packageVersion}` : '';
-  // For faculty persona, don't append the persona label
-  const distDir = persona.toLowerCase() === 'faculty'
-    ? path.join(dist, `${packageName}${versionString}`)
-    : path.join(dist, `${packageName}${versionString}-${persona}`);
+  const distDir =
+    persona.toLowerCase() === 'faculty'
+      ? path.join(dist, `${packageName}${versionString}`)
+      : path.join(dist, `${packageName}${versionString}-${persona}`);
   const zipFile = `${distDir}.zip`;
-
   return fs.existsSync(distDir) && fs.existsSync(zipFile);
 }
 
-/**
- * Build a specific persona
- */
 export async function buildPersona(persona, force = false) {
   console.log(`Building for persona: ${persona}`);
-
-  // Get fresh paths for the specified persona
   const { isDistPackage, frontend, root } = resolvePaths({ persona });
-
-  // Skip building if in distribution package mode
   if (isDistPackage) {
     console.log(`Running in distribution package mode - build is already complete for ${persona}`);
     return { success: true, skipped: true };
   }
-
   if (!force && checkBuildExists(persona)) {
     console.log(`Build for ${persona} already exists. Use --force to rebuild.`);
     return { success: true, skipped: true };
   }
-
   try {
     if (isSafeRelativePath(frontend)) {
       process.chdir(fileURLToPath(new URL(`file://${path.resolve(frontend)}`)));
     } else {
       throw new Error(`Unsafe frontend directory detected: ${frontend}`);
     }
-
-    // Install dependencies if needed
     if (!fs.existsSync(path.join(frontend, 'node_modules'))) {
       console.log('Installing frontend dependencies...');
       await spawnCommand(npmCommand, ['install', '--no-progress', '--no-color']);
     }
-
-    // Run the appropriate build command based on persona
     let buildCommand;
     switch (persona.toLowerCase()) {
-      case 'faculty':
-        buildCommand = ['run', 'build:faculty', '--no-progress', '--no-color'];
-        break;
-      case 'lecturer':
-        buildCommand = ['run', 'build:lecturer', '--no-progress', '--no-color'];
-        break;
-      case 'student':
-        buildCommand = ['run', 'build:student', '--no-progress', '--no-color'];
-        break;
-      default:
-        throw new Error(`Unknown persona: ${persona}`);
+      case 'faculty':   buildCommand = ['run', 'build:faculty',  '--no-progress', '--no-color']; break;
+      case 'lecturer':  buildCommand = ['run', 'build:lecturer', '--no-progress', '--no-color']; break;
+      case 'student':   buildCommand = ['run', 'build:student',  '--no-progress', '--no-color']; break;
+      default: throw new Error(`Unknown persona: ${persona}`);
     }
-
     console.log(`Running build command: ${npmCommand} ${buildCommand.join(' ')}`);
     await spawnCommand(npmCommand, buildCommand);
-
     console.log(`Successfully built for persona: ${persona}`);
     return { success: true };
   } catch (error) {
     console.error(`Failed to build for persona ${persona}:`, error);
     return { success: false, error };
   } finally {
-      if (isSafeRelativePath(root)) {
-        process.chdir(fileURLToPath(new URL(`file://${path.resolve(root)}`)));
-      } else {
-        console.error(`Unsafe root path detected when attempting to build persona: ${root}`);
-      }
+    if (isSafeRelativePath(root)) {
+      process.chdir(fileURLToPath(new URL(`file://${path.resolve(root)}`)));
+    } else {
+      console.error(`Unsafe root path detected when attempting to build persona: ${root}`);
+    }
   }
 }
 
-/**
- * Create a distribution package for a specific persona
- */
 export async function createDistPackage(persona, force = false) {
   console.log(`\n=== Creating Distribution Package ===`);
   console.log(`Persona: ${persona}`);
   console.log(`Force rebuild: ${force}`);
 
-  // Validate persona before proceeding
   const safePersona = getPersonaFromKey(persona);
-
-  // Get fresh paths for the specified persona
   const { isDistPackage, isRootRepo, root } = resolvePaths({ safePersona });
 
-  // Skip package creation if in distribution package mode
   if (isDistPackage) {
     console.log(`✓ Running in distribution package mode - package creation skipped for ${safePersona}`);
     return { success: true, skipped: true };
   }
-
-  // Only proceed with package creation if in root repository or forced
   if (!isRootRepo && !force) {
     console.log(`✓ Not running from root repository - skipping package creation for ${safePersona}`);
     return { success: true, skipped: true };
   }
-
   if (!force && checkDistExists(safePersona)) {
     console.log(`✓ Distribution package for ${safePersona} already exists. Use --force to recreate.`);
     return { success: true, skipped: true };
   }
 
   try {
-    // Step 1: Build the persona first
     console.log(`\n[1/12] Building persona ${safePersona}...`);
     const buildResult = await buildPersona(safePersona, force);
     if (!buildResult.success) {
       throw new Error(`Build failed for persona ${safePersona}`);
     }
 
-    // Step 2: Get fresh paths for the specified persona
     console.log(`[2/12] Resolving paths for ${safePersona}...`);
     const { frontend, backend, dist, ecosystem } = resolvePaths({ safePersona });
 
-    // Step 3: Get the name and version from frontend package.json
     console.log(`[3/12] Reading package information...`);
     const packageJsonPath = path.join(frontend, 'package.json');
     let packageName = 'university-curriculum-enabling-tool';
     let packageVersion = '';
-
     if (fs.existsSync(packageJsonPath)) {
       try {
         const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
         packageName = packageJson.name || packageName;
         packageVersion = packageJson.version || '';
-        console.log(`Using package name: ${packageName}, version: ${packageVersion} from package.json`);
+        console.log(`Using package name: ${packageName}, version: ${packageVersion}`);
       } catch (error) {
-        console.warn(`Failed to parse package.json: ${error.message}. Using default package name.`);
+        console.warn(`Failed to parse package.json: ${error.message}.`);
       }
-    } else {
-      console.warn(`package.json not found at ${packageJsonPath}. Using default package name.`);
     }
 
-    // Step 4: Create dist directory structure with name and version
-    console.log(`Step 4: Creating distribution directory structure...`);
     const versionString = packageVersion ? `-${packageVersion}` : '';
-    // For faculty persona, don't append the persona label
     const distDir = persona.toLowerCase() === 'faculty'
       ? path.join(dist, `${packageName}${versionString}`)
       : path.join(dist, `${packageName}${versionString}-${safePersona}`);
     const zipFile = `${distDir}.zip`;
 
+    console.log(`Step 4: Preparing distribution directory structure...`);
+    if (force) {
+      console.log(`Step 5: Cleaning up existing distribution package...`);
+      if (fs.existsSync(distDir)) {
+        fs.removeSync(distDir);
+        console.log(`Removed existing distDir: ${distDir}`);
+      }
+      if (fs.existsSync(zipFile)) {
+        fs.removeSync(zipFile);
+        console.log(`Removed existing zip: ${zipFile}`);
+      }
+    }
 
     fs.mkdirSync(distDir, { recursive: true });
 
-    // Step 4.1: Copy thirdparty dependencies (Node.js, jq, pm2, Ollama)
     console.log(`Step 4.1: Copying thirdparty dependencies...`);
     fs.mkdirSync(path.join(distDir, 'thirdparty'), { recursive: true });
 
-    // Copy Node.js if it exists
     const sourceNodeDir = path.join(root, 'thirdparty', 'node');
     if (fs.existsSync(sourceNodeDir)) {
       console.log(`Copying Node.js from ${sourceNodeDir}...`);
       const targetNodeDir = path.join(distDir, 'thirdparty', 'node');
-
-      // Use robocopy on Windows for better handling of long paths
       if (isWindows) {
         try {
           const robocopyArgs = [
-            sourceNodeDir,     // Source directory (unquoted for spawnSync)
-            targetNodeDir,     // Target directory (unquoted for spawnSync)
-            '/E',    // Copy subdirectories, including empty ones
-            '/R:3',  // Retry 3 times on failed copies
-            '/W:1',  // Wait 1 second between retries
-            '/NFL',  // No file list (reduce output)
-            '/NDL',  // No directory list
-            '/NJH',  // No job header
-            '/NJS',  // No job summary
-            '/NC',   // No class
-            '/NS',   // No size
-            '/NP'    // No progress
+            sourceNodeDir, targetNodeDir,
+            '/E', '/R:3', '/W:1', '/NFL', '/NDL', '/NJH', '/NJS', '/NC', '/NS', '/NP',
           ];
-
           const robocopyResult = spawnSync('robocopy', robocopyArgs, {
             stdio: ['ignore', 'ignore', 'pipe'],
             encoding: 'utf8',
-            timeout: 60000 // 60 second timeout for large copy operations
+            timeout: 60000,
           });
-          // Robocopy exit codes 0-7 are success, 8+ are errors
-          const exitCode = robocopyResult.status || 0;
-          if (exitCode >= 8) {
-            console.warn(`Warning: Robocopy failed with exit code ${exitCode}, falling back to fs.copySync`);
+          if ((robocopyResult.status || 0) >= 8) {
             fs.copySync(sourceNodeDir, targetNodeDir);
-          } else {
-            console.log(`Node.js copied successfully using robocopy (exit code: ${exitCode})`);
           }
-        } catch (error) {
-          console.warn(`Warning: Robocopy command failed, falling back to fs.copySync: ${error.message}`);
+        } catch (_) {
           fs.copySync(sourceNodeDir, targetNodeDir);
         }
       } else {
-        // Use standard copy on non-Windows systems
         fs.copySync(sourceNodeDir, targetNodeDir);
       }
     } else {
-      console.log(`Node.js not found at ${sourceNodeDir}, will be downloaded during installation`);
       fs.mkdirSync(path.join(distDir, 'thirdparty', 'node'), { recursive: true });
     }
 
-    // Copy jq if it exists
     const sourceJqDir = path.join(root, 'thirdparty', 'jq');
     if (fs.existsSync(sourceJqDir)) {
-      console.log(`Copying jq from ${sourceJqDir}...`);
       fs.copySync(sourceJqDir, path.join(distDir, 'thirdparty', 'jq'));
     } else {
-      console.log(`jq not found at ${sourceJqDir}, will be downloaded during installation`);
       fs.mkdirSync(path.join(distDir, 'thirdparty', 'jq'), { recursive: true });
     }
 
-    // Copy pm2 directory (create empty if not exists)
-    fs.mkdirSync(path.join(distDir, 'thirdparty', 'pm2'), { recursive: true });
-
-    // Copy Ollama if it exists
     const sourceOllamaDir = path.join(root, 'thirdparty', 'ollama');
     if (fs.existsSync(sourceOllamaDir)) {
-      console.log(`Copying Ollama from ${sourceOllamaDir}...`);
       fs.copySync(sourceOllamaDir, path.join(distDir, 'thirdparty', 'ollama'));
     } else {
-      console.log(`Ollama not found at ${sourceOllamaDir}, will be downloaded during installation`);
       fs.mkdirSync(path.join(distDir, 'thirdparty', 'ollama'), { recursive: true });
     }
 
-    // Step 5: Clean up existing dist package if force is true
-    if (force) {
-      console.log(`Step 5: Cleaning up existing distribution package...`);
-      if (isSafeRelativePath(distDir) &&  fs.existsSync(distDir)) {
-        fs.removeSync(fileURLToPath(new URL(`file://${path.resolve(distDir)}`)));
-      }
-      if (isSafeRelativePath(zipFile) && fs.existsSync(zipFile)) {
-        fs.removeSync(fileURLToPath(new URL(`file://${path.resolve(zipFile)}`)));
-      }
-    }
-
-    // Create dist directory
-    fs.mkdirSync(distDir, { recursive: true });
-
-    // Step 6: Create assets directory structure for deployment personas (faculty only)
     if (safePersona.toLowerCase() === 'faculty') {
       console.log(`Step 6: Creating assets directory structure for faculty...`);
-      const assetsDir = path.join(distDir, 'assets');
-      const deploymentDir = path.join(assetsDir, 'deployment');
-      const personasDir = path.join(deploymentDir, 'personas');
-
-      // Create directories for lecturer and student personas
+      const personasDir = path.join(distDir, 'assets', 'deployment', 'personas');
       fs.mkdirSync(path.join(personasDir, 'lecturer'), { recursive: true });
       fs.mkdirSync(path.join(personasDir, 'student'), { recursive: true });
-
-      console.log('Created assets/deployment/personas structure for faculty distribution package');
     }
 
-    // Step 7: Get Next.js build directory for the specific persona
     console.log(`Step 7: Copying Next.js build for ${safePersona}...`);
     const nextPersonaDir = path.join(frontend, `next-${safePersona.toLowerCase()}`);
     if (!fs.existsSync(nextPersonaDir)) {
       throw new Error(`Next.js build directory for persona '${persona}' not found at ${nextPersonaDir}`);
     }
-
-    // Create target directories in dist package
     const distNextDir = path.join(distDir, `next-${safePersona.toLowerCase()}`);
     fs.mkdirSync(path.join(distNextDir, 'standalone'), { recursive: true });
 
-    // Copy the entire standalone folder from the Next.js build for this persona,
-    // but exclude any next-<other_persona> directories.
-    console.log(`Copying Next.js standalone build for persona: ${safePersona}...`);
     const standaloneDir = path.join(nextPersonaDir, 'standalone');
     if (!fs.existsSync(standaloneDir)) {
       throw new Error(`Next.js standalone build directory not found at ${standaloneDir}`);
     }
-
-    // Only copy the next-<persona> directory inside standalone
     const personaStandaloneDir = path.join(standaloneDir, `next-${safePersona.toLowerCase()}`);
     if (!fs.existsSync(personaStandaloneDir)) {
       throw new Error(`Standalone directory for persona '${safePersona}' not found at ${personaStandaloneDir}`);
     }
     fs.copySync(
       personaStandaloneDir,
-      path.join(distNextDir, 'standalone', `next-${safePersona.toLowerCase()}`)
+      path.join(distNextDir, 'standalone', `next-${safePersona.toLowerCase()}`),
+      { dereference: true }
     );
 
-    // Copy any other files or folders in standalone except next-<other_persona> directories
     const entries = fs.readdirSync(standaloneDir);
     for (const entry of entries) {
       const entryPath = path.join(standaloneDir, entry);
-      // Skip next-<other_persona> directories
       if (
-      entry.startsWith('next-') &&
-      entry !== `next-${safePersona.toLowerCase()}` &&
-      fs.statSync(entryPath).isDirectory()
-      ) {
-      continue;
-      }
-      // Skip the persona directory (already copied)
+        entry.startsWith('next-') &&
+        entry !== `next-${safePersona.toLowerCase()}` &&
+        fs.statSync(entryPath).isDirectory()
+      ) continue;
       if (entry === `next-${safePersona.toLowerCase()}`) continue;
-
-      const destPath = path.join(distNextDir, 'standalone', entry);
-      fs.copySync(entryPath, destPath);
+      fs.copySync(entryPath, path.join(distNextDir, 'standalone', entry)),
+      { dereference: true }
     }
 
-    // Copy static folder from Next.js build to the dist package's standalone folder
-    console.log(`Copying Next.js static assets for persona: ${safePersona}...`);
     const staticDir = path.join(nextPersonaDir, 'static');
     if (fs.existsSync(staticDir)) {
-      fs.copySync(staticDir, path.join(distNextDir, 'standalone', `next-${safePersona.toLowerCase()}`, 'static'));
-    } else {
-      console.warn(`Static directory not found at ${staticDir}`);
+      fs.copySync(
+        staticDir,
+        path.join(distNextDir, 'standalone', `next-${safePersona.toLowerCase()}`, 'static')
+      ),
+      { dereference: true }
     }
 
-    // List of scripts to include in the dist package
     const scriptsToInclude = [
       'setup.sh', 'install.sh', 'run.sh', 'stop.sh', 'uninstall.sh',
       'setup_win.bat', 'install_win.bat', 'run_win.bat', 'stop_win.bat', 'uninstall_win.bat',
-      'setup.ps1', 'install.ps1', 'run.ps1', 'stop.ps1', 'uninstall.ps1'
+      'setup.ps1', 'install.ps1', 'run.ps1', 'stop.ps1', 'uninstall.ps1',
     ];
-    // Step 8: For faculty persona, populate the assets/deployment/personas directories
+
+    // Step 7.1: Copy sharp to correct location for Windows
+    if (isWindows) {
+      console.log('Step 7.1: Fixing sharp native module for Windows...');
+      const standaloneDir = path.join(distNextDir, 'standalone');
+      const standaloneNodeModules = path.join(standaloneDir, 'node_modules', '@img');
+      const personaNodeModules = path.join(standaloneDir, `next-${safePersona.toLowerCase()}`, 'node_modules', '@img');
+
+      const linuxNativeDirs = [
+        '@img/sharp-linux-x64',
+        '@img/sharp-linux-arm64',
+        '@img/sharp-libvips-linux-x64',
+        '@img/sharp-libvips-linux-arm64',
+      ];
+      for (const dir of linuxNativeDirs) {
+        const dirPath = path.join(standaloneDir, 'node_modules', dir);
+        if (fs.existsSync(dirPath)) {
+          fs.removeSync(dirPath);
+          console.log(`Removed Linux binary: ${dir}`);
+        }
+      }
+
+      const sharpSrc = path.join(standaloneNodeModules, 'sharp-win32-x64');
+      if (fs.existsSync(sharpSrc)) {
+        fs.mkdirSync(personaNodeModules, { recursive: true });
+        fs.copySync(sharpSrc, path.join(personaNodeModules, 'sharp-win32-x64'), { dereference: true });
+        console.log('sharp-win32-x64 copied to correct Next.js location.');
+      } else {
+        console.log('sharp-win32-x64 not found in standalone\\node_modules, will be installed at install time.');
+      }
+    }
+
     if (safePersona.toLowerCase() === 'faculty') {
       console.log(`Step 8: Populating deployment assets for other personas...`);
-      const assetsDir = path.join(distDir, 'assets');
-      const deploymentDir = path.join(assetsDir, 'deployment');
-      const personasDir = path.join(deploymentDir, 'personas');
-
-      // Define the personas to include
+      const personasDir = path.join(distDir, 'assets', 'deployment', 'personas');
       const otherPersonas = ['lecturer', 'student'];
 
       for (const otherPersona of otherPersonas) {
         console.log(`Step 8.1: Setting up deployment files for ${otherPersona} persona...`);
         const personaDir = path.join(personasDir, otherPersona);
 
-        // Step 8.2: Copy scripts for this persona
         console.log(`Step 8.2: Copying scripts for ${otherPersona} persona...`);
         for (const script of scriptsToInclude) {
-          let sourcePath;
-          if (script.endsWith('.ps1')) {
-            continue;
-          } else if (script.endsWith('.sh') || script.endsWith('.bat')) {
-            // Bash and batch scripts: copy from project root
-            sourcePath = path.join(root, script);
-          } else {
-            // Fallback: project root
-            sourcePath = path.join(root, script);
-          }
+          const sourcePath = path.join(root, script);
           if (fs.existsSync(sourcePath)) {
             fs.copySync(sourcePath, path.join(personaDir, script));
-            // Make shell scripts executable
             if (!isWindows && script.endsWith('.sh')) {
               fs.chmodSync(path.join(personaDir, script), '755');
             }
           }
         }
 
-        // Step 8.3: Create placeholder .version file for the persona
         console.log(`Step 8.3: Creating version file for ${otherPersona} persona...`);
         const date = new Date().toISOString().split('T')[0];
-        const personaVersion = `${date}-${otherPersona.toLowerCase()}`;
-        fs.writeFileSync(path.join(personaDir, '.version'), personaVersion);
+        fs.writeFileSync(
+          path.join(personaDir, '.version'),
+          `${date}-${otherPersona.toLowerCase()}`
+        );
 
-        // Step 8.4: Create scripts directory with utils
         console.log(`Step 8.4: Creating scripts directory for ${otherPersona} persona...`);
         fs.mkdirSync(path.join(personaDir, 'scripts'), { recursive: true });
         fs.copySync(__dirname, path.join(personaDir, 'scripts'));
 
-        // Step 8.5: Create backend directory
         console.log(`Step 8.5: Creating backend directory for ${otherPersona} persona...`);
-        fs.mkdirSync(path.join(personaDir, 'backend'), { recursive: true });
         const backendDest = path.join(personaDir, 'backend');
+        fs.mkdirSync(backendDest, { recursive: true });
         if (isSafeRelativePath(backendDest)) {
-          const backendUrl = fileURLToPath(new URL(`file://${path.resolve(backend)}`));
-          const backendDestUrl = fileURLToPath(new URL(`file://${path.resolve(backendDest)}`));
-          fs.copySync(backendUrl, backendDestUrl);
+          fs.copySync(
+            fileURLToPath(new URL(`file://${path.resolve(backend)}`)),
+            fileURLToPath(new URL(`file://${path.resolve(backendDest)}`))
+          );
         } else {
           console.warn(`Refused to copy backend to unsafe path: ${backendDest}`);
         }
 
-        // Step 8.6: Create required empty directories
         console.log(`Step 8.6: Creating supporting directories for ${otherPersona} persona...`);
         fs.mkdirSync(path.join(personaDir, 'thirdparty'), { recursive: true });
 
-        // Step 8.7: Create next-<persona> directory for this persona deployment
         console.log(`Step 8.7: Creating Next.js directories for ${otherPersona} persona...`);
         const personaNextDir = path.join(personaDir, `next-${otherPersona.toLowerCase()}`);
-        fs.mkdirSync(path.join(personaNextDir, 'standalone', `next-${otherPersona.toLowerCase()}`), { recursive: true });
+        fs.mkdirSync(
+          path.join(personaNextDir, 'standalone', `next-${otherPersona.toLowerCase()}`),
+          { recursive: true }
+        );
 
-        // Step 8.8: Get the appropriate next-<persona> build from the frontend directory
         console.log(`Step 8.8: Copying Next.js build for ${otherPersona} persona...`);
         const sourceNextPersonaDir = path.join(frontend, `next-${otherPersona.toLowerCase()}`);
         if (fs.existsSync(sourceNextPersonaDir)) {
-          console.log(`Copying Next.js build for ${otherPersona} persona to deployment assets...`);
-
-          // Copy standalone directory for this persona
           const sourceStandaloneDir = path.join(sourceNextPersonaDir, 'standalone');
           if (fs.existsSync(sourceStandaloneDir)) {
-            // Get source next-persona directory from standalone
-            const sourcePersonaStandaloneDir = path.join(sourceStandaloneDir, `next-${otherPersona.toLowerCase()}`);
-
+            const sourcePersonaStandaloneDir = path.join(
+              sourceStandaloneDir,
+              `next-${otherPersona.toLowerCase()}`
+            );
             if (fs.existsSync(sourcePersonaStandaloneDir)) {
-              // Copy the persona-specific standalone directory
               fs.copySync(
                 sourcePersonaStandaloneDir,
-                path.join(personaNextDir, 'standalone', `next-${otherPersona.toLowerCase()}`)
+                path.join(personaNextDir, 'standalone', `next-${otherPersona.toLowerCase()}`),
+                { dereference: true }
               );
-
-              // Copy other non-persona specific files from standalone
-              const entries = fs.readdirSync(sourceStandaloneDir);
-              for (const entry of entries) {
+              const standaloneEntries = fs.readdirSync(sourceStandaloneDir);
+              for (const entry of standaloneEntries) {
                 const entryPath = path.join(sourceStandaloneDir, entry);
-                // Skip next-<other_persona> directories
                 if (
                   entry.startsWith('next-') &&
                   entry !== `next-${otherPersona.toLowerCase()}` &&
                   fs.statSync(entryPath).isDirectory()
-                ) {
-                  continue;
-                }
-                // Skip the persona directory (already copied)
+                ) continue;
                 if (entry === `next-${otherPersona.toLowerCase()}`) continue;
-
-                const destPath = path.join(personaNextDir, 'standalone', entry);
-                fs.copySync(entryPath, destPath);
+                fs.copySync(entryPath, path.join(personaNextDir, 'standalone', entry)),
+                { dereference: true }
               }
             } else {
-              console.warn(`Standalone directory for persona '${otherPersona}' not found at ${sourcePersonaStandaloneDir}`);
-              // Fallback to copying the entire standalone directory
-              fs.copySync(sourceStandaloneDir, path.join(personaNextDir, 'standalone'));
+              console.warn(`Standalone dir for '${otherPersona}' not found, copying full standalone`);
+              fs.copySync(sourceStandaloneDir, path.join(personaNextDir, 'standalone')),
+               { dereference: true }
             }
-          } else {
-            console.warn(`Standalone directory not found for ${otherPersona} at ${sourceStandaloneDir}`);
           }
-
-          // Copy static directory for this persona if it exists
           const sourceStaticDir = path.join(sourceNextPersonaDir, 'static');
           if (fs.existsSync(sourceStaticDir)) {
-            // Copy static assets to the correct location: next-<persona>/standalone/next-<persona>/static
-            fs.copySync(sourceStaticDir, path.join(personaNextDir, 'standalone', `next-${otherPersona.toLowerCase()}`, 'static'));
+            fs.copySync(
+              sourceStaticDir,
+              path.join(personaNextDir, 'standalone', `next-${otherPersona.toLowerCase()}`, 'static')
+            ),
+             { dereference: true }
           }
         } else {
-          console.warn(`No Next.js build found for ${otherPersona} persona at ${sourceNextPersonaDir}`);
+          console.warn(`No Next.js build found for ${otherPersona} at ${sourceNextPersonaDir}`);
         }
 
-        // Step 8.9: Copy and modify ecosystem config
         console.log(`Step 8.9: Setting up ecosystem config for ${otherPersona} persona...`);
         if (fs.existsSync(ecosystem)) {
           const ecosystemDestPath = path.join(personaDir, 'ecosystem.config.cjs');
           fs.copySync(ecosystem, ecosystemDestPath);
-
-          // Modify the ecosystem config to use this persona as the default
           try {
             let ecosystemContent = fs.readFileSync(ecosystemDestPath, 'utf8');
-
-            // Replace the default persona in the ecosystem config
             ecosystemContent = ecosystemContent.replace(
               /const persona = process\.env\.PERSONA \|\| ['"]faculty['"]/g,
               `const persona = process.env.PERSONA || '${otherPersona}'`
             );
-
             fs.writeFileSync(ecosystemDestPath, ecosystemContent);
-            console.log(`Updated ecosystem.config.cjs to default to ${otherPersona} persona`);
           } catch (err) {
             console.warn(`Failed to update ecosystem config for ${otherPersona}: ${err.message}`);
           }
-        } else {
-          console.warn(`Ecosystem config not found at ${ecosystem}. No ecosystem config will be included.`);
         }
 
-        // Step 8.10: Create a persona-specific .env.template
         console.log(`Step 8.10: Creating environment template for ${otherPersona} persona...`);
         const rootEnvTemplateFile = path.join(ROOT_DIR, '.env.template');
         if (fs.existsSync(rootEnvTemplateFile)) {
-          console.log(`Creating persona-specific .env.template for ${otherPersona}...`);
-
-          // Read the template content
           let envContent = fs.readFileSync(rootEnvTemplateFile, 'utf8');
-
-          // Add PERSONA environment variable to the template if it doesn't exist
           if (!/^PERSONA=/m.test(envContent)) {
-            // Add PERSONA to the beginning of the file after the first comment block
-            const commentSection =
+            envContent =
               "# =============================================\n" +
               "# Persona Configuration\n" +
-              "# =============================================\n";
-
-            envContent = commentSection +
+              "# =============================================\n" +
               `PERSONA=${otherPersona}             # Default persona for this deployment\n\n` +
               envContent;
           } else {
-            // Update existing PERSONA variable
             envContent = envContent.replace(
               /^PERSONA=.*$/m,
               `PERSONA=${otherPersona}             # Default persona for this deployment`
             );
           }
-
-          // Write the modified template to the persona directory
           fs.writeFileSync(path.join(personaDir, '.env.template'), envContent);
-          console.log(`Created persona-specific .env.template for ${otherPersona}`);
-        } else {
-          console.warn(`Root .env.template file not found at ${rootEnvTemplateFile}. No environment template will be included.`);
         }
 
-        // Step 8.11: Update all scripts to use the correct persona by default
         console.log(`Step 8.11: Updating all scripts for ${otherPersona} persona...`);
-        const scriptsToUpdate = ['setup.sh', 'install.sh', 'run.sh', 'stop.sh', 'uninstall.sh',
-             'setup_win.bat', 'install_win.bat', 'run_win.bat', 'stop_win.bat', 'uninstall_win.bat',
-             'setup.ps1', 'install.ps1', 'run.ps1', 'stop.ps1', 'uninstall.ps1'];
-
-        for (const script of scriptsToUpdate) {
+        for (const script of scriptsToInclude) {
           const scriptPath = path.join(personaDir, script);
-          if (fs.existsSync(scriptPath)) {
-            try {
-              let scriptContent = fs.readFileSync(scriptPath, 'utf8');
-
-              if (script.endsWith('.sh')) {
-                // Update Linux shell script
-                scriptContent = scriptContent.replace(
-                  /PERSONA=\${1:-faculty}/g,
-                  `PERSONA=\${1:-${otherPersona}}`
-                );
-              } else if (script.endsWith('.bat')) {
-                // Update Windows batch script - handle multiple patterns
-                // Pattern 1: set "Persona=faculty"
-                scriptContent = scriptContent.replace(
-                  /set "Persona=faculty"/g,
-                  `set "Persona=${otherPersona}"`
-                );
-                // Pattern 2: if "%Persona%"=="" set "Persona=faculty"
-                scriptContent = scriptContent.replace(
+          if (!fs.existsSync(scriptPath)) continue;
+          try {
+            let scriptContent = fs.readFileSync(scriptPath, 'utf8');
+            if (script.endsWith('.sh')) {
+              scriptContent = scriptContent.replace(
+                /PERSONA=\${1:-faculty}/g,
+                `PERSONA=\${1:-${otherPersona}}`
+              );
+            } else if (script.endsWith('.bat')) {
+              scriptContent = scriptContent
+                .replace(/set "Persona=faculty"/g, `set "Persona=${otherPersona}"`)
+                .replace(
                   /if "%Persona%"=="" set "Persona=faculty"/g,
                   `if "%Persona%"=="" set "Persona=${otherPersona}"`
-                );
-                // Pattern 3: Legacy formats without quotes
-                scriptContent = scriptContent.replace(
+                )
+                .replace(
                   /if "%PERSONA%"=="" set PERSONA=faculty/g,
                   `if "%PERSONA%"=="" set PERSONA=${otherPersona}`
                 );
-              } else if (script.endsWith('.ps1')) {
-                // Update PowerShell script - handle multiple patterns
-                // Pattern 1: Single line format (install.ps1, uninstall.ps1)
-                scriptContent = scriptContent.replace(
+            } else if (script.endsWith('.ps1')) {
+              scriptContent = scriptContent
+                .replace(
                   /\$Persona = if \(\$args\[0\]\) \{ \$args\[0\] \} else \{ "faculty" \}/g,
                   `$Persona = if ($args[0]) { $args[0] } else { "${otherPersona}" }`
-                );
-                // Pattern 2: Multi-line if/else format (run.ps1 final fallback)
-                scriptContent = scriptContent.replace(
+                )
+                .replace(
                   /Write-Host "No persona indicators found, defaulting to faculty"\s*"faculty"/g,
                   `Write-Host "No persona indicators found, defaulting to ${otherPersona}"\n            "${otherPersona}"`
-                );
-                // Pattern 3: Default persona in multi-line auto-detection fallback
-                scriptContent = scriptContent.replace(
+                )
+                .replace(
                   /} else \{\s*Write-Host "No persona indicators found, defaulting to faculty"\s*"faculty"\s*\}/g,
                   `} else {\n            Write-Host "No persona indicators found, defaulting to ${otherPersona}"\n            "${otherPersona}"\n        }`
                 );
-              }
-
-              fs.writeFileSync(scriptPath, scriptContent);
-              console.log(`Updated ${script} to default to ${otherPersona} persona`);
-            } catch (err) {
-              console.warn(`Failed to update ${script} for ${otherPersona}: ${err.message}`);
             }
+            fs.writeFileSync(scriptPath, scriptContent);
+          } catch (err) {
+            console.warn(`Failed to update ${script} for ${otherPersona}: ${err.message}`);
           }
         }
       }
     }
 
-    // Step 9: Create .env.template for main distribution package
     console.log(`Step 9: Creating environment template...`);
     const rootEnvTemplateFile = path.join(ROOT_DIR, '.env.template');
-
     if (fs.existsSync(rootEnvTemplateFile)) {
-      console.log('Creating persona-specific .env.template for main distribution package...');
-
-      // Read the template content
       let envContent = fs.readFileSync(rootEnvTemplateFile, 'utf8');
-
-      // Make sure the PERSONA environment variable is set to the current persona
       if (!/^PERSONA=/m.test(envContent)) {
-        // Add PERSONA to the beginning of the file after the first comment block
-        const commentSection =
+        envContent =
           "# =============================================\n" +
           "# Persona Configuration\n" +
-          "# =============================================\n";
-
-        envContent = commentSection +
+          "# =============================================\n" +
           `PERSONA=${safePersona}             # Default persona for this deployment\n\n` +
           envContent;
       } else {
-        // Update existing PERSONA variable
         envContent = envContent.replace(
           /^PERSONA=.*$/m,
           `PERSONA=${safePersona}             # Default persona for this deployment`
         );
       }
-
-      // Write the modified template to the distribution package
       fs.writeFileSync(path.join(distDir, '.env.template'), envContent);
-      console.log(`Created persona-specific .env.template for ${safePersona} distribution package`);
-    } else {
-      console.warn(`Root .env.template file not found at ${rootEnvTemplateFile}. No environment template will be included.`);
     }
 
-    // Step 10: Copy backend, scripts and configuration files
     console.log(`Step 10: Copying backend, scripts and configuration files...`);
     fs.copySync(backend, path.join(distDir, 'backend'));
     fs.copySync(__dirname, path.join(distDir, 'scripts'));
 
-    // Copy shell and batch scripts to root of dist (but keep PowerShell scripts in powershell folder)
     for (const script of scriptsToInclude) {
-      let sourcePath;
-      if (script.endsWith('.ps1')) {
-        // PowerShell scripts are now only in the powershell folder, not root
-        continue;
-      } else if (script.endsWith('.sh') || script.endsWith('.bat')) {
-        // Bash and batch scripts: copy from project root
-        sourcePath = path.join(root, script);
-      } else {
-        // Fallback: project root
-        sourcePath = path.join(root, script);
-      }
+      const sourcePath = path.join(root, script);
       if (fs.existsSync(sourcePath)) {
         fs.copySync(sourcePath, path.join(distDir, script));
       }
     }
 
-    // Copy ecosystem config
     if (fs.existsSync(ecosystem)) {
       fs.copySync(ecosystem, path.join(distDir, 'ecosystem.config.cjs'));
     }
 
-    // Step 10.1: Update main distribution package scripts to use correct persona defaults
     console.log(`Step 10.1: Updating main distribution package scripts for ${safePersona} persona...`);
-    const mainScriptsToUpdate = ['setup.sh', 'install.sh', 'run.sh', 'stop.sh', 'uninstall.sh',
-         'setup_win.bat', 'install_win.bat', 'run_win.bat', 'stop_win.bat', 'uninstall_win.bat',
-         'setup.ps1', 'install.ps1', 'run.ps1', 'stop.ps1', 'uninstall.ps1'];
-
-    for (const script of mainScriptsToUpdate) {
+    for (const script of scriptsToInclude) {
       const scriptPath = path.join(distDir, script);
-      if (fs.existsSync(scriptPath)) {
-        try {
-          let scriptContent = fs.readFileSync(scriptPath, 'utf8');
-          if (script.endsWith('.sh')) {
-            // Update Linux shell script
-            scriptContent = scriptContent.replace(
-              /PERSONA=\${1:-faculty}/g,
-              `PERSONA=\${1:-${safePersona}}`
-            );
-          } else if (script.endsWith('.bat')) {
-            // Update Windows batch script - handle multiple patterns
-            scriptContent = scriptContent.replace(
-              /set "Persona=faculty"/g,
-              `set "Persona=${safePersona}"`
-            );
-            scriptContent = scriptContent.replace(
+      if (!fs.existsSync(scriptPath)) continue;
+      try {
+        let scriptContent = fs.readFileSync(scriptPath, 'utf8');
+        if (script.endsWith('.sh')) {
+          scriptContent = scriptContent.replace(
+            /PERSONA=\${1:-faculty}/g,
+            `PERSONA=\${1:-${safePersona}}`
+          );
+        } else if (script.endsWith('.bat')) {
+          scriptContent = scriptContent
+            .replace(/set "Persona=faculty"/g, `set "Persona=${safePersona}"`)
+            .replace(
               /if "%Persona%"=="" set "Persona=faculty"/g,
               `if "%Persona%"=="" set "Persona=${safePersona}"`
-            );
-            scriptContent = scriptContent.replace(
+            )
+            .replace(
               /if "%PERSONA%"=="" set PERSONA=faculty/g,
               `if "%PERSONA%"=="" set PERSONA=${safePersona}`
             );
-          } else if (script.endsWith('.ps1')) {
-            // Update PowerShell script - handle multiple patterns
-            scriptContent = scriptContent.replace(
+        } else if (script.endsWith('.ps1')) {
+          scriptContent = scriptContent
+            .replace(
               /\$Persona = if \(\$args\[0\]\) \{ \$args\[0\] \} else \{ "faculty" \}/g,
               `$Persona = if ($args[0]) { $args[0] } else { "${safePersona}" }`
-            );
-            scriptContent = scriptContent.replace(
-              /"faculty"/g,
-              `"${safePersona}"`
-            );
-          }
-          fs.writeFileSync(scriptPath, scriptContent);
-          console.log(`Updated main distribution ${script} to default to ${safePersona} persona`);
-        } catch (err) {
-          console.warn(`Failed to update main distribution ${script} for ${safePersona}: ${err.message}`);
+            )
+            .replace(/"faculty"/g, `"${safePersona}"`);
         }
+        fs.writeFileSync(scriptPath, scriptContent);
+      } catch (err) {
+        console.warn(`Failed to update ${script}: ${err.message}`);
       }
     }
 
-    // Step 11: Create version file
     console.log(`Step 11: Creating version file...`);
     const date = new Date().toISOString().split('T')[0];
     const version = `${date}-${safePersona.toLowerCase()}`;
     fs.writeFileSync(path.join(distDir, '.version'), version);
 
-    // Double-check that the version file was created
     if (!fs.existsSync(path.join(distDir, '.version'))) {
-      console.error('Failed to create .version file in distribution package');
       throw new Error('Failed to create .version file in distribution package');
     }
 
-    // Make shell scripts executable
     if (!isWindows) {
       for (const script of scriptsToInclude.filter(s => s.endsWith('.sh'))) {
         const scriptPath = path.join(distDir, script);
@@ -1751,10 +1440,7 @@ export async function createDistPackage(persona, force = false) {
       }
     }
 
-    // Step 12: Create zip archive
     console.log(`Step 12: Creating zip archive...`);
-    const appName = path.basename(distDir);
-    console.log(`Creating zip archive with app name: ${appName}`);
     await createZipArchive(distDir, zipFile);
 
     console.log(`Successfully created distribution package for persona: ${safePersona}`);
@@ -1768,48 +1454,27 @@ export async function createDistPackage(persona, force = false) {
   }
 }
 
-/**
- * Create a zip archive from a directory
- */
 async function createZipArchive(sourceDir, outputZip) {
   return new Promise((resolve, reject) => {
     const output = fs.createWriteStream(outputZip);
     const archive = archiver('zip', { zlib: { level: 9 } });
-
     output.on('close', () => {
       console.log(`Archive created: ${outputZip} (${archive.pointer()} bytes)`);
       resolve();
     });
-
-    archive.on('error', (err) => {
-      reject(err);
-    });
-
-    // Get the directory name to use as the base folder inside the zip
+    archive.on('error', (err) => reject(err));
     const dirName = path.basename(sourceDir);
-
     archive.pipe(output);
-    // Using dirName as the top-level directory in the zip file
     archive.directory(sourceDir, dirName);
     archive.finalize();
   });
 }
 
-/**
- * Setup backend environment
- * @param {boolean} force - Force recreation of environment
- */
 export async function setupBackend(force = false) {
   console.log('Setting up backend environment...');
-
-  // Get fresh paths
   const { venv, backend, root } = resolvePaths();
-
   const backendPath = backend;
   const venvPath = venv;
-
-  console.log(`Using backend path: ${backendPath}`);
-  console.log(`Using venv path: ${venvPath}`);
 
   if (!force && fs.existsSync(venvPath)) {
     console.log('Backend environment already exists. Use --force to recreate.');
@@ -1817,52 +1482,82 @@ export async function setupBackend(force = false) {
   }
 
   try {
-    // Remove existing venv if forcing
     if (isSafeRelativePath(venvPath)) {
-      const resolvedVenvPath = path.resolve(ROOT_DIR, venvPath);
-      fs.removeSync(resolvedVenvPath);
+      fs.removeSync(path.resolve(ROOT_DIR, venvPath));
     } else {
       throw new Error('Venv path is invalid');
     }
 
-    // Ensure the parent directory exists
     const venvParentDir = path.dirname(venvPath);
-    if (!fs.existsSync(venvParentDir)) {
-      fs.mkdirSync(venvParentDir, { recursive: true });
-    }
+    if (!fs.existsSync(venvParentDir)) fs.mkdirSync(venvParentDir, { recursive: true });
 
     process.chdir(backendPath);
 
-    // Get the appropriate Python command dynamically
     const pythonCmd = getDynamicPythonCommand();
     console.log(`Using Python command: ${pythonCmd}`);
 
-    // Verify Python is available
     try {
-      console.log(`Verifying Python is available...`);
-      const result = spawnSync(pythonCmd, ['--version'], {
-        stdio: 'pipe',
-        encoding: 'utf8',
-      });
-      if (result.status !== 0) {
-        throw new Error(`Python version check failed with exit code ${result.status}`);
-      }
+      const result = spawnSync(pythonCmd, ['--version'], { stdio: 'pipe', encoding: 'utf8' });
+      if (result.status !== 0) throw new Error(`Python version check failed`);
     } catch (error) {
-      console.error(`Python not found using command: ${pythonCmd}`);
-      console.error(`Error details: ${error.message}`);
-      console.error(`\nTo install Python on Windows:`);
-      console.error(`1. Download Python from https://python.org/downloads/`);
-      console.error(`2. Or install from Microsoft Store: run 'python' in PowerShell and follow prompts`);
-      console.error(`3. Ensure Python is added to your PATH during installation`);
-      console.error(`4. Or run setup.ps1 to install Python automatically`);
-      return { success: false, error: new Error(`Python not available.`) };
+      console.error(`Python not found: ${error.message}`);
+      return { success: false, error: new Error('Python not available.') };
     }
 
-    // Create virtual environment
     console.log('Creating Python virtual environment...');
-    await spawnCommand(pythonCmd, ['-m', 'venv', 'venv']);
+    let venvCreated = false;
 
-    // Install requirements
+    try {
+      await spawnCommand(pythonCmd, ['-m', 'venv', 'venv']);
+      venvCreated = true;
+      console.log('Virtual environment created successfully.');
+    } catch (err) {
+      console.warn(`Standard venv failed (code: ${err.code}), trying --copies...`);
+    }
+
+    if (!venvCreated) {
+      try {
+        await spawnCommand(pythonCmd, ['-m', 'venv', '--copies', 'venv']);
+        venvCreated = true;
+        console.log('Virtual environment created with --copies flag.');
+      } catch (err) {
+        console.warn(`Venv --copies failed (code: ${err.code}), trying --without-pip...`);
+      }
+    }
+
+    if (!venvCreated) {
+      console.log('Creating venv without pip, will bootstrap manually...');
+      await spawnCommand(pythonCmd, ['-m', 'venv', '--without-pip', 'venv']);
+
+      const venvPythonPath = path.join(venvPath, 'bin', 'python');
+      const getPipScript = path.join(venvPath, 'get-pip.py');
+
+      console.log('Downloading get-pip.py...');
+      await spawnCommand('curl', [
+        '--fail', '--location', '--retry', '3', '--retry-delay', '5',
+        '--connect-timeout', '30', '--max-time', '120',
+        '--output', getPipScript,
+        'https://bootstrap.pypa.io/get-pip.py',
+      ]);
+
+      console.log('Bootstrapping pip into virtual environment...');
+      await new Promise((resolve, reject) => {
+        const proc = spawn(venvPythonPath, [getPipScript], {
+          stdio: 'inherit',
+          shell: false,
+        });
+        proc.on('close', (code) => {
+          if (code === 0) resolve({ success: true });
+          else reject({ success: false, code });
+        });
+        proc.on('error', (err) => reject({ success: false, error: err }));
+      });
+
+      if (fs.existsSync(getPipScript)) fs.unlinkSync(getPipScript);
+      venvCreated = true;
+      console.log('Virtual environment created with manual pip bootstrap.');
+    }
+
     console.log('Installing Python dependencies...');
     const pipCommand = isWindows
       ? path.join(venvPath, 'Scripts', 'pip.exe')
@@ -1879,69 +1574,52 @@ export async function setupBackend(force = false) {
   }
 }
 
-/**
- * Start backend server
- */
 export async function startBackend() {
   console.log('Starting backend server...');
-
-  // Get fresh paths
   const { venv, backend, root } = resolvePaths();
-
   const backendPath = backend;
   const venvPath = venv;
 
-  console.log(`Using backend path: ${backendPath}`);
-  console.log(`Using venv path: ${venvPath}`);
-
   if (!fs.existsSync(venvPath)) {
     console.log('Backend environment not found. Setting up...');
-    const setupResult = await setupBackend(false, backendPath, venvPath);
-    if (!setupResult.success) {
-      throw new Error('Failed to setup backend environment');
-    }
+    const setupResult = await setupBackend(false);
+    if (!setupResult.success) throw new Error('Failed to setup backend environment');
   }
 
   try {
-    process.chdir(backendPath);
-
-    // Start backend with PM2
-    console.log('Starting backend with PM2...');
-
-    // Get the venv Python path based on the venv path
     const venvPythonPath = isWindows
       ? path.join(venvPath, 'Scripts', 'python.exe')
       : path.join(venvPath, 'bin', 'python');
 
-    await executePM2Command([
-      'start', 'main.py',
-      '--name', 'backend',
-      '--interpreter', venvPythonPath
-    ]);
+    const namespace = getProcessManagerNamespace();
+
+    console.log('Starting backend with process manager...');
+    const result = await startProcess({
+      name: 'backend',
+      script: path.join(backendPath, 'main.py'),
+      interpreter: venvPythonPath,
+      cwd: backendPath,
+      namespace,
+      env: { ...process.env },
+    });
+
+    if (!result.success) throw new Error(result.error || 'Failed to start backend');
 
     console.log('Backend server started successfully.');
     return { success: true };
   } catch (error) {
     console.error('Failed to start backend server:', error);
     return { success: false, error };
-  } finally {
-    process.chdir(root);
   }
 }
 
-/**
- * Get Ubuntu major version
- */
 async function getUbuntuMajorVersion() {
   try {
-    // Try to read /etc/os-release first (most reliable)
     const osReleasePath = '/etc/os-release';
     if (fs.existsSync(osReleasePath)) {
-      const osReleaseContent = fs.readFileSync(osReleasePath, 'utf8');
-      const versionMatch = osReleaseContent.match(/VERSION_ID="?(\d+)\.?\d*"?/);
-      if (versionMatch) {
-        return versionMatch[1];
-      }
+      const content = fs.readFileSync(osReleasePath, 'utf8');
+      const match = content.match(/VERSION_ID="?(\d+)\.?\d*"?/);
+      if (match) return match[1];
     }
   } catch (error) {
     console.error('Error detecting Ubuntu version:', error.message);
@@ -1949,62 +1627,38 @@ async function getUbuntuMajorVersion() {
   }
 }
 
-/**
- * Setup OpenVINO Model Server (OVMS)
- * @param {boolean} force - Force recreation of environment
- * [1] Download OVMS package into thirdparty
- * [2] Decompress the OVMS package
- * [3] Install OVMS backend service
- */
 export async function setupOvms(force = false) {
   console.log('Setting up OpenVINO Model Server (OVMS)...');
-
-  // Get fresh paths
   const { thirdparty, ovms, ovmsVenv, ovmsBackend, root } = resolvePaths();
-
-  // Use custom paths if provided, otherwise use defaults
   const ovmsPath = ovms;
   const ovmsBackendPath = ovmsBackend;
   const venvPath = ovmsVenv;
-  console.log(`Using OVMS path: ${ovmsPath}`);
 
   try {
-    const version = readEnvVariable('OVMS_VERSION', "v2025.3.0");
-    const archiveExtension = isWindows ? "zip" : "tar.gz";
+    const version = readEnvVariable('OVMS_VERSION', 'v2025.3.0');
+    const archiveExtension = isWindows ? 'zip' : 'tar.gz';
     let ovmsDownloadUrl = null;
     let ovmsArchive = null;
 
     if (!isWindows) {
       const majorVersion = await getUbuntuMajorVersion();
-      console.log('Detected Ubuntu major version:', majorVersion);
       if (majorVersion == '22' || majorVersion == '24') {
         ovmsArchive = `ovms_ubuntu${majorVersion}_python_on.${archiveExtension}`;
         ovmsDownloadUrl = `https://github.com/openvinotoolkit/model_server/releases/download/${version}/${ovmsArchive}`;
       } else {
-        throw new Error(`OVMS on Ubuntu ${majorVersion} is not supported. Please use Ubuntu 22.04 or 24.04.`);
+        throw new Error(`OVMS on Ubuntu ${majorVersion} is not supported.`);
       }
     } else {
-      // Download for Windows
-      console.log('Detected Windows')
       ovmsArchive = `ovms_windows_python_on.${archiveExtension}`;
       ovmsDownloadUrl = `https://github.com/openvinotoolkit/model_server/releases/download/${version}/${ovmsArchive}`;
     }
 
-    // Ensure parent directory exists
     const ovmsParentDir = path.dirname(ovmsPath);
-    if (!fs.existsSync(ovmsParentDir)) {
-      fs.mkdirSync(ovmsParentDir, { recursive: true });
-    }
-
-    if (!fs.existsSync(ovmsPath)) {
-      fs.mkdirSync(ovmsPath, { recursive: true });
-    }
+    if (!fs.existsSync(ovmsParentDir)) fs.mkdirSync(ovmsParentDir, { recursive: true });
+    if (!fs.existsSync(ovmsPath)) fs.mkdirSync(ovmsPath, { recursive: true });
 
     process.chdir(ovmsPath);
 
-    // Check if OVMS is already extracted - look for key files
-    // On Linux: binary is in bin/ovms
-    // On Windows: binary is in ovms.exe at root
     const ovmsBinPath = isWindows
       ? path.join(ovmsPath, 'ovms.exe')
       : path.join(ovmsPath, 'bin', 'ovms');
@@ -2012,147 +1666,137 @@ export async function setupOvms(force = false) {
     if (fs.existsSync(ovmsBinPath)) {
       console.log('OVMS is already downloaded and extracted. Skipping download.');
       return { success: true };
-    } else {
-      console.log('OVMS installation not found or incomplete. Downloading...');
     }
 
-    // Download OVMS
     console.log(`Downloading OVMS from ${ovmsDownloadUrl}...`);
-    console.log(`This may take a few minutes depending on your internet connection...`);
 
-    /**
-     * File downloads are handled directly by system tools:
-     * - Windows: PowerShell Invoke-WebRequest
-     * - Linux: curl (native system command)
-     */
     if (isWindows) {
-      // Get the proper PowerShell path
       const powerShellPath = ALLOWED_COMMANDS_CONFIG.powershell.path;
-      console.log(`Using PowerShell at: ${powerShellPath}`);
-
       await spawnCommand(powerShellPath, [
         '-Command',
-        `Invoke-WebRequest -Uri "${ovmsDownloadUrl}" -OutFile "${ovmsArchive}" -UseBasicParsing -TimeoutSec 600`
-      ], { timeout: 650000 }); // 10+ minute timeout
-      console.log('PowerShell download completed successfully');
+        `Invoke-WebRequest -Uri "${ovmsDownloadUrl}" -OutFile "${ovmsArchive}" -UseBasicParsing -TimeoutSec 600`,
+      ], { timeout: 650000 });
     } else {
       await spawnCommand('curl', [
         '--fail', '--location', '--retry', '5', '--retry-delay', '10',
-        '--connect-timeout', '60', '--max-time', '600', // 10 minute max time
-        '--progress-bar', '--output', ovmsArchive, ovmsDownloadUrl
-      ], { timeout: 650000 }); // 10+ minute timeout
-      console.log('Curl download completed successfully');
+        '--connect-timeout', '60', '--max-time', '600',
+        '--progress-bar', '--output', ovmsArchive, ovmsDownloadUrl,
+      ], { timeout: 650000 });
     }
 
-    console.log('Extracting OVMS archive...')
-
     if (isWindows) {
-      // Extract directly into the current directory (ovms)
       const powerShellPath = ALLOWED_COMMANDS_CONFIG.powershell.path;
       await spawnCommand(powerShellPath, ['-Command', `Expand-Archive -Path "${ovmsArchive}" -DestinationPath "." -Force`]);
-
-      // Normalize extraction: move nested ovms/* up one level if present
       try {
         const nestedDir = path.join(ovmsPath, 'ovms');
         if (fs.existsSync(nestedDir) && fs.statSync(nestedDir).isDirectory()) {
-          console.log(`Normalizing nested OVMS directory...`);
           const items = fs.readdirSync(nestedDir);
           for (const item of items) {
             fs.moveSync(path.join(nestedDir, item), path.join(ovmsPath, item), { overwrite: true });
           }
           fs.removeSync(nestedDir);
-          console.log(`OVMS normalized to flat layout.`);
         }
       } catch (err) {
         console.warn(`OVMS normalization warning: ${err.message}`);
       }
-
     } else {
-      // Extract directly into the current directory (ovms)
       await spawnCommand('tar', ['-xzf', ovmsArchive, '--strip-components=1']);
-
-      if (!fs.existsSync('bin/ovms')) {
-        throw new Error('OVMS binary not found after extraction');
-      }
+      if (!fs.existsSync('bin/ovms')) throw new Error('OVMS binary not found after extraction');
     }
 
-    // Clean up the downloaded archive file to save space
-    if (fs.existsSync(ovmsArchive)) {
-      console.log(`Cleaning up downloaded archive: ${ovmsArchive}`);
-      fs.unlinkSync(ovmsArchive);
-    }
+    if (fs.existsSync(ovmsArchive)) fs.unlinkSync(ovmsArchive);
 
-    // Setup OVMS backend service
-    console.log('Setting up OVMS backend environment...')
-    console.log(`Using venv path for OVMS: ${venvPath}`)
-
+    console.log('Setting up OVMS backend environment...');
     if (!force && fs.existsSync(venvPath)) {
-      console.log('OVMS venv already exists. Use --force to recreate.');
+      console.log('OVMS venv already exists.');
       return { success: true };
     }
 
     try {
-      // Remove existing venv if forcing
       if (isSafeRelativePath(venvPath)) {
-        const resolvedVenvPath = path.resolve(ROOT_DIR, venvPath);
-        fs.removeSync(resolvedVenvPath);
+        fs.removeSync(path.resolve(ROOT_DIR, venvPath));
       } else {
         throw new Error('Venv path is invalid');
       }
 
-      // Ensure the parent directory exists
       const venvParentDir = path.dirname(venvPath);
-      if (!fs.existsSync(venvParentDir)) {
-        fs.mkdirSync(venvParentDir, { recursive: true });
-      }
+      if (!fs.existsSync(venvParentDir)) fs.mkdirSync(venvParentDir, { recursive: true });
 
       process.chdir(ovmsBackendPath);
 
-      // Get the appropriate Python command dynamically
       const pythonCmd = getDynamicPythonCommand();
-      console.log(`Using Python command: ${pythonCmd}`);
-
-      // Verify Python is available
-      try {
-        console.log(`Verifying Python is available...`);
-        const result = spawnSync(pythonCmd, ['--version'], {
-          stdio: 'pipe',
-          encoding: 'utf8',
-        });
-        if (result.status !== 0) {
-          throw new Error(`Python version check failed with exit code ${result.status}`);
-        }
-      } catch (error) {
-        console.error(`Python not found using command: ${pythonCmd}`);
-        console.error(`Error details: ${error.message}`);
-        console.error(`\nTo install Python on Windows:`);
-        console.error(`1. Download Python from https://python.org/downloads/`);
-        console.error(`2. Or install from Microsoft Store: run 'python' in PowerShell and follow prompts`);
-        console.error(`3. Ensure Python is added to your PATH during installation`);
-        console.error(`4. Or run setup.ps1 to install Python automatically`);
-        return { success: false, error: new Error(`Python not available.`) };
+      const verifyResult = spawnSync(pythonCmd, ['--version'], { stdio: 'pipe', encoding: 'utf8' });
+      if (verifyResult.status !== 0) {
+        return { success: false, error: new Error('Python not available.') };
       }
 
-      // Create virtual environment
-      console.log('Creating Python virtual environment for OVMS backend service...');
-      await spawnCommand(pythonCmd, ['-m', 'venv', 'venv']);
+      console.log('Creating OVMS virtual environment...');
+      let venvCreated = false;
 
-      // Install requirements
-      console.log('Installing Python dependencies for OVMS backend...');
+      try {
+        await spawnCommand(pythonCmd, ['-m', 'venv', 'venv']);
+        venvCreated = true;
+        console.log('OVMS virtual environment created successfully.');
+      } catch (err) {
+        console.warn(`Standard venv failed (code: ${err.code}), trying --copies...`);
+      }
+
+      if (!venvCreated) {
+        try {
+          await spawnCommand(pythonCmd, ['-m', 'venv', '--copies', 'venv']);
+          venvCreated = true;
+          console.log('OVMS virtual environment created with --copies flag.');
+        } catch (err) {
+          console.warn(`Venv --copies failed (code: ${err.code}), trying --without-pip...`);
+        }
+      }
+
+      if (!venvCreated) {
+        console.log('Creating OVMS venv without pip, will bootstrap manually...');
+        await spawnCommand(pythonCmd, ['-m', 'venv', '--without-pip', 'venv']);
+
+        const venvPythonPath = path.join(venvPath, 'bin', 'python');
+        const getPipScript = path.join(venvPath, 'get-pip.py');
+
+        console.log('Downloading get-pip.py for OVMS venv...');
+        await spawnCommand('curl', [
+          '--fail', '--location', '--retry', '3', '--retry-delay', '5',
+          '--connect-timeout', '30', '--max-time', '120',
+          '--output', getPipScript,
+          'https://bootstrap.pypa.io/get-pip.py',
+        ]);
+
+        console.log('Bootstrapping pip into OVMS virtual environment...');
+        await new Promise((resolve, reject) => {
+          const proc = spawn(venvPythonPath, [getPipScript], {
+            stdio: 'inherit',
+            shell: false,
+          });
+          proc.on('close', (code) => {
+            if (code === 0) resolve({ success: true });
+            else reject({ success: false, code });
+          });
+          proc.on('error', (err) => reject({ success: false, error: err }));
+        });
+
+        if (fs.existsSync(getPipScript)) fs.unlinkSync(getPipScript);
+        venvCreated = true;
+        console.log('OVMS virtual environment created with manual pip bootstrap.');
+      }
+
       const pipCommand = isWindows
         ? path.join(venvPath, 'Scripts', 'pip.exe')
         : path.join(venvPath, 'bin', 'pip');
       await spawnCommand(pipCommand, ['install', '-r', 'requirements.txt']);
 
-      console.log('Backend environment setup for OVMS completed successfully.');
+      console.log('OVMS backend environment setup completed.');
       return { success: true };
     } catch (error) {
-      console.error('Failed to setup backend environment for OVMS:', error);
+      console.error('Failed to setup OVMS backend environment:', error);
       return { success: false, error };
     } finally {
       process.chdir(root);
     }
-
   } catch (error) {
     console.error('Failed to setup OVMS:', error);
     return { success: false, error };
@@ -2161,68 +1805,48 @@ export async function setupOvms(force = false) {
   }
 }
 
-/**
- * Start OpenVINO Model Server (OVMS)
- */
 export async function startOvms() {
-  console.log('Starting OpenVINO Model Server (OVMS)...')
-
+  console.log('Starting OpenVINO Model Server (OVMS)...');
   const { ovms, ovmsBackend, ovmsVenv, root } = resolvePaths();
   const ovmsPath = ovms;
   const ovmsBackendPath = ovmsBackend;
   const venvPath = ovmsVenv;
-  console.log(`Using OVMS path: ${ovmsPath}`);
-  console.log(`Using OVMS backend path: ${ovmsBackendPath}`);
 
   if (!fs.existsSync(ovmsPath)) {
-    console.log('OVMS not found. Setting up...');
     const setupResult = await setupOvms(false);
-    if (!setupResult.success) {
-      throw new Error('Failed to setup OVMS');
-    }
+    if (!setupResult.success) throw new Error('Failed to setup OVMS');
   }
-
   if (!fs.existsSync(venvPath)) {
-    console.log('OVMS backend environment not found. Setting up...');
     const setupResult = await setupOvms(false);
-    if (!setupResult.success) {
-      throw new Error('Failed to setup OVMS backend environment');
-    }
+    if (!setupResult.success) throw new Error('Failed to setup OVMS backend environment');
   }
 
   try {
-    process.chdir(ovmsBackendPath);
-
-    // Get environment variables for OVMS
     const envVars = getOvmsEnvironmentVariables(root);
-
-    // Get the venv Python path
     const venvPythonPath = isWindows
       ? path.join(venvPath, 'Scripts', 'python.exe')
       : path.join(venvPath, 'bin', 'python');
 
-    // Start OVMS backend service with PM2
-    console.log('Starting OVMS backend service with PM2...');
-
-    // Parse port from PROVIDER_HOST
     const ovmsPort = parsePortFromProviderHost(envVars.PROVIDER_HOST, 5950);
-    console.log(`Using port ${ovmsPort} from PROVIDER_HOST: ${envVars.PROVIDER_HOST}`);
+    const namespace = getProcessManagerNamespace();
 
-    // Prepare PM2 command arguments
-    const pm2Args = [
-      'start', 'ovms_start.py',
-      '--name', 'ovms',
-      '--interpreter', venvPythonPath,
-      '--',
-      '--port', String(ovmsPort)
-    ];
-
-    // Add optional log level if specified
+    const scriptArgs = ['--port', String(ovmsPort)];
     if (envVars.OVMS_LOG_LEVEL) {
-      pm2Args.push('--log-level', envVars.OVMS_LOG_LEVEL);
+      scriptArgs.push('--log-level', envVars.OVMS_LOG_LEVEL);
     }
 
-    await executePM2Command(pm2Args);
+    console.log('Starting OVMS backend service with process manager...');
+    const result = await startProcess({
+      name: 'ovms',
+      script: path.join(ovmsBackendPath, 'ovms_start.py'),
+      interpreter: venvPythonPath,
+      args: scriptArgs,
+      cwd: ovmsBackendPath,
+      namespace,
+      env: { ...process.env, ...envVars },
+    });
+
+    if (!result.success) throw new Error(result.error || 'Failed to start OVMS');
 
     console.log('OVMS started successfully.');
     console.log(`OVMS REST API available at: http://${envVars.PROVIDER_HOST}`);
@@ -2234,182 +1858,90 @@ export async function startOvms() {
     process.chdir(root);
   }
 }
-/**
- * Setup Ollama
- * @param {boolean} force - Force recreation of environment
- */
+
 export async function setupOllama(force = false) {
   console.log('Setting up Ollama...');
-
-  // Get fresh paths
   const { thirdparty, ollama, root } = resolvePaths();
-
-  // Use custom paths if provided, otherwise use defaults
   const ollamaPath = ollama;
-  console.log(`Using Ollama path: ${ollamaPath}`);
 
   try {
-    const version = readEnvVariable('OLLAMA_VERSION', "2.2.0");
-    const archiveExtension = isWindows ? "zip" : "tgz";
-    const ollamaArchive = `ollama-ipex-llm-${version}-${isWindows ? "win" : "ubuntu"}.${archiveExtension}`;
-    const ollamaDownloadUrl = `https://github.com/ipex-llm/ipex-llm/releases/download/v${version}/ollama-ipex-llm-${version}-${isWindows ? "win" : "ubuntu"}.${archiveExtension}`;
+    const version = readEnvVariable('OLLAMA_VERSION', '2.2.0');
+    const archiveExtension = isWindows ? 'zip' : 'tgz';
+    const ollamaArchive = `ollama-ipex-llm-${version}-${isWindows ? 'win' : 'ubuntu'}.${archiveExtension}`;
+    const ollamaDownloadUrl = `https://github.com/ipex-llm/ipex-llm/releases/download/v${version}/${ollamaArchive}`;
 
-    // Ensure parent directory exists
     const ollamaParentDir = path.dirname(ollamaPath);
-    if (!fs.existsSync(ollamaParentDir)) {
-      fs.mkdirSync(ollamaParentDir, { recursive: true });
-    }
-
-    if (!fs.existsSync(ollamaPath)) {
-      fs.mkdirSync(ollamaPath, { recursive: true });
-    }
+    if (!fs.existsSync(ollamaParentDir)) fs.mkdirSync(ollamaParentDir, { recursive: true });
+    if (!fs.existsSync(ollamaPath)) fs.mkdirSync(ollamaPath, { recursive: true });
 
     process.chdir(ollamaPath);
 
-    // Check if Ollama is already extracted - look for key files directly in the ollama directory
     const ollamaBinPath = isWindows
       ? path.join(ollamaPath, 'ollama.exe')
       : path.join(ollamaPath, 'ollama');
-
     const startScriptPath = isWindows
-      ? path.join(ollamaPath, 'ollama.exe') // Windows uses exe directly
+      ? path.join(ollamaPath, 'ollama.exe')
       : path.join(ollamaPath, 'start-ollama.sh');
 
     if (fs.existsSync(ollamaBinPath) && fs.existsSync(startScriptPath)) {
       console.log('Ollama is already downloaded and extracted. Skipping download.');
-
-      // Make sure the binaries are executable on Linux
       if (!isWindows) {
         await spawnCommand('chmod', ['+x', ollamaBinPath]);
         await spawnCommand('chmod', ['+x', startScriptPath]);
-        console.log('Ensured Ollama binaries are executable');
       }
-
-      console.log('Ollama setup completed successfully.');
       return { success: true };
-    } else {
-      console.log('Ollama installation not found or incomplete. Downloading...');
     }
 
-    // Download Ollama
     console.log(`Downloading Ollama from ${ollamaDownloadUrl}...`);
-    console.log(`This may take a few minutes depending on your internet connection...`);
 
-    /**
-     * File downloads are handled directly by system tools:
-     * - Windows: PowerShell Invoke-WebRequest
-     * - Linux: curl (native system command)
-     */
     if (isWindows) {
-      // Get the proper PowerShell path
       const powerShellPath = ALLOWED_COMMANDS_CONFIG.powershell.path;
-      console.log(`Using PowerShell at: ${powerShellPath}`);
-
       await spawnCommand(powerShellPath, [
         '-Command',
-        `Invoke-WebRequest -Uri "${ollamaDownloadUrl}" -OutFile "${ollamaArchive}" -UseBasicParsing -TimeoutSec 600`
-      ], { timeout: 650000 }); // 10+ minute timeout
-      console.log('PowerShell download completed successfully');
+        `Invoke-WebRequest -Uri "${ollamaDownloadUrl}" -OutFile "${ollamaArchive}" -UseBasicParsing -TimeoutSec 600`,
+      ], { timeout: 650000 });
     } else {
-      // On Linux, use curl
       await spawnCommand('curl', [
         '--fail', '--location', '--retry', '5', '--retry-delay', '10',
-        '--connect-timeout', '60', '--max-time', '600', // 10 minute max time
-        '--progress-bar', '--output', ollamaArchive, ollamaDownloadUrl
-      ], { timeout: 650000 }); // 10+ minute timeout
-      console.log('Curl download completed successfully');
+        '--connect-timeout', '60', '--max-time', '600',
+        '--progress-bar', '--output', ollamaArchive, ollamaDownloadUrl,
+      ], { timeout: 650000 });
     }
 
-    console.log('Extracting Ollama archive...');
-
     if (isWindows) {
-      // Extract directly into the current directory (ollama)
       const powerShellPath = ALLOWED_COMMANDS_CONFIG.powershell.path;
       await spawnCommand(powerShellPath, ['-Command', `Expand-Archive -Path "${ollamaArchive}" -DestinationPath "." -Force`]);
+      if (fs.existsSync(ollamaArchive)) fs.unlinkSync(ollamaArchive);
 
-      // Clean up the downloaded archive file to save space
-      if (fs.existsSync(ollamaArchive)) {
-        console.log(`Cleaning up downloaded archive: ${ollamaArchive}`);
-        fs.unlinkSync(ollamaArchive);
-      }
-
-      // Update to append OLLAMA_HOST environment variable into the ollama-serve.bat script
       const ollamaServeBatPath = path.join(ollamaPath, 'ollama-serve.bat');
       if (fs.existsSync(ollamaServeBatPath)) {
         const envVars = getOllamaEnvironmentVariables(root);
         const providerHost = envVars.PROVIDER_HOST || '127.0.0.1:5950';
-
-        // Read the batch script content
         let batchContent = fs.readFileSync(ollamaServeBatPath, 'utf8');
-
-        // Add OLLAMA_HOST environment variable at the beginning of the batch script
-        const ollamaHostSet = `set OLLAMA_HOST=${providerHost}\r\n`;
-
-        // Check if OLLAMA_HOST is already in the script
         if (!batchContent.includes('OLLAMA_HOST')) {
-          // Insert OLLAMA_HOST after @echo off
-          batchContent = batchContent.replace(
-            /@echo off/i,
-            `@echo off\r\n${ollamaHostSet}`
-          );
-
-          // Write the modified script back
+          batchContent = batchContent.replace(/@echo off/i, `@echo off\r\nset OLLAMA_HOST=${providerHost}\r\n`);
           fs.writeFileSync(ollamaServeBatPath, batchContent, 'utf8');
-          console.log(`Injected OLLAMA_HOST=${providerHost} into ollama-serve.bat`);
         }
-      } else {
-        console.log('Warning: ollama-serve.bat not found after extraction');
       }
-
     } else {
-      // Extract directly into the current directory (ollama)
       await spawnCommand('tar', ['-xzf', ollamaArchive, '--strip-components=1']);
+      if (!fs.existsSync('ollama')) throw new Error('Ollama binary not found after extraction');
+      await spawnCommand('chmod', ['+x', 'ollama']);
 
-      // Make the ollama binary executable
-      if (fs.existsSync('ollama')) {
-        await spawnCommand('chmod', ['+x', 'ollama']);
-      } else {
-        throw new Error('Ollama binary not found after extraction');
+      if (!fs.existsSync('start-ollama.sh')) {
+        throw new Error('start-ollama.sh script not found after extraction.');
+      }
+      await spawnCommand('chmod', ['+x', 'start-ollama.sh']);
+
+      const envVars = getOllamaEnvironmentVariables(root);
+      const providerHost = envVars.PROVIDER_HOST || '127.0.0.1:5950';
+      let scriptContent = fs.readFileSync('start-ollama.sh', 'utf8');
+      if (!scriptContent.includes('OLLAMA_HOST')) {
+        scriptContent = scriptContent.replace(/\.\/ollama serve/, `export OLLAMA_HOST=${providerHost}\n./ollama serve`);
+        fs.writeFileSync('start-ollama.sh', scriptContent, 'utf8');
       }
 
-      // Make the start-ollama.sh script executable
-      if (fs.existsSync('start-ollama.sh')) {
-        await spawnCommand('chmod', ['+x', 'start-ollama.sh']);
-        console.log('Made start-ollama.sh executable');
-
-        // Update to append OLLAMA_HOST environment variable into the start-ollama.sh script
-        const envVars = getOllamaEnvironmentVariables(root);
-        const providerHost = envVars.PROVIDER_HOST || '127.0.0.1:5950';
-
-        // Read the script content
-        let scriptContent = fs.readFileSync('start-ollama.sh', 'utf8');
-
-        // Add OLLAMA_HOST export before ./ollama serve line
-        const ollamaHostExport = `export OLLAMA_HOST=${providerHost}\n`;
-
-        // Check if OLLAMA_HOST is already in the script
-        if (!scriptContent.includes('OLLAMA_HOST')) {
-          // Insert OLLAMA_HOST export before the ./ollama serve line
-          scriptContent = scriptContent.replace(
-            /\.\/ollama serve/,
-            `${ollamaHostExport}./ollama serve`
-          );
-
-          // Write the modified script back
-          fs.writeFileSync('start-ollama.sh', scriptContent, 'utf8');
-          console.log(`Injected OLLAMA_HOST=${providerHost} into start-ollama.sh`);
-        }
-      } else {
-        const errorMessage = 'start-ollama.sh script not found after extraction. Please ensure you have the correct version of Ollama with the start-ollama.sh script.';
-        console.error(errorMessage);
-        throw new Error(errorMessage);
-      }
-
-      // Clean up the downloaded archive file to save space
-      if (fs.existsSync(ollamaArchive)) {
-        console.log(`Cleaning up downloaded archive: ${ollamaArchive}`);
-        fs.unlinkSync(ollamaArchive);
-      }
+      if (fs.existsSync(ollamaArchive)) fs.unlinkSync(ollamaArchive);
     }
 
     console.log('Ollama setup completed successfully.');
@@ -2422,63 +1954,46 @@ export async function setupOllama(force = false) {
   }
 }
 
-/**
- * Start Ollama
- */
 export async function startOllama() {
   console.log('Starting Ollama...');
-
-  // Get fresh paths
   const { ollama, root } = resolvePaths();
-
-  // Use custom path if provided
   const ollamaPath = ollama;
-  console.log(`Using Ollama path: ${ollamaPath}`);
 
   if (!fs.existsSync(ollamaPath)) {
-    console.log('Ollama not found. Setting up...');
-    const setupResult = await setupOllama(false, ollamaPath);
-    if (!setupResult.success) {
-      throw new Error('Failed to setup Ollama');
-    }
+    const setupResult = await setupOllama(false);
+    if (!setupResult.success) throw new Error('Failed to setup Ollama');
   }
 
   try {
-    // Ollama files are now directly in the ollama directory
     process.chdir(ollamaPath);
+    const envVars = getOllamaEnvironmentVariables(root);
+    const namespace = getProcessManagerNamespace();
 
-    // Start Ollama with PM2
     if (isWindows) {
-      // On Windows, start the ollama.exe directly
-      console.log('Starting Ollama with PM2 on Windows...');
-
-      // Set environment variables for Ollama
-      const envVars = getOllamaEnvironmentVariables(root);
-
-      await executePM2Command([
-        'start', 'ollama.exe',
-        '--name', 'ollama',
-        '--env', JSON.stringify(envVars)
-      ]);
+      console.log('Starting Ollama with process manager on Windows...');
+      const result = await startProcess({
+        name: 'ollama',
+        script: path.join(ollamaPath, 'ollama.exe'),
+        args: ['serve'],
+        cwd: ollamaPath,
+        namespace,
+        env: { ...process.env, ...envVars },
+      });
+      if (!result.success) throw new Error(result.error || 'Failed to start Ollama');
     } else {
-      // On Linux, use the start-ollama.sh script
-      const startOllamaScriptPath = path.join(ollama, 'start-ollama.sh');
-
+      const startOllamaScriptPath = path.join(ollamaPath, 'start-ollama.sh');
       if (!fs.existsSync(startOllamaScriptPath)) {
-        const errorMessage = 'start-ollama.sh script not found in the Ollama directory. Please ensure you have the correct version of Ollama with the start-ollama.sh script.';
-        console.error(errorMessage);
-        throw new Error(errorMessage);
+        throw new Error('start-ollama.sh script not found.');
       }
-
-      // Set environment variables for Ollama
-      const envVars = getOllamaEnvironmentVariables(root);
-
-      console.log('Starting Ollama with PM2 on Linux using start-ollama.sh...');
-      await executePM2Command([
-        'start', './start-ollama.sh',
-        '--name', 'ollama',
-        '--env', JSON.stringify(envVars)
-      ]);
+      console.log('Starting Ollama with process manager on Linux...');
+      const result = await startProcess({
+        name: 'ollama',
+        script: startOllamaScriptPath,
+        cwd: ollamaPath,
+        namespace,
+        env: { ...process.env, ...envVars },
+      });
+      if (!result.success) throw new Error(result.error || 'Failed to start Ollama');
     }
 
     console.log('Ollama started successfully.');
@@ -2491,46 +2006,36 @@ export async function startOllama() {
   }
 }
 
-/**
- * Start frontend for a specific persona
- */
 export async function startFrontend(persona) {
   console.log(`Starting frontend for persona: ${persona}`);
-
-  // Get fresh paths
   const { root } = resolvePaths({ persona });
 
   try {
-    // Get the standalone directory path for this persona
     const standaloneDir = path.join(root, `next-${persona.toLowerCase()}`, 'standalone');
-
     if (!fs.existsSync(standaloneDir)) {
       throw new Error(`Standalone directory not found for persona ${persona} at ${standaloneDir}`);
     }
-
     if (!fs.existsSync(path.join(standaloneDir, 'server.js'))) {
       throw new Error(`server.js not found in standalone directory for persona ${persona}`);
     }
 
-    if (isSafeRelativePath(standaloneDir)) {
-      process.chdir(fileURLToPath(new URL(`file://${path.resolve(standaloneDir)}`)));
-    } else {
-      throw new Error(`Unsafe standalone directory detected: ${standaloneDir}`);
-    }
+    const namespace = getProcessManagerNamespace();
 
-
-    // Start frontend with PM2 using the standalone server.js
-    console.log('Starting frontend with PM2 using standalone server.js...');
-
-    await executePM2Command([
-      'start', 'server.js',
-      '--name', 'frontend',
-      '--env', JSON.stringify({
+    console.log('Starting frontend with process manager...');
+    const result = await startProcess({
+      name: 'frontend',
+      script: path.join(standaloneDir, 'server.js'),
+      cwd: standaloneDir,
+      namespace,
+      env: {
+        ...process.env,
         NODE_ENV: 'production',
         PERSONA: persona.toLowerCase(),
-        PORT: 3000
-      })
-    ]);
+        PORT: '3000',
+      },
+    });
+
+    if (!result.success) throw new Error(result.error || 'Failed to start frontend');
 
     console.log('Frontend started successfully.');
     return { success: true };
@@ -2542,152 +2047,107 @@ export async function startFrontend(persona) {
   }
 }
 
-/**
- * Start frontend and backend services only (no AI Provider)
- */
 export async function startServicesNoProvider(persona) {
   console.log(`Starting frontend and backend services only for persona: ${persona}`);
   console.log('Note: AI Provider services (Ollama/OVMS) will not be started.');
-  console.log('Please configure external AI Provider in the settings page.');
 
-  // Kill PM2 daemon to avoid stale state or path issues
   try {
-    console.log('Killing PM2 daemon to ensure a clean state...');
-    await executePM2Command(['kill']);
-    console.log('PM2 daemon killed successfully.');
+    console.log('Killing all managed processes to ensure a clean state...');
+    await killDaemon();
+    console.log('All managed processes killed successfully.');
   } catch (err) {
-    console.warn('Failed to kill PM2 daemon (it may not be running):', err);
+    console.warn('Failed to kill managed processes (they may not be running):', err);
   }
 
-  // Get fresh paths with specified persona
-  const { isDistPackage, isRootRepo, root, venv, backend, ecosystem, dist, frontend } = resolvePaths({ persona });
+  const {
+    isDistPackage, isRootRepo, root, venv, backend,
+    ecosystem, dist, frontend,
+  } = resolvePaths({ persona });
 
   try {
-    // Get the name and version from frontend package.json
     const packageJsonPath = path.join(frontend, 'package.json');
-    let packageName = 'university-curriculum-enabling-tool';
+    let packageName    = 'university-curriculum-enabling-tool';
     let packageVersion = '';
-
     if (fs.existsSync(packageJsonPath)) {
       try {
         const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
-        packageName = packageJson.name || packageName;
+        packageName    = packageJson.name    || packageName;
         packageVersion = packageJson.version || '';
-      } catch (error) {
-        console.warn(`Failed to parse package.json: ${error.message}. Using default package name.`);
-      }
+      } catch (_) {}
     }
 
-    // Create package directory name with name and version from package.json
     const versionString = packageVersion ? `-${packageVersion}` : '';
-    // For faculty persona, don't append the persona label
-    const distPackage = persona.toLowerCase() === 'faculty'
-      ? path.join(dist, `${packageName}${versionString}`)
-      : path.join(dist, `${packageName}${versionString}-${persona}`);
+    const distPackage =
+      persona.toLowerCase() === 'faculty'
+        ? path.join(dist, `${packageName}${versionString}`)
+        : path.join(dist, `${packageName}${versionString}-${persona}`);
     const distVersionFile = path.join(distPackage, '.version');
 
-    // For repository environment, especially root repo, try to use the distribution package
-    let useDistPackage = false;
+    let useDistPackage    = false;
     let distEcosystemConfig = null;
 
-    // If we're in the root repository, we should use the dist package for services
     if (isRootRepo) {
-      console.log('Running from root repository. Checking for distribution package...');
-
-      // Check if we have a valid distribution package
       if (fs.existsSync(distPackage) && fs.existsSync(distVersionFile)) {
-        console.log(`Found distribution package at ${distPackage}. Will use it for services.`);
-        useDistPackage = true;
+        useDistPackage      = true;
         distEcosystemConfig = path.join(distPackage, 'ecosystem.config.cjs');
       } else {
-        console.error('ERROR: No valid distribution package found when running from root repository.');
-        console.error('Please run install.sh/install.bat to create a distribution package first.');
+        console.error('ERROR: No valid distribution package found.');
         process.exit(1);
       }
-    }
-    // For non-root, non-dist package environments
-    else if (!isDistPackage) {
-      // If we don't have a distribution package with a .version file, refuse to continue
+    } else if (!isDistPackage) {
       if (!fs.existsSync(distPackage) || !fs.existsSync(distVersionFile)) {
         console.error('ERROR: No valid distribution package found.');
-        console.error('Please run install.sh/install.bat to create a distribution package first.');
         process.exit(1);
-      } else {
-        console.log(`Found distribution package at ${distPackage}. Continuing...`);
       }
     }
 
-    // Get the backend path
-    // If using distribution package from root repo, use the paths from distPackage
-    let backendPath = backend;
     let venvPath = venv;
-
     if (useDistPackage) {
-      console.log('Using backend from distribution package...');
-      backendPath = path.join(distPackage, 'backend');
       venvPath = path.join(distPackage, 'backend', 'venv');
     }
 
-    // Setup backend if needed - always check the correct path based on our environment
     if (!fs.existsSync(venvPath)) {
-      console.log('Backend environment not found. Setting up...');
-      const setupResult = await setupBackend(false, backendPath, venvPath);
-      if (!setupResult.success) {
-        console.warn('Failed to setup backend, but continuing...');
-      }
+      const setupResult = await setupBackend(false);
+      if (!setupResult.success) console.warn('Failed to setup backend, but continuing...');
     }
 
-    // Start backend and frontend services using the ecosystem config
-    console.log('Starting backend and frontend services using PM2 ecosystem config...');
-    console.log(`Current working directory: ${process.cwd()}`);
-
-    // Set the persona in the environment
     process.env.PERSONA = persona.toLowerCase();
+    const namespace     = getProcessManagerNamespace();
 
-    // Get PM2 namespace
-    const projectTag = getPM2Namespace();
-    console.log(`Using PM2 namespace: ${projectTag}`);
-
-    // Use the distribution package ecosystem config if we're in root repo
     const configToUse = useDistPackage ? distEcosystemConfig : ecosystem;
     console.log(`Using ecosystem config at: ${configToUse}`);
 
-    // If using distribution package from root repo, we need to change to that directory
-    if (useDistPackage) {
-      console.log(`Changing directory to distribution package: ${distPackage}`);
-      if (isSafeRelativePath(distPackage)) {
-        process.chdir(fileURLToPath(new URL(`file://${path.resolve(distPackage)}`)));
-        console.log(`New working directory: ${process.cwd()}`);
-      } else {
-        throw new Error(`Unsafe distribution package directory detected: ${distPackage}`);
-      }
+    if (useDistPackage && isSafeRelativePath(distPackage)) {
+      process.chdir(fileURLToPath(new URL(`file://${path.resolve(distPackage)}`)));
     }
 
-    // Start PM2 services - only backend and frontend (no provider)
     console.log('Starting backend service...');
-    await executePM2Command(['start', configToUse, '--only', 'backend', '--namespace', projectTag]);
-    
+    await startEcosystem(configToUse, { only: 'backend', namespace });
+
     console.log(`Starting frontend service for persona: ${persona}...`);
-    await executePM2Command(['start', configToUse, '--only', 'frontend', '--namespace', projectTag]);
-    
+    await startEcosystem(configToUse, { only: 'frontend', namespace });
+
+    const stable = await waitForProcesses(2, namespace, 5000);
+    if (!stable) {
+      const logDir = path.join(__dirname, '..', '.process-manager', 'logs');
+      throw new Error(
+        `Services failed to start: expected 2 processes but none are running. ` +
+        `Check logs at: ${logDir}`
+      );
+    }
+
     console.log(`Backend and frontend services started successfully for persona: ${persona}`);
 
-    // Check and display service status using checkServicesStatus instead of running pm2 list directly
     const serviceStatus = checkServicesStatus();
-
     if (serviceStatus.success) {
       console.log(`Services status: ${serviceStatus.running ? 'Running' : 'Not running'}`);
-
       if (serviceStatus.servicesCount > 0) {
-        console.log(`Total services: ${serviceStatus.servicesCount}`);
+        console.log(`Total services:  ${serviceStatus.servicesCount}`);
         console.log(`Online services: ${serviceStatus.onlineCount}`);
-
         if (serviceStatus.errorCount > 0) {
           console.warn(`Error services: ${serviceStatus.errorCount} (${serviceStatus.errorNames})`);
         }
       }
-    } else {
-      console.warn('Failed to check services status:', serviceStatus.error);
     }
 
     return { success: true };
@@ -2697,211 +2157,158 @@ export async function startServicesNoProvider(persona) {
   }
 }
 
-/**
- * Start all services for a specific persona
- */
 export async function startServices(persona) {
   console.log(`Starting all services for persona: ${persona}`);
 
-  // Kill PM2 daemon to avoid stale state or path issues
   try {
-    console.log('Killing PM2 daemon to ensure a clean state...');
-    await executePM2Command(['kill']);
-    console.log('PM2 daemon killed successfully.');
+    console.log('Killing all managed processes to ensure a clean state...');
+    await killDaemon();
   } catch (err) {
-    console.warn('Failed to kill PM2 daemon (it may not be running):', err);
+    console.warn('Failed to kill managed processes:', err);
   }
 
-  // Get fresh paths with specified persona
-  const { isDistPackage, isRootRepo, root, isOllamaOrOvms, ollama, venv, ovms, ovmsVenv, ovmsBackend, backend, ecosystem, dist, frontend } = resolvePaths({ persona });
+  const {
+    isDistPackage, isRootRepo, root, isOllamaOrOvms,
+    ollama, venv, ovms, ovmsVenv, ovmsBackend,
+    backend, ecosystem, dist, frontend,
+  } = resolvePaths({ persona });
 
   try {
-    // Get the name and version from frontend package.json
     const packageJsonPath = path.join(frontend, 'package.json');
-    let packageName = 'university-curriculum-enabling-tool';
+    let packageName    = 'university-curriculum-enabling-tool';
     let packageVersion = '';
-
     if (fs.existsSync(packageJsonPath)) {
       try {
         const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
-        packageName = packageJson.name || packageName;
+        packageName    = packageJson.name    || packageName;
         packageVersion = packageJson.version || '';
-      } catch (error) {
-        console.warn(`Failed to parse package.json: ${error.message}. Using default package name.`);
-      }
+      } catch (_) {}
     }
 
-    // Create package directory name with name and version from package.json
     const versionString = packageVersion ? `-${packageVersion}` : '';
-    // For faculty persona, don't append the persona label
-    const distPackage = persona.toLowerCase() === 'faculty'
-      ? path.join(dist, `${packageName}${versionString}`)
-      : path.join(dist, `${packageName}${versionString}-${persona}`);
+    const distPackage =
+      persona.toLowerCase() === 'faculty'
+        ? path.join(dist, `${packageName}${versionString}`)
+        : path.join(dist, `${packageName}${versionString}-${persona}`);
     const distVersionFile = path.join(distPackage, '.version');
 
-    // For repository environment, especially root repo, try to use the distribution package
-    let useDistPackage = false;
+    let useDistPackage    = false;
     let distEcosystemConfig = null;
 
-    // If we're in the root repository, we should use the dist package for services
     if (isRootRepo) {
-      console.log('Running from root repository. Checking for distribution package...');
-
-      // Check if we have a valid distribution package
       if (fs.existsSync(distPackage) && fs.existsSync(distVersionFile)) {
-        console.log(`Found distribution package at ${distPackage}. Will use it for services.`);
-        useDistPackage = true;
+        useDistPackage      = true;
         distEcosystemConfig = path.join(distPackage, 'ecosystem.config.cjs');
       } else {
-        console.error('ERROR: No valid distribution package found when running from root repository.');
-        console.error('Please run install.sh/install.bat to create a distribution package first.');
+        console.error('ERROR: No valid distribution package found.');
         process.exit(1);
       }
-    }
-    // For non-root, non-dist package environments
-    else if (!isDistPackage) {
-      // If we don't have a distribution package with a .version file, refuse to continue
+    } else if (!isDistPackage) {
       if (!fs.existsSync(distPackage) || !fs.existsSync(distVersionFile)) {
         console.error('ERROR: No valid distribution package found.');
-        console.error('Please run install.sh/install.bat to create a distribution package first.');
         process.exit(1);
-      } else {
-        console.log(`Found distribution package at ${distPackage}. Continuing...`);
       }
     }
 
-    // Get the backend and Ollama paths
-    // If using distribution package from root repo, use the paths from distPackage
     let backendPath = backend;
-    let venvPath = venv;
+    let venvPath    = venv;
 
     console.log(`Model serve using ${isOllamaOrOvms} service`);
 
-    if (isOllamaOrOvms == "ollama") {
+    if (isOllamaOrOvms === 'ollama') {
       let ollamaPath = ollama;
-
       if (useDistPackage) {
-        console.log('Using backend and Ollama from distribution package...');
         backendPath = path.join(distPackage, 'backend');
-        ollamaPath = path.join(distPackage, 'thirdparty', 'ollama');
-        venvPath = path.join(distPackage, 'backend', 'venv');
+        ollamaPath  = path.join(distPackage, 'thirdparty', 'ollama');
+        venvPath    = path.join(distPackage, 'backend', 'venv');
       }
 
-      // Setup backend if needed - always check the correct path based on our environment
       if (!fs.existsSync(venvPath)) {
-        console.log('Backend environment not found. Setting up...');
-        const setupResult = await setupBackend(false, backendPath, venvPath);
-        if (!setupResult.success) {
-          console.warn('Failed to setup backend, but continuing...');
-        }
+        const r = await setupBackend(false);
+        if (!r.success) console.warn('Failed to setup backend, but continuing...');
       }
 
-      // Setup Ollama if needed - always check the correct path based on our environment
-      const ollamaBinPath = isWindows
+      const ollamaBinPath    = isWindows
         ? path.join(ollamaPath, 'ollama.exe')
         : path.join(ollamaPath, 'ollama');
       const ollamaStartScript = isWindows
         ? path.join(ollamaPath, 'ollama.exe')
         : path.join(ollamaPath, 'start-ollama.sh');
 
-      if (!fs.existsSync(ollamaPath) || !fs.existsSync(ollamaBinPath) || !fs.existsSync(ollamaStartScript)) {
-        console.log(ollamaPath)
-        console.log('Ollama not found or missing key files. Setting up...');
-        const setupResult = await setupOllama(false, ollamaPath);
-        if (!setupResult.success) {
-          console.warn('Failed to setup Ollama, but continuing...');
-        }
+      if (
+        !fs.existsSync(ollamaPath) ||
+        !fs.existsSync(ollamaBinPath) ||
+        !fs.existsSync(ollamaStartScript)
+      ) {
+        const r = await setupOllama(false);
+        if (!r.success) console.warn('Failed to setup Ollama, but continuing...');
       }
-    } else if (isOllamaOrOvms == "ovms") {
-      let ovmsPath = ovms;
-      let ovmsVenvPath = ovmsVenv;
+    } else if (isOllamaOrOvms === 'ovms') {
+      let ovmsPath        = ovms;
+      let ovmsVenvPath    = ovmsVenv;
       let ovmsBackendPath = ovmsBackend;
 
       if (useDistPackage) {
-        console.log('Using OVMS backend and OVMS from distribution package...');
-        venvPath = path.join(distPackage, 'backend', 'venv');
-        backendPath = path.join(distPackage, 'backend');
+        venvPath        = path.join(distPackage, 'backend', 'venv');
+        backendPath     = path.join(distPackage, 'backend');
         ovmsBackendPath = path.join(distPackage, 'backend', 'ovms_service');
-        ovmsPath = path.join(distPackage, 'thirdparty', 'ovms');
-        ovmsVenvPath = path.join(distPackage, 'backend', 'ovms_service', 'venv');
+        ovmsPath        = path.join(distPackage, 'thirdparty', 'ovms');
+        ovmsVenvPath    = path.join(distPackage, 'backend', 'ovms_service', 'venv');
       }
 
-      // Setup backend if needed - always check the correct path based on our environment
       if (!fs.existsSync(venvPath)) {
-        console.log('Backend environment not found. Setting up...');
-        const setupResult = await setupBackend(false, backendPath, venvPath);
-        if (!setupResult.success) {
-          console.warn('Failed to setup backend, but continuing...');
-        }
+        const r = await setupBackend(false);
+        if (!r.success) console.warn('Failed to setup backend, but continuing...');
       }
 
-      // Setup OVMS if needed - expect flat layout after normalization
       const ovmsBinPath = isWindows
         ? path.join(ovmsPath, 'ovms.exe')
         : path.join(ovmsPath, 'bin', 'ovms');
 
-
       if (!fs.existsSync(ovmsPath) || !fs.existsSync(ovmsBinPath)) {
-        console.log(`OVMS path: ${ovmsPath}`);
-        console.log(`OVMS binary path: ${ovmsBinPath}`);
-        console.log('OVMS not found. Setting up...');
-        const setupResult = await setupOvms(false);
-        if (!setupResult.success) {
-          console.warn('Failed to setup OVMS, but continuing...');
-        }
-      } else {
-        console.log('OVMS already installed. Skipping setup.');
+        const r = await setupOvms(false);
+        if (!r.success) console.warn('Failed to setup OVMS, but continuing...');
       }
     } else {
-      throw new Error(`Unable to start service: ${isOllamaOrOvms}`)
+      throw new Error(`Unable to start service: ${isOllamaOrOvms}`);
     }
 
-
-    // Start all services using the ecosystem config
-    console.log('Starting all services using PM2 ecosystem config...');
-    console.log(`Current working directory: ${process.cwd()}`);
-
-    // Set the persona in the environment
     process.env.PERSONA = persona.toLowerCase();
+    const namespace     = getProcessManagerNamespace();
 
-    // Get PM2 namespace
-    const projectTag = getPM2Namespace();
-    console.log(`Using PM2 namespace: ${projectTag}`);
-
-    // Use the distribution package ecosystem config if we're in root repo
     const configToUse = useDistPackage ? distEcosystemConfig : ecosystem;
     console.log(`Using ecosystem config at: ${configToUse}`);
 
-    // If using distribution package from root repo, we need to change to that directory
-    if (useDistPackage) {
-      console.log(`Changing directory to distribution package: ${distPackage}`);
-      if (isSafeRelativePath(distPackage)) {
-        process.chdir(fileURLToPath(new URL(`file://${path.resolve(distPackage)}`)));
-        console.log(`New working directory: ${process.cwd()}`);
-      } else {
-        throw new Error(`Unsafe distribution package directory detected: ${distPackage}`);
-      }
+    if (useDistPackage && isSafeRelativePath(distPackage)) {
+      process.chdir(fileURLToPath(new URL(`file://${path.resolve(distPackage)}`)));
     }
-    // Start PM2 services
-    await executePM2Command(['start', configToUse, '--namespace', projectTag]);
+
+    console.log('Starting all services using ecosystem config...');
+    await startEcosystem(configToUse, { namespace });
+
+    const expectedCount = isOllamaOrOvms === 'ollama' ? 3 : isOllamaOrOvms === 'ovms' ? 3 : 2;
+    const stable = await waitForProcesses(expectedCount, namespace, 5000);
+
+    if (!stable) {
+      const logDir = path.join(__dirname, '..', '.process-manager', 'logs');
+      throw new Error(
+        `Services failed to start: expected ${expectedCount} processes but none are running. ` +
+        `Check logs at: ${logDir}`
+      );
+    }
+
     console.log(`All services started successfully for persona: ${persona}`);
 
-    // Check and display service status using checkServicesStatus instead of running pm2 list directly
     const serviceStatus = checkServicesStatus();
-
     if (serviceStatus.success) {
       console.log(`Services status: ${serviceStatus.running ? 'Running' : 'Not running'}`);
-
       if (serviceStatus.servicesCount > 0) {
-        console.log(`Total services: ${serviceStatus.servicesCount}`);
+        console.log(`Total services:  ${serviceStatus.servicesCount}`);
         console.log(`Online services: ${serviceStatus.onlineCount}`);
-
         if (serviceStatus.errorCount > 0) {
           console.warn(`Error services: ${serviceStatus.errorCount} (${serviceStatus.errorNames})`);
         }
       }
-    } else {
-      console.warn('Failed to check services status:', serviceStatus.error);
     }
 
     return { success: true };
@@ -2911,34 +2318,22 @@ export async function startServices(persona) {
   }
 }
 
-/**
- * Stop all services
- */
 export async function stopServices(force = false) {
   console.log(`${force ? 'Removing' : 'Stopping'} all services...`);
 
-  // Get fresh paths
-  const { ecosystem } = resolvePaths();
-
   try {
-    // Check if any PM2 processes exist using the service status check
     const { success, running, namespace, servicesNames } = checkServicesStatus();
 
     if (!success || !running) {
-      console.log(`No PM2 services found with namespace '${namespace}' to stop. Skipping...`);
+      console.log(`No managed services found to stop. Skipping...`);
       return { success: true };
-    } else {
-      console.log(`Found running PM2 services: ${servicesNames}`);
     }
+    console.log(`Found running services: ${servicesNames}`);
 
-    // Use the ecosystem config if it exists
-    if (fs.existsSync(ecosystem)) {
-      console.log(`${force ? 'Removing' : 'Stopping'} all services using PM2 ecosystem config...`);
-      await executePM2Command([force ? 'delete' : 'stop', 'all', '--namespace', namespace]);
+    if (force) {
+      await deleteProcess('all', { namespace });
     } else {
-      // Fallback to stopping all services manually by namespace
-      console.log(`${force ? 'Removing' : 'Stopping'} all services manually by namespace...`);
-      await executePM2Command([force ? 'delete' : 'stop', 'all', '--namespace', namespace]);
+      await stopProcess('all', { namespace });
     }
 
     console.log(`All services ${force ? 'removed' : 'stopped'} successfully.`);
@@ -2949,172 +2344,72 @@ export async function stopServices(force = false) {
   }
 }
 
-/**
- * Get the list of PM2 services filtered by namespace
- */
 export function getServiceList() {
   console.log('Getting list of services...');
 
   try {
-    // Get the namespace
-    const namespace = getPM2Namespace();
-    console.log(`Filtering PM2 services by namespace: ${namespace}`);
+    const namespace = getProcessManagerNamespace();
+    console.log(`Filtering services by namespace: ${namespace}`);
 
-    // Fix PM2 command execution for Windows
-    let listResult;
-    if (isWindows) {
-      // On Windows, try to run PM2 directly using Node.js
-      const nodePath = fs.existsSync(path.join(NODE_DIR, 'node.exe')) ? path.join(NODE_DIR, 'node.exe') : 'node';
-      const pm2BinPath = path.join(WORKING_DIR, 'node_modules', 'pm2', 'bin', 'pm2');
+    const allProcesses = listProcesses();
 
-      if (fs.existsSync(pm2BinPath)) {
-        // Use Node.js to run PM2 directly
-        listResult = execCommand([nodePath, pm2BinPath, 'jlist', '--silent']);
-      } else {
-        // Fallback to npx, but use cmd.exe as shell
-        listResult = execCommand(['cmd', '/c', 'npx', 'pm2', 'jlist', '--silent']);
-      }
-    } else {
-      // On Linux, use the original approach
-      listResult = execCommand([pm2Command, 'pm2', 'jlist', '--silent']);
-    }
+    const filtered = allProcesses.filter(
+      (p) => p.pm2_env?.namespace === namespace
+    );
 
-    if (!listResult.success) {
-      const exitCode = listResult.code || 'unknown';
-      const errorMessage = listResult.error || 'Unknown error';
-      const stderrOutput = listResult.stderr || '';
+    const services = filtered.map((p) => ({
+      name: p.name,
+      id: p.pm_id,
+      pid: p.pid,
+      status: p.pm2_env?.status || 'unknown',
+      namespace: p.pm2_env?.namespace || '',
+      uptime: p.pm2_env?.pm_uptime || 0,
+      memory: p.monit?.memory || 0,
+      cpu: p.monit?.cpu || 0,
+      created_at: p.pm2_env?.created_at || 0,
+    }));
 
-      console.warn(`Failed to get PM2 process list (exit code: ${exitCode}):`);
-      console.warn(`Error message: ${errorMessage}`);
-      if (stderrOutput) console.warn(`Error details: ${stderrOutput}`);
+    const serviceCount = services.length;
+    const serviceNames = services.map((s) => s.name).join(', ');
 
-      return {
-      success: false,
-      error: errorMessage,
-      exitCode: exitCode,
-      stderr: stderrOutput,
-      services: []
-      };
-    }
+    console.log(`Found ${serviceCount} services with namespace '${namespace}': ${serviceNames || 'none'}`);
 
-    try {
-      // Parse the JSON output
-      const allProcesses = JSON.parse(listResult.output);
-      console.log(`Found ${allProcesses.length} total PM2 processes`);
+    if (serviceCount === 0) {
+      const knownServiceNames = ['frontend', 'backend', 'ollama', 'ovms', 'faculty', 'lecturer', 'student'];
+      const byName = allProcesses
+        .filter((p) => knownServiceNames.some((n) => (p.name || '').includes(n)))
+        .map((p) => ({
+          name: p.name,
+          id: p.pm_id,
+          pid: p.pid,
+          status: p.pm2_env?.status || 'unknown',
+          namespace: p.pm2_env?.namespace || '',
+          uptime: p.pm2_env?.pm_uptime || 0,
+          memory: p.monit?.memory || 0,
+          cpu: p.monit?.cpu || 0,
+          created_at: p.pm2_env?.created_at || 0,
+        }));
 
-      // For debugging - save to a cross-platform temp location
-      const tempDir = isWindows ? process.env.TEMP || 'C:\\temp' : '/tmp';
-      const debugFile = path.join(tempDir, 'pm2_all_processes.json');
-      try {
-        fs.writeFileSync(debugFile, JSON.stringify(allProcesses, null, 2));
-        console.log(`Saved all PM2 processes to ${debugFile} for debugging`);
-      } catch (err) {
-        console.warn('Failed to save debug file:', err.message);
-      }
-
-      // Filter processes by namespace
-      const fullServices = allProcesses.filter(process => {
-        const processNamespace = process.pm2_env?.namespace || '';
-        console.log(`Process ${process.name}, namespace: ${processNamespace}`);
-        return process.pm2_env && processNamespace === namespace;
-      });
-
-      // Create simplified service objects without pm2_env
-      const services = fullServices.map(process => {
-        // Get the current timestamp for reference
-        const now = Date.now();
-        const uptime = process.pm2_env?.pm_uptime || 0;
-
-        // Log uptime details for debugging
-        console.log(`Process ${process.name}: Raw uptime value = ${uptime}, Current time = ${now}`);
-
+      if (byName.length > 0) {
         return {
-          name: process.name,
-          id: process.pm_id,
-          pid: process.pid,
-          status: process.pm2_env?.status || 'unknown',
-          namespace: process.pm2_env?.namespace || '',
-          uptime: uptime,
-          memory: process.monit?.memory || 0,
-          cpu: process.monit?.cpu || 0,
-          created_at: process.pm2_env?.created_at || 0
+          success: true,
+          services: byName,
+          serviceCount: byName.length,
+          serviceNames: byName.map((s) => s.name).join(', '),
+          namespace: 'any',
         };
-      });
-
-      const serviceCount = services.length;
-      const serviceNames = services.map(p => p.name).join(', ');
-
-      console.log(`Found ${serviceCount} services with namespace '${namespace}': ${serviceNames || 'none'}`);
-
-      // If no services found with namespace, check for any relevant service names
-      if (serviceCount === 0) {
-        console.log('No services found with specified namespace, checking for known service names...');
-
-        // Known service names we might be looking for
-        const knownServiceNames = ['frontend', 'backend', 'ollama', 'faculty', 'lecturer', 'student'];
-
-        const fullServicesByName = allProcesses.filter(process => {
-          const name = process.name || '';
-          return knownServiceNames.some(knownName => name.includes(knownName));
-        });
-
-        // Create simplified service objects for services by name
-        const servicesByName = fullServicesByName.map(process => {
-          // Get the current timestamp for reference
-          const now = Date.now();
-          const uptime = process.pm2_env?.pm_uptime || 0;
-
-          // Log uptime details for debugging
-          console.log(`Process ${process.name}: Raw uptime value = ${uptime}, Current time = ${now}`);
-
-          return {
-            name: process.name,
-            id: process.pm_id,
-            pid: process.pid,
-            status: process.pm2_env?.status || 'unknown',
-            namespace: process.pm2_env?.namespace || '',
-            uptime: uptime,
-            memory: process.monit?.memory || 0,
-            cpu: process.monit?.cpu || 0,
-            created_at: process.pm2_env?.created_at || 0
-          };
-        });
-
-        if (servicesByName.length > 0) {
-          console.log(`Found ${servicesByName.length} services matching known service names`);
-          return {
-            success: true,
-            services: servicesByName,
-            serviceCount: servicesByName.length,
-            serviceNames: servicesByName.map(p => p.name).join(', '),
-            namespace: 'any'
-          };
-        }
       }
-
-      return {
-        success: true,
-        services,
-        serviceCount,
-        serviceNames,
-        namespace
-      };
-    } catch (parseError) {
-      console.warn('Failed to parse PM2 JSON output:', parseError);
-      return { success: false, error: parseError.message, services: [] };
     }
+
+    return { success: true, services, serviceCount, serviceNames, namespace };
   } catch (error) {
     console.warn('Error getting service list:', error);
     return { success: false, error: error.message, services: [] };
   }
 }
 
-/**
- * Check the status of services
- */
 export function checkServicesStatus() {
   console.log('Checking services status...');
-
   try {
     const { success, services, serviceCount, serviceNames, namespace, error } = getServiceList();
 
@@ -3123,56 +2418,27 @@ export function checkServicesStatus() {
       return { success: false, error, running: false };
     }
 
-    // Save service details to a file for debugging
-    try {
-      const tempDir = isWindows ? process.env.TEMP || 'C:\\temp' : '/tmp';
-      const statusFile = path.join(tempDir, 'service_status.json');
-      fs.writeFileSync(statusFile, JSON.stringify({
-        success,
-        serviceCount,
-        serviceNames,
-        namespace
-      }, null, 2));
-      console.log(`Saved service status to ${statusFile} for debugging`);
-    } catch (err) {
-      console.warn('Failed to save service status to file:', err.message);
-    }
-
     if (serviceCount === 0) {
-      console.log(`No services found with namespace '${namespace}' or matching known service names`);
       return {
         success: true,
         running: false,
-        message: `No services found with namespace '${namespace}' or matching known service names`
+        message: `No services found with namespace '${namespace}'`,
       };
     }
 
-    // Check for services in error state
-    const errorServices = services.filter(service => service.status === 'errored');
-    const errorCount = errorServices.length;
-    const errorNames = errorServices.map(p => p.name).join(', ');
-
-    // Check for services in online state
-    const onlineServices = services.filter(service => service.status === 'online');
-    const onlineCount = onlineServices.length;
-
-    console.log(`Found ${serviceCount} services: ${serviceNames}`);
-    console.log(`Online: ${onlineCount}, Error: ${errorCount}`);
-
-    if (errorCount > 0) {
-      console.warn(`Services in error state: ${errorNames}`);
-    }
+    const errorServices = services.filter((s) => s.status === 'errored');
+    const onlineServices = services.filter((s) => s.status === 'online');
 
     return {
       success: true,
       running: serviceCount > 0,
       servicesCount: serviceCount,
       servicesNames: serviceNames,
-      errorCount,
-      errorNames,
-      onlineCount,
+      errorCount: errorServices.length,
+      errorNames: errorServices.map((s) => s.name).join(', '),
+      onlineCount: onlineServices.length,
       services,
-      namespace
+      namespace,
     };
   } catch (error) {
     console.warn('Error checking services status:', error);
@@ -3180,64 +2446,76 @@ export function checkServicesStatus() {
   }
 }
 
-// Helper function to escape special characters in regex
 function isSafeEnvVarName(name) {
   return /^[A-Z_][A-Z0-9_]{0,200}$/.test(name);
 }
 
-// Helper function to read environment variable from .env file
 function readEnvVariable(varName, defaultValue = '') {
-  // First check environment variable
-  if (process.env[varName] !== undefined) {
-    console.log(`[readEnvVariable] Found ${varName} in process.env: ${process.env[varName]}`);
-    return process.env[varName];
-  }
-
-  // Then try reading from .env file
+  if (process.env[varName] !== undefined) return process.env[varName];
   try {
     const dotenvPath = path.join(ROOT_DIR, '.env');
     if (fs.existsSync(dotenvPath)) {
       const envContent = fs.readFileSync(dotenvPath, 'utf8');
       if (!isSafeEnvVarName(varName)) {
-        console.warn(`Unsafe environment variable name: ${varName}. Using default value.`);
+        console.warn(`Unsafe environment variable name: ${varName}.`);
         return defaultValue;
       }
       const lines = envContent.split('\n');
       for (const line of lines) {
-        // Remove comments and trim
         const cleanLine = line.split('#')[0].trim();
         if (!cleanLine) continue;
         const [key, ...rest] = cleanLine.split('=');
         if (key && key.trim() === varName) {
-          // Join the rest in case value contains '='
           let value = rest.join('=').trim();
-          // Remove any surrounding quotes
           value = value.replace(/^["'](.*)["']$/, '$1').trim();
           return value;
         }
       }
-      console.warn(`[readEnvVariable] ${varName} not found in .env, using default: ${defaultValue}`);
-    } else {
-      console.warn(`[readEnvVariable] .env file not found at: ${dotenvPath}, using default: ${defaultValue}`);
     }
   } catch (error) {
     console.warn(`Error reading ${varName} from .env:`, error);
   }
-
   return defaultValue;
 }
 
-function getPM2Namespace() {
-  const namespace = readEnvVariable('PM2_NAMESPACE', 'latest');
-  console.log(`Using PM2_NAMESPACE: ${namespace}`);
+function getProcessManagerNamespace() {
+  const namespace = readEnvVariable('PROCESS_NAMESPACE', 'latest');
+  console.log(`Using process namespace: ${namespace}`);
   return namespace;
 }
 
-// Command line interface
-const normalizedFilename = __filename.replace(/\\/g, '/');
-const linuxMetaUrl = `file://${normalizedFilename}`
+function delay(ms) {
+  const safeMs = Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(Number(ms))));
+  return new Promise((resolve) => {
+    setTimeout(() => { resolve(); }, safeMs);
+  });
+}
 
-if (import.meta.url === linuxMetaUrl || import.meta.url === `file:///${normalizedFilename}` ) {
+async function waitForProcesses(expectedCount, namespace, timeoutMs = 5000) {
+  const pollInterval = 300;
+  const start = Date.now();
+
+  while (Date.now() - start < timeoutMs) {
+    await delay(pollInterval);
+
+    const processes = listProcesses({ namespace });
+    const onlineCount = processes.filter(
+      (p) => p.pm2_env?.status === 'online'
+    ).length;
+
+    if (onlineCount >= expectedCount) return true;
+  }
+  return false;
+}
+
+// ─── CLI ─────────────────────────────────────────────────────────────────────
+const normalizedFilename = __filename.replace(/\\/g, '/');
+const linuxMetaUrl = `file://${normalizedFilename}`;
+
+if (
+  import.meta.url === linuxMetaUrl ||
+  import.meta.url === `file:///${normalizedFilename}`
+) {
   async function runCLI() {
     try {
       const command = process.argv[2];
@@ -3245,9 +2523,6 @@ if (import.meta.url === linuxMetaUrl || import.meta.url === `file:///${normalize
       const persona = allowedPersonaMap[personaArg] || 'faculty';
       const safePersona = getPersonaFromKey(persona);
       const force = process.argv.includes('--force');
-
-      // Update paths whenever the CLI is invoked directly
-      const { root } = resolvePaths({ persona });
 
       switch (command) {
         case 'build':
@@ -3280,192 +2555,93 @@ if (import.meta.url === linuxMetaUrl || import.meta.url === `file:///${normalize
         case 'start-no-provider':
           await startServicesNoProvider(safePersona);
           break;
-        case 'stop':
-          // Check for force flag (either as --force or -f)
-          const forceStop = process.argv.includes('--force') || process.argv.includes('-f') || process.env.FORCE === 'true';
+        case 'stop': {
+          const forceStop =
+            process.argv.includes('--force') ||
+            process.argv.includes('-f') ||
+            process.env.FORCE === 'true';
           await stopServices(forceStop);
           break;
-        case 'status':
-      try {
-        // Check for output format options
-        const jsonFormat = process.argv.includes('--json') || process.argv.includes('-j');
-        const quietMode = process.argv.includes('--quiet') || process.argv.includes('-q');
-        const humanReadable = process.argv.includes('--human') || process.argv.includes('-h');
+        }
+        case 'status': {
+          try {
+            const jsonFormat = process.argv.includes('--json') || process.argv.includes('-j');
+            const quietMode = process.argv.includes('--quiet') || process.argv.includes('-q');
+            const humanReadable = process.argv.includes('--human') || process.argv.includes('-h');
 
-        // In quiet mode, disable console logging temporarily
-        if (quietMode) {
-          // Save the original console.log and console.warn functions
-          const originalConsoleLog = console.log;
-          const originalConsoleWarn = console.warn;
-
-          // Temporarily disable console output for getting service status
-          console.log = () => {};
-          console.warn = () => {};
-
-          // Get service status silently
-          const status = checkServicesStatus();
-
-          // Restore console functions
-          console.log = originalConsoleLog;
-          console.warn = originalConsoleWarn;
-
-          // Output based on format requested
-          if (humanReadable) {
-            // Output human-readable format for service details
-            if (status.success && status.running) {
-              console.log(`Status: ${status.servicesCount} services running with namespace '${status.namespace}'`);
-              console.log(`Services: ${status.servicesNames}`);
-              console.log(`Online: ${status.onlineCount}, Error: ${status.errorCount}`);
-
-              if (status.services && status.services.length > 0) {
-                console.log("\nService details:");
-                console.log("---------------------------------------------");
-
-                status.services.forEach(service => {
-                  // Calculate uptime more reliably
-                  let uptimeStr = 'Unknown';
-                  const now = Date.now();
-
-                  if (service.uptime && typeof service.uptime === 'number') {
-                    // PM2 uptime is typically the timestamp when the process was started
-                    const uptimeSeconds = Math.max(0, (now - service.uptime) / 1000);
-
-                    // Format the uptime in a human-readable way
-                    if (uptimeSeconds < 60) {
-                      uptimeStr = `${Math.floor(uptimeSeconds)} seconds`;
-                    } else if (uptimeSeconds < 3600) {
-                      const minutes = Math.floor(uptimeSeconds / 60);
-                      const seconds = Math.floor(uptimeSeconds % 60);
-                      uptimeStr = `${minutes} minute${minutes !== 1 ? 's' : ''} ${seconds} second${seconds !== 1 ? 's' : ''}`;
-                    } else if (uptimeSeconds < 86400) {
-                      const hours = Math.floor(uptimeSeconds / 3600);
-                      const minutes = Math.floor((uptimeSeconds % 3600) / 60);
-                      uptimeStr = `${hours} hour${hours !== 1 ? 's' : ''} ${minutes} minute${minutes !== 1 ? 's' : ''}`;
-                    } else {
-                      const days = Math.floor(uptimeSeconds / 86400);
-                      const hours = Math.floor((uptimeSeconds % 86400) / 3600);
-                      uptimeStr = `${days} day${days !== 1 ? 's' : ''} ${hours} hour${hours !== 1 ? 's' : ''}`;
-                    }
-                  }
-
-                  // Convert memory to MB
-                  const memoryMB = Math.floor((service.memory || 0) / 1024 / 1024);
-
-                  console.log(`Name: ${service.name}`);
-                  console.log(`Status: ${service.status}`);
-                  console.log(`Uptime: ${uptimeStr}`);
-                  console.log(`Memory: ${memoryMB} MB`);
-                  console.log(`CPU: ${service.cpu || 0}%`);
-                  console.log("---------------------------------------------");
-                });
-
-                if (status.errorCount > 0) {
-                  console.log(`Services in error state: ${status.errorNames}`);
-                }
-              }
-            } else if (status.success) {
-              console.log(`No services found running with namespace '${status.namespace}' or matching known service names`);
+            let status;
+            if (quietMode) {
+              const origLog = console.log;
+              const origWarn = console.warn;
+              console.log = () => {};
+              console.warn = () => {};
+              status = checkServicesStatus();
+              console.log = origLog;
+              console.warn = origWarn;
             } else {
-              console.log(`Failed to check service status: ${status.error}`);
+              status = checkServicesStatus();
             }
-          } else {
-            // Output only the JSON with no other logging
-            console.log(JSON.stringify(status, null, 2));
-          }
-        } else {
-          // Normal mode with logging
-          const status = checkServicesStatus();
 
-          if (jsonFormat) {
-            // Only print JSON output for programmatic consumption (tests, etc.)
-            console.log(JSON.stringify(status, null, 2));
-          } else {
-            // Human-readable output
-            if (status.success) {
-              if (status.running) {
-                console.log(`Status: ${status.servicesCount} services running with namespace '${status.namespace}'`);
+            const formatUptime = (uptime) => {
+              if (!uptime || typeof uptime !== 'number') return 'Unknown';
+              const secs = Math.max(0, (Date.now() - uptime) / 1000);
+              if (secs < 60) return `${Math.floor(secs)} seconds`;
+              if (secs < 3600) {
+                const m = Math.floor(secs / 60), s = Math.floor(secs % 60);
+                return `${m} minute${m !== 1 ? 's' : ''} ${s} second${s !== 1 ? 's' : ''}`;
+              }
+              if (secs < 86400) {
+                const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60);
+                return `${h} hour${h !== 1 ? 's' : ''} ${m} minute${m !== 1 ? 's' : ''}`;
+              }
+              const d = Math.floor(secs / 86400), h = Math.floor((secs % 86400) / 3600);
+              return `${d} day${d !== 1 ? 's' : ''} ${h} hour${h !== 1 ? 's' : ''}`;
+            };
+
+            const printHuman = (status) => {
+              if (status.success && status.running) {
+                console.log(`Status: ${status.servicesCount} services running (namespace: '${status.namespace}')`);
                 console.log(`Services: ${status.servicesNames}`);
                 console.log(`Online: ${status.onlineCount}, Error: ${status.errorCount}`);
-
-                // Display detailed service information
-                console.log("\nDetailed service information:");
-                console.log("---------------------------------------------");
-
-                status.services.forEach(service => {
-                  // Calculate uptime more reliably
-                  let uptimeStr = 'Unknown';
-                  const now = Date.now();
-
-                  if (service.uptime && typeof service.uptime === 'number') {
-                    // PM2 uptime is typically the timestamp when the process was started
-                    const uptimeSeconds = Math.max(0, (now - service.uptime) / 1000);
-
-                    // Format the uptime in a human-readable way
-                    if (uptimeSeconds < 60) {
-                      uptimeStr = `${Math.floor(uptimeSeconds)} seconds`;
-                    } else if (uptimeSeconds < 3600) {
-                      const minutes = Math.floor(uptimeSeconds / 60);
-                      const seconds = Math.floor(uptimeSeconds % 60);
-                      uptimeStr = `${minutes} minute${minutes !== 1 ? 's' : ''} ${seconds} second${seconds !== 1 ? 's' : ''}`;
-                    } else if (uptimeSeconds < 86400) {
-                      const hours = Math.floor(uptimeSeconds / 3600);
-                      const minutes = Math.floor((uptimeSeconds % 3600) / 60);
-                      uptimeStr = `${hours} hour${hours !== 1 ? 's' : ''} ${minutes} minute${minutes !== 1 ? 's' : ''}`;
-                    } else {
-                      const days = Math.floor(uptimeSeconds / 86400);
-                      const hours = Math.floor((uptimeSeconds % 86400) / 3600);
-                      uptimeStr = `${days} day${days !== 1 ? 's' : ''} ${hours} hour${hours !== 1 ? 's' : ''}`;
-                    }
-                  }
-
-                  // Convert memory to MB
-                  const memoryMB = Math.floor((service.memory || 0) / 1024 / 1024);
-
-                  console.log(`Name: ${service.name}`);
-                  console.log(`Status: ${service.status}`);
-                  console.log(`Uptime: ${uptimeStr}`);
-                  console.log(`Memory: ${memoryMB} MB`);
-                  console.log(`CPU: ${service.cpu || 0}%`);
-                  console.log("---------------------------------------------");
-                });
-
-                if (status.errorCount > 0) {
-                  console.log(`Services in error state: ${status.errorNames}`);
+                if (status.services?.length > 0) {
+                  console.log('\nService details:');
+                  console.log('---------------------------------------------');
+                  status.services.forEach((svc) => {
+                    console.log(`Name:   ${svc.name}`);
+                    console.log(`Status: ${svc.status}`);
+                    console.log(`Uptime: ${formatUptime(svc.uptime)}`);
+                    console.log(`Memory: ${Math.floor((svc.memory || 0) / 1024 / 1024)} MB`);
+                    console.log(`CPU:    ${svc.cpu || 0}%`);
+                    console.log('---------------------------------------------');
+                  });
+                  if (status.errorCount > 0) console.log(`Error services: ${status.errorNames}`);
                 }
+              } else if (status.success) {
+                console.log(`No services found running (namespace: '${status.namespace}')`);
               } else {
-                console.log(`No services found running with namespace '${status.namespace}' or matching known service names`);
+                console.log(`Failed to check service status: ${status.error}`);
               }
+            };
+
+            if (humanReadable || (!jsonFormat && !quietMode)) {
+              printHuman(status);
             } else {
-              console.log(`Failed to check service status: ${status.error}`);
+              console.log(JSON.stringify(status, null, 2));
             }
+          } catch (error) {
+            console.log(JSON.stringify({
+              success: false,
+              error: error.message,
+              running: false,
+              timestamp: new Date().toISOString(),
+            }, null, 2));
           }
+          break;
         }
-      } catch (error) {
-        // Check if we're in quiet mode
-        const quietMode = process.argv.includes('--quiet') || process.argv.includes('-q');
-
-        // Ensure we always output valid JSON in case of unexpected errors
-        const errorOutput = {
-          success: false,
-          error: error.message,
-          running: false,
-          timestamp: new Date().toISOString()
-        };
-
-        // Output the JSON error
-        console.log(JSON.stringify(errorOutput, null, 2));
-
-        // Only show error message if not in quiet mode
-        if (!quietMode) {
-          console.error(`Error during status check: ${error.message}`);
-        }
-      }
-      break;
         case 'test':
           console.log('Test command working');
           break;
         case 'uninstall':
-          // uninstallServices() - this function doesn't exist, so just log for now
           console.log('Uninstall functionality not yet implemented');
           break;
         default:
@@ -3477,24 +2653,20 @@ Commands:
   create-package <persona> Create a distribution package for a specific persona
   setup-backend            Setup backend environment
   start-backend            Start backend server
-  start-frontend           Start frontend server
   setup-ollama             Setup Ollama
   start-ollama             Start Ollama
   setup-ovms               Setup OpenVINO Model Server (OVMS)
   start-ovms               Start OpenVINO Model Server (OVMS)
   start <persona>          Start all services for a specific persona
+  start-no-provider        Start frontend and backend only (no AI provider)
   stop                     Stop all services
-  status                   Check status of all services with configured namespace
-  uninstall                Uninstall all services
+  status                   Check status of all services
 
 Options:
-  --force                  Force rebuild/recreate even if already exists
-                           For 'stop' command: remove services instead of just stopping them
-  --json, -j               For 'status' command: Output in JSON format (useful for scripts)
-  --quiet, -q              For 'status' command: Suppress all logging, output only JSON
-                           (ideal for automated testing and CI/CD pipelines)
-  --human, -h              For 'status' command: Display human-readable output
-                           Can be combined with --quiet to get clean human-readable output
+  --force                  Force rebuild/recreate
+  --json, -j               Output status in JSON format
+  --quiet, -q              Suppress logging, output only JSON
+  --human, -h              Human-readable status output
 `);
       }
     } catch (error) {
@@ -3504,7 +2676,6 @@ Options:
     }
   }
 
-  // Run the CLI
   runCLI().catch((error) => {
     console.error('Unhandled error in CLI:', error);
     process.exit(1);

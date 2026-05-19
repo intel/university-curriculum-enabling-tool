@@ -117,7 +117,7 @@ if (Test-GPUCompatibility) {
     if (Test-Path $NodeBin) {
         # & $NodeBin 'scripts\utils.mjs' 'start' $Persona
         Write-Host "TESTING: Starting without AI provider services..."
-        & $NodeBin 'scripts\utils.mjs' 'start-no-provider' $Persona
+        & $NodeBin 'scripts\utils.mjs' 'start' $Persona
     } else {
         Write-Host "Error: Local Node.js installation not found. Please run the install script first."
         exit 1
@@ -147,7 +147,7 @@ if (Test-GPUCompatibility) {
         Write-Host ""
         # Use local Node.js to start only frontend and backend
         if (Test-Path $NodeBin) {
-            & $NodeBin 'scripts\utils.mjs' 'start-no-provider' $Persona
+            & $NodeBin 'scripts\utils.mjs' 'start' $Persona
         } else {
             Write-Host "Error: Local Node.js installation not found. Please run the install script first."
             exit 1
