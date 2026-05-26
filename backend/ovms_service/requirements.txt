@@ -1,20 +1,37 @@
-# --extra-index-url "https://download.pytorch.org/whl/cpu"
-# --extra-index-url "https://storage.openvinotoolkit.org/simple/wheels/nightly"
-# --extra-index-url "https://storage.openvinotoolkit.org/simple/wheels/pre-release"
-# optimum-intel@git+https://github.com/huggingface/optimum-intel.git
-optimum-intel@git+https://github.com/huggingface/optimum-intel.git@main
-openvino-tokenizers>=2026.1.0.0
-openvino>=2026.1.0
-nncf>=3.1.0 
-sentence_transformers
-sentencepiece==0.2.1
-openai 
+--extra-index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+--extra-index-url https://storage.openvinotoolkit.org/simple/wheels/pre-release
+
+openvino==2026.0.0
+openvino-tokenizers==2026.0.0.0
+
+optimum>=1.23.0
+
+# Main Branch Commit 423b423 , Apr 15 2026
+optimum-intel[openvino]@git+https://github.com/huggingface/optimum-intel.git@423b4237df4d51efe077675eb1c531ffe4c82c83
+
+nncf>=3.1.0
+
 transformers==5.0.0
+tokenizers>=0.19.0
+safetensors>=0.4.0
+
+sentence-transformers==5.2.0
+sentencepiece==0.2.1
+
+torch>=2.2.0
+torchvision>=0.17.0
+
+huggingface_hub>=0.36.0
+
 einops
-torchvision
 timm==1.0.15
+
 diffusers==0.38.0
-black
-uvicorn
-huggingface_hub[cli]>=1.13.0
+
 modgraph==0.2.2
+
+openai
+uvicorn
+
+black
