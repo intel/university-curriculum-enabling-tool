@@ -215,16 +215,32 @@ def run_optimum_command(command_args):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",       
         )
-        for line in process.stdout:
-            print(line, end="")  # or handle line however you want
-        for line in process.stderr:
-            print(line, end="")  # or handle line however you want
+        import threading
 
-        process.stderr.close()
-        process.stdout.close()
+        def drain_stdout():
+            for line in process.stdout:
+                print(line, end="", flush=True)
+            process.stdout.close()
+
+        def drain_stderr():
+            for line in process.stderr:
+                print(line, end="", flush=True)
+            process.stderr.close()
+
+        stdout_thread = threading.Thread(target=drain_stdout)
+        stderr_thread = threading.Thread(target=drain_stderr)
+
+        stdout_thread.start()
+        stderr_thread.start()
+
+        stdout_thread.join()
+        stderr_thread.join()
+
         process.wait()
         return process.returncode
+
     except subprocess.CalledProcessError as e:
         print(f"Command failed: {' '.join(full_command)}")
         print(f"Error: {e.stderr}")
@@ -235,8 +251,7 @@ def run_optimum_command(command_args):
         )
         print(f"Tried to run: {' '.join(full_command)}")
         return 1
-
-
+        
 def export_rerank_tokenizer(source_model, destination_path, max_length):
     hf_tokenizer = AutoTokenizer.from_pretrained(source_model)
     hf_tokenizer.model_max_length = max_length

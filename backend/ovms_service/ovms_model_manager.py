@@ -9,9 +9,10 @@ import os
 import sys
 import json
 import shutil
+import subprocess # nosec
 from pathlib import Path
 from typing import Dict, Optional, Literal
-from huggingface_hub import snapshot_download
+from huggingface_hub import snapshot_download, list_repo_files
 
 from export_model import (
     export_text_generation_model,
@@ -26,7 +27,6 @@ from util import (
     break_taint_chain,
 )
 
-# Use UTF-8 for IO to avoid UnicodeEncodeError on Windows
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
@@ -35,16 +35,7 @@ TaskType = Literal["embeddings", "reranking", "text_generation"]
 
 
 def detect_task_from_env_var(env_var_name: str) -> TaskType:
-    """
-    Detect task type from environment variable name.
-
-    Examples:
-        OVMS_EMBEDDING_MODEL -> embeddings
-        OVMS_RERANKING_MODEL -> reranking
-        OVMS_LLM_MODEL -> text_generation
-    """
     env_var_upper = env_var_name.upper()
-
     if "EMBEDDING" in env_var_upper:
         return "embeddings"
     elif "RERANK" in env_var_upper:
@@ -54,40 +45,171 @@ def detect_task_from_env_var(env_var_name: str) -> TaskType:
 
 
 def detect_task_from_model_id(model_id: str) -> TaskType:
-    """
-    Detect task type from model ID patterns.
-    Fallback method when env variable name isn't available.
-    """
     model_lower = model_id.lower()
 
-    # Reranking patterns (check first as some contain "embed")
     reranking_patterns = ["rerank", "bge-reranker", "cross-encoder"]
     if any(pattern in model_lower for pattern in reranking_patterns):
         return "reranking"
 
-    # Embedding patterns
     embedding_patterns = [
-        "bge-",
-        "gte-",
-        "e5-",
-        "embedding",
-        "embed",
-        "sentence-transformers",
-        "all-minilm",
-        "all-mpnet",
+        "bge-", "gte-", "e5-", "embedding", "embed",
+        "sentence-transformers", "all-minilm", "all-mpnet",
     ]
     if any(pattern in model_lower for pattern in embedding_patterns):
         return "embeddings"
 
-    # Default to text generation
     return "text_generation"
 
 
+def is_sentence_transformer_model(model_id: str) -> bool:
+    """
+    Check if a model is a SentenceTransformer model by inspecting
+    its files on HuggingFace Hub.
+    """
+    try:
+        repo_files = list(list_repo_files(model_id))
+
+        st_indicators = [
+            "modules.json",
+            "sentence_bert_config.json",
+            "1_Pooling/config.json",
+        ]
+
+        for indicator in st_indicators:
+            if indicator in repo_files:
+                print(f"  Detected SentenceTransformer model (found: {indicator})")
+                return True
+
+        return False
+
+    except Exception as e:
+        print(f"  Warning: Could not check model type remotely: {e}")
+        # Fall back to pattern matching
+        model_lower = model_id.lower()
+        st_patterns = [
+            "sentence-transformers/",
+            "bge-", "gte-", "e5-",
+            "all-minilm", "all-mpnet",
+        ]
+        return any(p in model_lower for p in st_patterns)
+
+
+def extract_base_model_from_sentence_transformer(
+    model_id: str,
+    hf_cache_dir: str,
+) -> str:
+    """
+    Extract the underlying HuggingFace transformer model from a
+    SentenceTransformer wrapper and save it to a stable directory.
+
+    optimum-cli cannot handle SentenceTransformer wrapper models directly.
+    This extracts the base BertModel so optimum-cli can process it.
+
+    Returns the path to the extracted base model.
+    """
+    print(f"  Extracting base transformer from SentenceTransformer: {model_id}", flush=True)
+
+    safe_name = model_id.replace("/", "_")
+    base_model_dir = os.path.join(hf_cache_dir, f"_st_base_{safe_name}")
+
+    if os.path.exists(base_model_dir) and os.listdir(base_model_dir):
+        print(f"  Using cached base model extraction: {base_model_dir}", flush=True)
+        return base_model_dir
+
+    os.makedirs(base_model_dir, exist_ok=True)
+
+    safe_base_model_dir = base_model_dir.replace("\\", "/")
+
+    extract_script = f"""
+import sys
+import os
+
+try:
+    from sentence_transformers import SentenceTransformer
+    from transformers import AutoTokenizer
+
+    model_id = "{model_id}"
+    output_dir = "{safe_base_model_dir}"
+
+    print(f"Loading SentenceTransformer: {{model_id}}", flush=True)
+    st_model = SentenceTransformer(model_id)
+
+    transformer_module = st_model[0]
+    base_model = transformer_module.auto_model
+    tokenizer = transformer_module.tokenizer
+
+    print(f"Saving base model to: {{output_dir}}", flush=True)
+    base_model.save_pretrained(output_dir)
+    tokenizer.save_pretrained(output_dir)
+
+    print(f"Base model architecture: {{type(base_model).__name__}}", flush=True)
+    print("Extraction complete", flush=True)
+    sys.exit(0)
+
+except ImportError:
+    print("sentence-transformers not available, trying direct AutoModel load...", flush=True)
+    from transformers import AutoModel, AutoTokenizer
+
+    model = AutoModel.from_pretrained("{model_id}")
+    tokenizer = AutoTokenizer.from_pretrained("{model_id}")
+
+    model.save_pretrained("{safe_base_model_dir}")
+    tokenizer.save_pretrained("{safe_base_model_dir}")
+    print("Direct AutoModel extraction complete", flush=True)
+    sys.exit(0)
+
+except Exception as e:
+    print(f"Extraction failed: {{e}}", file=sys.stderr, flush=True)
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+"""
+
+    script_path = os.path.join(hf_cache_dir, "_extract_st_base.py")
+
+    # Fix: explicit utf-8 encoding for Windows file writing
+    with open(script_path, "w", encoding="utf-8") as f:
+        f.write(extract_script)
+
+    venv_python = sys.executable
+
+    try:
+        process = subprocess.Popen(
+            [venv_python, script_path],
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+            text=True,
+            encoding="utf-8",
+        )
+
+        try:
+            returncode = process.wait(timeout=600)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            raise RuntimeError(
+                "Model extraction timed out after 600 seconds."
+            )
+
+    finally:
+        if os.path.exists(script_path):
+            os.remove(script_path)
+
+    if returncode != 0:
+        shutil.rmtree(base_model_dir, ignore_errors=True)
+        raise RuntimeError(
+            f"Failed to extract base model from SentenceTransformer "
+            f"(exit code {returncode}). Check logs above for details."
+        )
+
+    print(f"  ✓ Base model extracted to: {base_model_dir}", flush=True)
+
+    return base_model_dir
+    
 class OVMSModelManager:
     """Manages OVMS model downloads, conversions, and configuration."""
 
     def __init__(self):
-        # Set up cache directories
         home_dir = os.path.expanduser("~")
         ucet_dir = os.path.join(home_dir, ".ucet")
 
@@ -95,13 +217,11 @@ class OVMSModelManager:
         self.ovms_cache_dir = os.path.join(ucet_dir, "models", "ovms")
         self.config_path = os.path.join(self.ovms_cache_dir, "config.json")
 
-        # Validate and create directories
         self.hf_cache_dir = validate_and_sanitize_cache_dir(self.hf_cache_dir)
         self.ovms_cache_dir = validate_and_sanitize_cache_dir(self.ovms_cache_dir)
         create_cache_directory(self.hf_cache_dir)
         create_cache_directory(self.ovms_cache_dir)
 
-        # Ensure config file exists
         self._ensure_config_exists()
 
     def _ensure_config_exists(self):
@@ -129,29 +249,14 @@ class OVMSModelManager:
         task: TaskType,
         precision: str = "int8",
         device: str = "CPU",
-        max_doc_length: int = 16000,  # For reranking models
-        downloaded_path: Optional[str] = None,  # Path to downloaded model
+        max_doc_length: int = 16000,
+        downloaded_path: Optional[str] = None,
     ) -> str:
         """
         Export model to OpenVINO IR format with proper directory structure.
-
-        Args:
-            model_id: HuggingFace model ID
-            task: Task type (embeddings, reranking, text_generation)
-            precision: Model precision (default: int8)
-            device: Target device (default: CPU)
-            max_doc_length: Maximum document length in tokens (for reranking models, default: 16000)
-            downloaded_path: Path to the downloaded model (for pre-converted models)
-
-        Returns:
-            Path to the exported model directory
         """
         validated_model_id = validate_and_sanitize_model_id(model_id)
-
-        # Determine source_model based on whether it's pre-converted or needs conversion
-        # For pre-converted OpenVINO models (already have openvino_model.xml), use downloaded path
-        # For regular HuggingFace models that need conversion, use the model ID so optimum-cli can download/convert
-        source_model = validated_model_id  # Default: use model ID for optimum-cli
+        source_model = validated_model_id
 
         if downloaded_path and (
             os.path.isfile(os.path.join(downloaded_path, "openvino_model.xml"))
@@ -159,11 +264,28 @@ class OVMSModelManager:
                 os.path.join(downloaded_path, "openvino_language_model.xml")
             )
         ):
-            # Pre-converted OpenVINO model found - use the downloaded path
+            # Pre-converted OpenVINO model — use downloaded path directly
             source_model = downloaded_path
             print(f"Using pre-converted OpenVINO model from: {downloaded_path}")
 
-        # Model directory: e.g. ~/.ucet/models/ovms/BAAI/bge-base-en-v1.5/
+        elif task in ("embeddings", "reranking") and not downloaded_path:
+            try:
+                if is_sentence_transformer_model(validated_model_id):
+                    print(
+                        f"SentenceTransformer model detected for '{validated_model_id}'.\n"
+                        f"Extracting base transformer model before OpenVINO export..."
+                    )
+                    source_model = extract_base_model_from_sentence_transformer(
+                        validated_model_id,
+                        self.hf_cache_dir,
+                    )
+                    print(f"Using extracted base model path: {source_model}")
+            except Exception as e:
+                print(
+                    f"Warning: SentenceTransformer extraction failed: {e}\n"
+                    f"Falling back to direct model ID export (may fail)."
+                )
+
         model_provider = model_id.split("/")[0] if "/" in model_id else "local"
         model_name = model_id.split("/")[-1] if "/" in model_id else model_id
         model_dir = os.path.join(self.ovms_cache_dir, model_provider, model_name)
@@ -171,7 +293,6 @@ class OVMSModelManager:
         print(f"Exporting model to: {model_dir}")
         print(f"Task: {task}, Precision: {precision}, Device: {device}")
 
-        # Task parameters (common across all tasks)
         task_parameters = {
             "target_device": device,
             "pipeline_type": "LM" if task == "text_generation" else None,
@@ -193,11 +314,10 @@ class OVMSModelManager:
             ),
         }
 
-        # Export based on task
         if task == "embeddings":
             export_embeddings_model(
-                source_model=source_model,
-                model_name=model_id,
+                source_model=source_model,      # Extracted base model or HF ID
+                model_name=model_id,            # Keep original ID for OVMS config
                 model_repository_path=self.ovms_cache_dir,
                 precision=precision,
                 task_parameters=task_parameters,
@@ -208,8 +328,8 @@ class OVMSModelManager:
             )
         elif task == "reranking":
             export_rerank_model(
-                source_model=source_model,
-                model_name=model_id,
+                source_model=source_model,      # Extracted base model or HF ID
+                model_name=model_id,            # Keep original ID for OVMS config
                 model_repository_path=self.ovms_cache_dir,
                 precision=precision,
                 task_parameters=task_parameters,
@@ -218,7 +338,7 @@ class OVMSModelManager:
                 max_doc_length=max_doc_length,
                 overwrite_models=False,
             )
-        else:  # text_generation
+        else:
             export_text_generation_model(
                 source_model=source_model,
                 model_name=model_id,
@@ -237,27 +357,15 @@ class OVMSModelManager:
         task: Optional[TaskType] = None,
         precision: str = "int8",
         device: str = "CPU",
-        max_doc_length: int = 16000,  # For reranking models
+        max_doc_length: int = 16000,
     ) -> Dict[str, str]:
         """
         Ensure model is downloaded, exported, and configured for OVMS.
-
-        Args:
-            model_id: HuggingFace model ID
-            task: Task type (auto-detected from model_id if not provided)
-            precision: Model precision (default: int8)
-            device: Target device (default: CPU)
-            max_doc_length: Maximum document length in tokens (for reranking models, default: 16000)
-
-        Returns:
-            Dict with status information
         """
-        # Auto-detect task if not provided
         if task is None:
             task = detect_task_from_model_id(model_id)
             print(f"Auto-detected task: {task}")
 
-        # Check if already configured
         if self.is_model_configured(model_id):
             print(f"✓ Model {model_id} is already configured")
             return {"status": "already_configured", "model_id": model_id, "task": task}
@@ -274,7 +382,6 @@ class OVMSModelManager:
                 f"Non-OpenVINO HuggingFace model detected - will use optimum-cli for conversion"
             )
 
-        # Export model
         try:
             model_dir = self.export_model(
                 model_id, task, precision, device, max_doc_length, downloaded_path
@@ -297,7 +404,6 @@ class OVMSModelManager:
         with open(self.config_path, "r") as f:
             config = json.load(f)
 
-        # Check mediapipe_config_list
         for entry in config.get("mediapipe_config_list", []):
             if entry.get("name") == model_id:
                 return True
@@ -317,23 +423,14 @@ class OVMSModelManager:
                 entry["name"] for entry in config.get("mediapipe_config_list", [])
             ],
             "direct_models": [
-                entry["config"]["name"] for entry in config.get("model_config_list", [])
+                entry["config"]["name"]
+                for entry in config.get("model_config_list", [])
             ],
         }
 
 
 def setup_model_from_env(env_var_name: str, model_id: str, **kwargs) -> Dict:
-    """
-    Helper function to setup a model based on environment variable.
-
-    Args:
-        env_var_name: Name of the env variable (e.g., "OVMS_EMBEDDING_MODEL")
-        model_id: Model ID from the env variable value
-        **kwargs: Additional arguments (precision, device, etc.)
-
-    Returns:
-        Dict with status information
-    """
+    """Helper function to setup a model based on environment variable."""
     task = detect_task_from_env_var(env_var_name)
     print(f"Setting up model from {env_var_name}: {model_id}")
     print(f"Detected task: {task}")
@@ -343,8 +440,6 @@ def setup_model_from_env(env_var_name: str, model_id: str, **kwargs) -> Dict:
 
 
 if __name__ == "__main__":
-    # Example usage - supports both positional and argparse style
-    import sys
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -365,7 +460,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--precision", default="int8", help="Model precision (default: int8)"
     )
-    parser.add_argument("--device", default="CPU", help="Target device (default: CPU)")
+    parser.add_argument(
+        "--device", default="CPU", help="Target device (default: CPU)"
+    )
     parser.add_argument(
         "--max-doc-length",
         dest="max_doc_length",
@@ -376,7 +473,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Determine model_id (positional takes precedence)
     model_id = args.model_id or args.model_id_arg
     if not model_id:
         print("Error: model_id is required")
@@ -386,10 +482,8 @@ if __name__ == "__main__":
         )
         sys.exit(1)
 
-    # Determine task (positional takes precedence)
     task = args.task or args.task_arg
 
-    # Sanitize parsed args (validates model_id, task, precision, and device)
     try:
         model_id, task, precision, device = sanitize_parsed_args(
             model_id, task, args.precision, args.device
@@ -398,7 +492,6 @@ if __name__ == "__main__":
         print("Invalid arguments:", e)
         sys.exit(2)
 
-    # Break taint chain using utility function
     sanitized_model_id = break_taint_chain(model_id)
 
     print(f"{'='*60}")
