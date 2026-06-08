@@ -1,0 +1,145 @@
+site_name: University Curriculum Enabling Tool
+site_url: https://intel.github.io/university-curriculum-enabling-tool/
+site_description: >-
+  University Curriculum Enabling Tool is an advanced application leveraging fine-tuned Language Models and Retrieval Augmented Generation (RAG) technology to support diverse academic needs.
+repo_name: intel/university-curriculum-enabling-tool
+repo_url: https://github.com/intel/university-curriculum-enabling-tool
+docs_dir: docs/
+
+# Copyright
+copyright: Copyright &copy; 2025 Intel Corporation
+
+# Configuration
+theme:
+  name: material
+  custom_dir: docs/overrides
+  language: en
+  palette:
+    - scheme: default
+      primary: white
+      accent: white
+  favicon: assets/images/logo.svg
+  font:
+    text: Roboto
+    code: Roboto Mono
+  
+  # Features
+  features:
+    - announce.dismiss
+    - content.action.edit
+    - content.action.view
+    - content.code.annotate
+    - content.code.copy
+    - content.tabs.link
+    - content.tooltips
+    - navigation.expand
+    - navigation.footer
+    - navigation.indexes
+    - navigation.instant
+    - navigation.instant.prefetch
+    - navigation.sections
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - navigation.tracking
+    - search.highlight
+    - search.share
+    - search.suggest
+    - toc.follow
+
+# Custom color schemes
+extra_css:
+- stylesheets/extra.css
+
+# Plugins
+plugins:
+  - search:
+      separator: '[\s\-,:!=\[\]()"`/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
+  - mike:
+      alias_type: symlink
+      redirect_template: null
+      deploy_prefix: ''
+      canonical_version: null
+      version_selector: true
+      css_dir: css
+      javascript_dir: js
+  # - minify:
+  #     minify_html: true
+
+# Customization
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/intel/university-curriculum-enabling-tool
+  generator: false
+  version:
+    provider: mike
+
+# Extensions
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.betterem:
+      smart_enable: all
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.magiclink:
+      normalize_issue_symbols: true
+      repo_url_shorthand: true
+      user: squidfunk
+      repo: mkdocs-material
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.snippets:
+      auto_append:
+        - includes/mkdocs.md
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+      combine_header_slug: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+# Page tree
+nav:
+  - Home: index.md
+  - Getting Started:
+    - getting-started/index.md
+    - Quick Start: getting-started/quick-start.md
+  - Guides: 
+    - Overview: guides/index.md
+    - User Guide: 
+      - Curriculum Builder: guides/user-guides/curriculum-builder.md
+      - Expert Advisor: guides/user-guides/expert-advisor.md
+      - Learning Companion: guides/user-guides/learning-companion.md
+    - Troubleshooting: guides/troubleshooting.md
+  - About:
+    - Overview:  about/index.md
+    - License: about/license.md
+    - Support: about/support.md
+    - Changelog: about/changelog.md
