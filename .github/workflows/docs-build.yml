@@ -1,0 +1,217 @@
+name: Docs Build
+
+on:
+  push:
+    branches:
+      - main
+      - release/*
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'requirements-docs.txt'
+      - '.github/workflows/docs-build.yml'
+  pull_request:
+    branches:
+      - main
+      - release/*
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'requirements-docs.txt'
+      - '.github/workflows/docs-build.yml'
+  workflow_dispatch:
+
+# Permissions are scoped at job level for least privilege
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Setup runner configuration
+  setup:
+    name: Setup Runner Configuration
+    runs-on: ubuntu-latest
+    
+    env:
+      EXTERNAL_REPO: 'intel/university-curriculum-enabling-tool'
+    
+    outputs:
+      runner_labels: ${{ steps.configure.outputs.runner_labels }}
+    
+    steps:
+      - name: Configure runner settings
+        id: configure
+        run: |
+          if [[ "${{ github.repository }}" == "${{ env.EXTERNAL_REPO }}" ]]; then
+            RUNNER_LABELS='["ubuntu-latest"]'
+            echo "Repository type: External"
+            echo "Repository: ${{ github.repository }}"
+          else
+            # Internal repo: use self-hosted runner with 'vm' label
+            RUNNER_LABELS='["self-hosted", "vm"]'
+            echo "Repository type: Internal"
+            echo "Repository: ${{ github.repository }}"
+          fi
+          
+          echo "runner_labels=${RUNNER_LABELS}" >> $GITHUB_OUTPUT
+          echo "Runner configuration: ${RUNNER_LABELS}"
+      
+      - name: Generate configuration summary
+        run: |
+          echo "## ⚙️ Runner Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Repository | \`${{ github.repository }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| External Repo | \`${{ env.EXTERNAL_REPO }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Runner Labels | \`${{ steps.configure.outputs.runner_labels }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+  # Detect version information
+  detect-version:
+    name: Detect Version Information
+    needs: setup
+    runs-on: ${{ fromJSON(needs.setup.outputs.runner_labels) }}
+    permissions:
+      contents: read  # Only read access needed for checkout
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      title: ${{ steps.version.outputs.title }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      
+      - name: Detect version from branch
+        id: version
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}  # Prevent injection via env var
+        run: |
+          echo "[INFO] Detecting version information..."
+          
+          BRANCH_NAME="${GITHUB_REF_NAME}"
+          echo "Branch: ${BRANCH_NAME}"
+          
+          # Determine version based on branch
+          if [[ "${BRANCH_NAME}" == "main" ]]; then
+            VERSION="main"
+            TITLE="main (dev)"
+            echo "[INFO] Main branch detected"
+          elif [[ "${BRANCH_NAME}" =~ ^release/(.+)$ ]]; then
+            VERSION="${BASH_REMATCH[1]}"
+            
+            # For release branches, check if this is the latest release
+            git fetch origin 'refs/heads/release/*:refs/remotes/origin/release/*' || true
+            LATEST_RELEASE=$(git branch -r | grep 'origin/release/' | sed 's|.*/release/||' | sort -V | tail -n 1)
+            
+            if [ "${VERSION}" == "${LATEST_RELEASE}" ]; then
+              TITLE="${VERSION} (latest)"
+              echo "[INFO] Release branch detected - latest version: ${VERSION}"
+            else
+              TITLE="${VERSION}"
+              echo "[INFO] Release branch detected - version: ${VERSION}"
+            fi
+          else
+            VERSION="${BRANCH_NAME}"
+            TITLE="${BRANCH_NAME}"
+            echo "[INFO] Using branch name as version: ${VERSION}"
+          fi
+          
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "title=${TITLE}" >> $GITHUB_OUTPUT
+          
+          echo ""
+          echo "[INFO] Version Detection Complete:"
+          echo "  Version: ${VERSION}"
+          echo "  Title: ${TITLE}"
+
+  # Build documentation
+  build:
+    name: Build Documentation
+    needs: [setup, detect-version]
+    runs-on: ${{ fromJSON(needs.setup.outputs.runner_labels) }}
+    permissions:
+      contents: read  # Only read access needed
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        run: |
+          if ! command -v uv &> /dev/null; then
+            echo "uv not found, installing..."
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="$HOME/.local/bin:$PATH"
+            echo "$HOME/.local/bin" >> $GITHUB_PATH
+          else
+            echo "uv is already installed"
+          fi
+          
+      - name: Setup Python virtual environment with uv
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          uv venv .venv_docs
+
+      - name: Install dependencies with uv
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          source .venv_docs/bin/activate
+          uv pip install -r requirements-docs.txt
+
+      - name: Build documentation with mkdocs
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          source .venv_docs/bin/activate
+          
+          echo "[INFO] Building documentation for version: ${{ needs.detect-version.outputs.version }}"
+          mkdocs build --clean
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: documentation-site
+          path: site/
+
+      - name: Build Summary
+        if: always()
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}  # Prevent injection via env var
+        run: |
+          echo "## 🔰 Documentation Build" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Build Details" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Runner Name | \`${{ runner.name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Runner Environment | ${{ runner.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Event | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`${GITHUB_REF_NAME}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | [\`${{ github.sha }}\`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Version Information" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | \`${{ needs.detect-version.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Title | ${{ needs.detect-version.outputs.title }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ job.status }}" == "success" ]]; then
+            echo "✅ **Build Status:** Successful" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Build Status:** Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Documentation artifacts have been uploaded and are available for download." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "*Note: This is a build-only workflow. To deploy documentation, use the 'Docs Deploy' workflow.*" >> $GITHUB_STEP_SUMMARY

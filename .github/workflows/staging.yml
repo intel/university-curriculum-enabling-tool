@@ -1,0 +1,451 @@
+name: Staging Deployment
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:  # Allow manual triggering
+
+env:
+  NEXT_TELEMETRY_DISABLED: 1
+  NEXT_CACHE_DIR: ${{ github.workspace }}/frontend/.next/cache
+  NEXT_CACHE_FACULTY_DIR: ${{ github.workspace }}/frontend/next-faculty/cache
+  NEXT_CACHE_LECTURER_DIR: ${{ github.workspace }}/frontend/next-lecturer/cache
+  NEXT_CACHE_STUDENT_DIR: ${{ github.workspace }}/frontend/next-student/cache
+  npm_config_cache: ${{ github.workspace }}/frontend/.npm-cache
+
+jobs:
+  cleanup-existing-processes:
+    name: Cleanup Existing Processes
+    runs-on: [staging]
+    steps:
+      - name: Stop systemd service
+        run: |
+          echo "## Stopping Systemd Service" >> $GITHUB_STEP_SUMMARY
+          SERVICE_NAME="university-curriculum-tool"
+
+          if sudo systemctl list-units --full -all | grep -q "${SERVICE_NAME}.service"; then
+            echo "[Info] Found ${SERVICE_NAME} systemd service" >> $GITHUB_STEP_SUMMARY
+
+            if sudo systemctl is-active --quiet "${SERVICE_NAME}.service"; then
+              echo "[Info] Stopping active ${SERVICE_NAME} service..." >> $GITHUB_STEP_SUMMARY
+              sudo systemctl stop "${SERVICE_NAME}.service"
+              echo "[Success] Systemd service stopped" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "[Info] Systemd service is not running" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "[Info] Systemd service not found (first run)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Terminate remaining processes
+        run: |
+          echo "## Terminating Remaining Application Processes" >> $GITHUB_STEP_SUMMARY
+          echo "[Info] Checking for application processes..." >> $GITHUB_STEP_SUMMARY
+
+          WORKSPACE_BASE="$(dirname $(dirname $PWD))"
+          REPO_NAME="applications.ai.tools.university-curriculum-enabling-tool"
+          WORK_DIR="$WORKSPACE_BASE/$REPO_NAME/$REPO_NAME"
+          STATE_FILE="$WORK_DIR/.process-manager/processes.json"
+
+          if [ -f "$STATE_FILE" ]; then
+            echo "[Info] Found process manager state file, stopping tracked PIDs..." \
+              >> $GITHUB_STEP_SUMMARY
+
+            # Extract all non-null PIDs from the state file using python3
+            # (jq may not be available at this point in the workflow)
+            PIDS=$(python3 -c "
+          import json, sys
+          try:
+            data = json.load(open('$STATE_FILE'))
+            pids = [str(v['pid']) for v in data.values() if v.get('pid')]
+            print(' '.join(pids))
+          except Exception as e:
+            print('', end='')
+          ")
+
+            if [ -n "$PIDS" ]; then
+              for PID in $PIDS; do
+                if kill -0 "$PID" 2>/dev/null; then
+                  echo "[Info] Stopping tracked process PID $PID..." \
+                    >> $GITHUB_STEP_SUMMARY
+                  kill -TERM "$PID" 2>/dev/null || true
+                fi
+              done
+              # Give processes time to shut down gracefully
+              sleep 3
+              # Force kill any that are still running
+              for PID in $PIDS; do
+                if kill -0 "$PID" 2>/dev/null; then
+                  echo "[Info] Force killing PID $PID..." >> $GITHUB_STEP_SUMMARY
+                  kill -KILL "$PID" 2>/dev/null || true
+                fi
+              done
+              echo "[Success] Tracked processes stopped" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "[Info] No active tracked PIDs found in state file" \
+                >> $GITHUB_STEP_SUMMARY
+            fi
+
+            # Also use utils.mjs stop if Node.js is available for a clean state reset
+            NODE_BIN="$WORK_DIR/thirdparty/node/bin/node"
+            UTILS_PATH="$WORK_DIR/scripts/utils.mjs"
+            if [ -f "$NODE_BIN" ] && [ -f "$UTILS_PATH" ]; then
+              "$NODE_BIN" "$UTILS_PATH" stop faculty --force 2>/dev/null \
+                && echo "[Success] Process manager state cleared via utils.mjs" \
+                  >> $GITHUB_STEP_SUMMARY \
+                || echo "[Info] utils.mjs stop returned non-zero (state may already be clear)" \
+                  >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "[Info] No process manager state file found (first run or already clean)" \
+              >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # ── Pattern-based fallback cleanup ───────────────────────────────────
+          # Kill Next.js processes
+          pkill -f "next-server" 2>/dev/null \
+            && echo "[Info] Stopped next-server processes" >> $GITHUB_STEP_SUMMARY \
+            || echo "[Info] No next-server processes found" >> $GITHUB_STEP_SUMMARY
+
+          # The new process manager has no daemon process to kill.
+          # Processes are tracked by PID in .process-manager/processes.json
+          # and handled above.
+
+          # Kill Python backend processes
+          pkill -f "uvicorn" 2>/dev/null \
+            && echo "[Info] Stopped uvicorn processes" >> $GITHUB_STEP_SUMMARY \
+            || echo "[Info] No uvicorn processes found" >> $GITHUB_STEP_SUMMARY
+
+          # Kill Ollama processes
+          pkill -f "ollama" 2>/dev/null \
+            && echo "[Info] Stopped ollama processes" >> $GITHUB_STEP_SUMMARY \
+            || echo "[Info] No ollama processes found" >> $GITHUB_STEP_SUMMARY
+
+          # Ensure ports are freed up
+          PORTS=(8080 8016 5950)
+          for PORT in "${PORTS[@]}"; do
+            if lsof -iTCP:"$PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
+              echo "[Info] Port $PORT is in use, attempting to free it..." \
+                >> $GITHUB_STEP_SUMMARY
+              PID=$(lsof -iTCP:"$PORT" -sTCP:LISTEN -t)
+              kill -9 $PID \
+                && echo "[Success] Freed port $PORT by killing process $PID" \
+                  >> $GITHUB_STEP_SUMMARY \
+                || echo "[Warning] Failed to free port $PORT" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "[Info] Port $PORT is free" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+          echo "[Success] Process cleanup completed" >> $GITHUB_STEP_SUMMARY
+
+  deploy:
+    name: Deploy to Staging
+    runs-on: [staging]
+    needs: cleanup-existing-processes
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+      with:
+        ref: main
+        fetch-depth: 0
+
+    - name: Restore npm & Next.js caches
+      id: restore-cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ env.NEXT_CACHE_DIR }}
+          ${{ env.NEXT_CACHE_FACULTY_DIR }}
+          ${{ env.NEXT_CACHE_LECTURER_DIR }}
+          ${{ env.NEXT_CACHE_STUDENT_DIR }}
+          ${{ env.npm_config_cache }}
+        key: ${{ runner.os }}-npm-nextjs-cache-staging-${{ hashFiles('frontend/package.json') }}
+        restore-keys: |
+          ${{ runner.os }}-npm-nextjs-cache-staging-
+          ${{ runner.os }}-npm-
+
+    - name: Build and install application
+      id: build
+      run: |
+            echo "## [1] Building Application" >> $GITHUB_STEP_SUMMARY
+            chmod +x ./install.sh
+            ./install.sh || {
+              echo "[Error] Installation/build failed at $(pwd)" >> $GITHUB_STEP_SUMMARY
+              exit 1
+            }
+            echo "[Success] Application built successfully in workspace" >> $GITHUB_STEP_SUMMARY
+
+            echo "## [2] Installing from Distribution Package" >> $GITHUB_STEP_SUMMARY
+            DIST_PACKAGE=$(find dist -maxdepth 1 -type d \
+              -name "university-curriculum-enabling-tool-*" | sort -V | tail -n 1)
+            if [ -z "$DIST_PACKAGE" ] || [ ! -d "$DIST_PACKAGE" ]; then
+              echo "[Error] Distribution package not found after build at path: $(pwd)/dist" \
+                >> $GITHUB_STEP_SUMMARY
+              exit 1
+            fi
+
+            cd "$DIST_PACKAGE"
+            if [ ! -f "./install.sh" ]; then
+              echo "[Error] install.sh not found in distribution package" \
+                >> $GITHUB_STEP_SUMMARY
+              exit 1
+            fi
+            chmod +x ./install.sh
+            ./install.sh || {
+              echo "[Error] Distribution package installation failed" >> $GITHUB_STEP_SUMMARY
+              exit 1
+            }
+            echo "[Success] Distribution package installed successfully" >> $GITHUB_STEP_SUMMARY
+
+            # Modify FRONTEND_HOST in .env to allow external access
+            if [ -f "./.env" ]; then
+              echo "[Info] Configuring FRONTEND_HOST in .env for external access" \
+                >> $GITHUB_STEP_SUMMARY
+              sed -i 's/^FRONTEND_HOST=127\.0\.0\.1/FRONTEND_HOST=0.0.0.0/' "./.env"
+              if grep -q "^FRONTEND_HOST=0\.0\.0\.0" "./.env"; then
+                echo "[Success] Successfully configured FRONTEND_HOST in .env" \
+                  >> $GITHUB_STEP_SUMMARY
+              else
+                echo "[Warning] Failed to configure FRONTEND_HOST or variable not found" \
+                  >> $GITHUB_STEP_SUMMARY
+              fi
+            else
+              echo "[Warning] .env file not found" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            echo "DIST_PACKAGE_PATH=$DIST_PACKAGE" >> $GITHUB_OUTPUT
+            echo "[Info] Distribution package location: $DIST_PACKAGE" >> $GITHUB_STEP_SUMMARY
+
+    - name: Cache diagnostics
+      if: always()
+      run: |
+            echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+            echo "* Workflow triggered by: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+            echo "* Triggered by: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+            echo "* Timestamp: $(date)" >> $GITHUB_STEP_SUMMARY
+            echo "* Workspace: ${{ github.workspace }}" >> $GITHUB_STEP_SUMMARY
+            if [ -d "dist" ]; then
+              DIST_PACKAGE=$(find dist -maxdepth 1 -type d \
+                -name "university-curriculum-enabling-tool-*" | sort -V | tail -n 1)
+              if [ -n "$DIST_PACKAGE" ]; then
+                echo "* Deployed package: $(basename $DIST_PACKAGE)" >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## Cache Diagnostics" >> $GITHUB_STEP_SUMMARY
+            echo "* Cache hit: ${{ steps.restore-cache.outputs.cache-hit == 'true' && '[Success] Yes' || '[Error] No' }}" \
+              >> $GITHUB_STEP_SUMMARY
+            echo "#### Cache Sizes" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            [ -d "${{ env.NEXT_CACHE_DIR }}" ] \
+              && echo "next cache: $(du -sh ${{ env.NEXT_CACHE_DIR }} | cut -f1)" \
+                >> $GITHUB_STEP_SUMMARY \
+              || echo "next cache: not created" >> $GITHUB_STEP_SUMMARY
+            [ -d "${{ env.NEXT_CACHE_FACULTY_DIR }}" ] \
+              && echo "next faculty cache: $(du -sh ${{ env.NEXT_CACHE_FACULTY_DIR }} | cut -f1)" \
+                >> $GITHUB_STEP_SUMMARY \
+              || echo "next faculty cache: not created" >> $GITHUB_STEP_SUMMARY
+            [ -d "${{ env.NEXT_CACHE_LECTURER_DIR }}" ] \
+              && echo "next lecturer cache: $(du -sh ${{ env.NEXT_CACHE_LECTURER_DIR }} | cut -f1)" \
+                >> $GITHUB_STEP_SUMMARY \
+              || echo "next lecturer cache: not created" >> $GITHUB_STEP_SUMMARY
+            [ -d "${{ env.NEXT_CACHE_STUDENT_DIR }}" ] \
+              && echo "next student cache: $(du -sh ${{ env.NEXT_CACHE_STUDENT_DIR }} | cut -f1)" \
+                >> $GITHUB_STEP_SUMMARY \
+              || echo "next student cache: not created" >> $GITHUB_STEP_SUMMARY
+            [ -d "${{ env.npm_config_cache }}" ] \
+              && echo "npm cache: $(du -sh ${{ env.npm_config_cache }} | cut -f1)" \
+                >> $GITHUB_STEP_SUMMARY \
+              || echo "npm cache: not created" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+
+  start-application:
+    name: Start Application
+    runs-on: [staging]
+    needs: deploy
+    steps:
+      - name: Create and start systemd service
+        run: |
+          echo "## Creating Systemd Service" >> $GITHUB_STEP_SUMMARY
+
+          # Find the distribution package
+          WORKSPACE_BASE="$(dirname $(dirname $PWD))"
+          REPO_NAME="applications.ai.tools.university-curriculum-enabling-tool"
+          WORK_DIR="$WORKSPACE_BASE/$REPO_NAME/$REPO_NAME"
+
+          echo "[Info] Looking for distribution package in: $WORK_DIR/dist" \
+            >> $GITHUB_STEP_SUMMARY
+
+          if [ -d "$WORK_DIR/dist" ]; then
+            DIST_PACKAGE=$(find "$WORK_DIR/dist" -maxdepth 1 -type d \
+              -name "university-curriculum-enabling-tool-*" | sort -V | tail -n 1)
+          else
+            echo "[Error] dist directory not found at $WORK_DIR/dist" \
+              >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          if [ -z "$DIST_PACKAGE" ] || [ ! -d "$DIST_PACKAGE" ]; then
+            echo "[Error] Distribution package not found in $WORK_DIR/dist" \
+              >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          echo "[Info] Found distribution package at: $DIST_PACKAGE" \
+            >> $GITHUB_STEP_SUMMARY
+
+          # Verify run.sh exists
+          if [ ! -f "$DIST_PACKAGE/run.sh" ]; then
+            echo "[Error] run.sh not found in distribution package" \
+              >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          # Create systemd service file
+          SERVICE_NAME="university-curriculum-tool"
+          SERVICE_FILE="/tmp/${SERVICE_NAME}.service"
+
+          cat > "$SERVICE_FILE" <<EOF
+          [Unit]
+          Description=University Curriculum Enabling Tool
+          After=network.target
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          User=$USER
+          WorkingDirectory=$DIST_PACKAGE
+          ExecStart=$DIST_PACKAGE/run.sh
+          ExecStop=$DIST_PACKAGE/stop.sh
+          Restart=no
+          StandardOutput=journal
+          StandardError=journal
+          EnvironmentFile=/etc/environment
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          echo "[Info] Created systemd service file" >> $GITHUB_STEP_SUMMARY
+
+          echo "[Info] Ensuring clean process state before starting new service..." \
+            >> $GITHUB_STEP_SUMMARY
+
+          NODE_BIN="$DIST_PACKAGE/thirdparty/node/bin/node"
+          UTILS_PATH="$DIST_PACKAGE/scripts/utils.mjs"
+
+          if [ -f "$NODE_BIN" ] && [ -f "$UTILS_PATH" ]; then
+            cd "$DIST_PACKAGE"
+            "$NODE_BIN" "$UTILS_PATH" stop faculty --force 2>/dev/null \
+              && echo "[Success] Process manager state cleared" >> $GITHUB_STEP_SUMMARY \
+              || echo "[Info] No processes were running (state already clean)" \
+                >> $GITHUB_STEP_SUMMARY
+          else
+            echo "[Info] Node.js or utils.mjs not found, skipping process state cleanup" \
+              >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Install and start the service
+          sudo cp "$SERVICE_FILE" "/etc/systemd/system/${SERVICE_NAME}.service"
+          sudo systemctl daemon-reload
+          sudo systemctl enable "${SERVICE_NAME}.service"
+          sudo systemctl start "${SERVICE_NAME}.service"
+
+          echo "[Success] Systemd service installed and started" >> $GITHUB_STEP_SUMMARY
+          echo "[Info] Waiting for services to initialize..." >> $GITHUB_STEP_SUMMARY
+          sleep 20
+
+          # Check systemd service status
+          echo "## Service Status" >> $GITHUB_STEP_SUMMARY
+          if sudo systemctl is-active --quiet "${SERVICE_NAME}.service"; then
+            echo "[Success] Systemd service is active" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "[Error] Systemd service failed to start" >> $GITHUB_STEP_SUMMARY
+            echo "### Service Logs" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            sudo journalctl -u "${SERVICE_NAME}.service" -n 50 --no-pager \
+              >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "## Process Manager Status" >> $GITHUB_STEP_SUMMARY
+
+          NODE_BIN="$DIST_PACKAGE/thirdparty/node/bin/node"
+          UTILS_PATH="$DIST_PACKAGE/scripts/utils.mjs"
+
+          if [ -f "$NODE_BIN" ] && [ -f "$UTILS_PATH" ]; then
+            cd "$DIST_PACKAGE"
+
+            # Capture JSON status output (--quiet suppresses non-JSON logs)
+            STATUS_JSON=$("$NODE_BIN" "$UTILS_PATH" status --json --quiet 2>/dev/null)
+
+            if [ -n "$STATUS_JSON" ]; then
+              # Check if any services are online using python3
+              ONLINE_COUNT=$(python3 -c "
+          import json, sys
+          try:
+            data = json.loads('''$STATUS_JSON''')
+            print(data.get('onlineCount', 0))
+          except Exception:
+            print(0)
+          ")
+
+              if [ "$ONLINE_COUNT" -gt 0 ] 2>/dev/null; then
+                echo "[Success] $ONLINE_COUNT process(es) are online" \
+                  >> $GITHUB_STEP_SUMMARY
+              else
+                echo "[Warning] No processes reported as online" >> $GITHUB_STEP_SUMMARY
+              fi
+
+              echo '```json' >> $GITHUB_STEP_SUMMARY
+              echo "$STATUS_JSON" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+            else
+              echo "[Warning] Could not retrieve process manager status" \
+                >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "[Info] Node.js or utils.mjs not found, skipping process status check" \
+              >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Extract runner IP and display application homepage URL
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Application Access" >> $GITHUB_STEP_SUMMARY
+
+          HOST_IP=$(ip -4 addr show scope global \
+            | awk '/inet /{sub("/.*","",$2); print $2; exit}')
+
+          if [ -z "$HOST_IP" ]; then
+            HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+          fi
+
+          APP_PORT=8080
+
+          if [ -n "$HOST_IP" ]; then
+            if command -v nc >/dev/null 2>&1; then
+              if nc -z -w2 "$HOST_IP" "$APP_PORT" >/dev/null 2>&1; then
+                REACHABLE_STATUS="✅ Reachable"
+              else
+                REACHABLE_STATUS="⚠️ Not reachable from runner"
+              fi
+            else
+              REACHABLE_STATUS="ℹ️ Reachability check skipped (nc not installed)"
+            fi
+
+            echo "**Homepage URL:** [http://$HOST_IP:$APP_PORT](http://$HOST_IP:$APP_PORT)" \
+              >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Status:** $REACHABLE_STATUS" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "_Note: This URL is accessible from within your network._" \
+              >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Could not determine runner IP address" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Run \`ip addr show\` or \`hostname -I\` on the runner to get the IP manually." \
+              >> $GITHUB_STEP_SUMMARY
+          fi
