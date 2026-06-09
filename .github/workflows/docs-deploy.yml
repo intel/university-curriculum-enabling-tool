@@ -1,0 +1,303 @@
+name: Docs Deploy
+
+on:
+  workflow_dispatch:
+
+# Permissions are scoped at job level for least privilege
+permissions: {}
+
+jobs:
+  # Setup runner configuration
+  setup:
+    name: Setup Runner Configuration
+    runs-on: ubuntu-latest
+    
+    env:
+      EXTERNAL_REPO: 'intel/university-curriculum-enabling-tool'
+    
+    outputs:
+      runner_labels: ${{ steps.configure.outputs.runner_labels }}
+    
+    steps:
+      - name: Configure runner settings
+        id: configure
+        run: |
+          if [[ "${{ github.repository }}" == "${{ env.EXTERNAL_REPO }}" ]]; then
+            RUNNER_LABELS='["ubuntu-latest"]'
+            echo "Repository type: External"
+            echo "Repository: ${{ github.repository }}"
+          else
+            RUNNER_LABELS='["self-hosted", "vm"]'
+            echo "Repository type: Internal"
+            echo "Repository: ${{ github.repository }}"
+          fi
+          
+          echo "runner_labels=${RUNNER_LABELS}" >> $GITHUB_OUTPUT
+          echo "Runner configuration: ${RUNNER_LABELS}"
+      
+      - name: Generate configuration summary
+        run: |
+          echo "## ⚙️ Runner Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Repository | \`${{ github.repository }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| External Repo | \`${{ env.EXTERNAL_REPO }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Runner Labels | \`${{ steps.configure.outputs.runner_labels }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+  # Detect version information
+  detect-version:
+    name: Detect Version Information
+    needs: setup
+    runs-on: ${{ fromJSON(needs.setup.outputs.runner_labels) }}
+    permissions:
+      contents: read  # Only read access needed for checkout
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      alias: ${{ steps.version.outputs.alias }}
+      title: ${{ steps.version.outputs.title }}
+      set_default: ${{ steps.version.outputs.set_default }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      
+      - name: Detect version from branch
+        id: version
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}  # Prevent injection via env var
+        run: |
+          echo "[INFO] Detecting version information..."
+          
+          BRANCH_NAME="${GITHUB_REF_NAME}"
+          echo "Branch: ${BRANCH_NAME}"
+          
+          # Determine version and alias based on branch
+          if [[ "${BRANCH_NAME}" == "main" ]]; then
+            # Main branch = development version
+            VERSION="main"
+            TITLE="main (dev)"
+            ALIAS="dev"
+            SET_DEFAULT="false"
+            echo "[INFO] Main branch detected"
+            echo "  Version: ${VERSION}"
+            echo "  Title: ${TITLE}"
+            echo "  Alias: ${ALIAS}"
+          elif [[ "${BRANCH_NAME}" =~ ^release/(.+)$ ]]; then
+            # Release branch = version number
+            VERSION="${BASH_REMATCH[1]}"
+            echo "[INFO] Release branch detected - version: ${VERSION}"
+            
+            # For release branches, check if this is the latest release
+            # Get all release branches and sort them
+            git fetch origin 'refs/heads/release/*:refs/remotes/origin/release/*' || true
+            LATEST_RELEASE=$(git branch -r | grep 'origin/release/' | sed 's|.*/release/||' | sort -V | tail -n 1)
+            
+            echo "[INFO] Latest release branch: ${LATEST_RELEASE}"
+            
+            if [ "${VERSION}" == "${LATEST_RELEASE}" ]; then
+              TITLE="${VERSION} (latest)"
+              ALIAS="latest"
+              SET_DEFAULT="true"
+              echo "[INFO] This is the latest release"
+            else
+              TITLE="${VERSION}"
+              ALIAS=""
+              SET_DEFAULT="false"
+              echo "[INFO] This is not the latest release"
+            fi
+          else
+            # Other branches = use branch name as version
+            VERSION="${BRANCH_NAME}"
+            TITLE="${BRANCH_NAME}"
+            ALIAS=""
+            SET_DEFAULT="false"
+            echo "[WARNING] Unknown branch pattern - using branch name as version: ${VERSION}"
+          fi
+          
+          # Output results
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "alias=${ALIAS}" >> $GITHUB_OUTPUT
+          echo "title=${TITLE}" >> $GITHUB_OUTPUT
+          echo "set_default=${SET_DEFAULT}" >> $GITHUB_OUTPUT
+          
+          echo ""
+          echo "[INFO] Version Detection Complete:"
+          echo "  Version: ${VERSION}"
+          echo "  Title: ${TITLE}"
+          echo "  Alias: ${ALIAS}"
+          echo "  Set Default: ${SET_DEFAULT}"
+
+  # Deploy documentation with mike
+  deploy-with-mike:
+    name: Deploy Documentation with Mike
+    needs: [setup, detect-version]
+    runs-on: ${{ fromJSON(needs.setup.outputs.runner_labels) }}
+    permissions:
+      contents: write  # Write needed for gh-pages deployment
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch gh-pages branch
+        run: |
+          echo "[INFO] Fetching gh-pages branch..."
+          git fetch origin gh-pages --depth=1 || echo "gh-pages branch does not exist yet"
+      
+      - name: Configure Git
+        run: |
+          echo "[INFO] Configuring Git user..."
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Install uv
+        run: |
+          if ! command -v uv &> /dev/null; then
+            echo "[INFO] Installing uv..."
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="$HOME/.local/bin:$PATH"
+            echo "$HOME/.local/bin" >> $GITHUB_PATH
+          else
+            echo "[INFO] uv is already installed"
+          fi
+          
+      - name: Setup Python virtual environment with uv
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          uv venv .venv_docs
+
+      - name: Install dependencies with uv
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          source .venv_docs/bin/activate
+          uv pip install -r requirements-docs.txt
+
+      - name: Deploy documentation with mike
+        env:
+          VERSION: ${{ needs.detect-version.outputs.version }}
+          ALIAS: ${{ needs.detect-version.outputs.alias }}
+          TITLE: ${{ needs.detect-version.outputs.title }}
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          source .venv_docs/bin/activate
+          
+          echo "[INFO] Deploying documentation with mike..."
+          echo "  Version: ${VERSION}"
+          echo "  Title: ${TITLE}"
+          echo "  Alias: ${ALIAS}"
+          
+          # Build mike deploy command
+          DEPLOY_CMD="mike deploy --push --update-aliases"
+          
+          # Add title
+          DEPLOY_CMD="${DEPLOY_CMD} --title \"${TITLE}\""
+          
+          # Add version and alias
+          if [ -n "${ALIAS}" ]; then
+            DEPLOY_CMD="${DEPLOY_CMD} ${VERSION} ${ALIAS}"
+          else
+            DEPLOY_CMD="${DEPLOY_CMD} ${VERSION}"
+          fi
+          
+          echo "[INFO] Running: ${DEPLOY_CMD}"
+          eval ${DEPLOY_CMD}
+          
+          echo "[OK] Documentation deployed successfully"
+      
+      - name: Set default version
+        if: needs.detect-version.outputs.set_default == 'true'
+        env:
+          VERSION: ${{ needs.detect-version.outputs.version }}
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          source .venv_docs/bin/activate
+          
+          echo "[INFO] Setting ${VERSION} as default version..."
+          mike set-default --push ${VERSION}
+          echo "[OK] Default version set"
+      
+      - name: List deployed versions
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          source .venv_docs/bin/activate
+          
+          echo "[INFO] Currently deployed versions:"
+          mike list
+          
+  # Generate deployment summary
+  summary:
+    name: Generate Deployment Summary
+    needs: [setup, detect-version, deploy-with-mike]
+    runs-on: ${{ fromJSON(needs.setup.outputs.runner_labels) }}
+    if: always()
+    
+    steps:
+      - name: Deployment Summary
+        env:
+          EXTERNAL_REPO: 'intel/university-curriculum-enabling-tool'
+          GITHUB_REF_NAME: ${{ github.ref_name }}  # Prevent injection via env var
+        run: |
+          echo "## 📚 Documentation Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Deployment details
+          echo "### Deployment Details" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Repository | [\`${{ github.repository }}\`](https://github.com/${{ github.repository }}) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`${GITHUB_REF_NAME}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Event | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Runner | \`${{ runner.name }}\` (${{ runner.environment }}) |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Version information
+          echo "### Version Information" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | \`${{ needs.detect-version.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Title | ${{ needs.detect-version.outputs.title }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Alias | \`${{ needs.detect-version.outputs.alias }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Set as Default | ${{ needs.detect-version.outputs.set_default }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Job status
+          echo "### Job Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ needs.detect-version.result }}" == "success" ]]; then
+            echo "- ✅ Version Detection: Success" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ❌ Version Detection: Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [[ "${{ needs.deploy-with-mike.result }}" == "success" ]]; then
+            echo "- ✅ Documentation Deployment: Success" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ❌ Documentation Deployment: Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Site URL
+          echo "### 🌐 Site URL" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Extract organization and repository name
+          ORG_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f1)
+          REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+          
+          # Construct GitHub Pages URL dynamically
+          SITE_URL="https://${ORG_NAME}.github.io/${REPO_NAME}/${{ needs.detect-version.outputs.version }}/"
+          
+          echo "Documentation URL: ${SITE_URL}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "*Completed at $(date -u '+%Y-%m-%d %H:%M:%S UTC')*" >> $GITHUB_STEP_SUMMARY
