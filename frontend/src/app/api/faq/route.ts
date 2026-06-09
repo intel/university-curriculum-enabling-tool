@@ -280,7 +280,7 @@ const createFaqGenerationFunction = (): GenerationFunction<FaqResult> => {
 
     if (messages.length > 0 && 'parts' in messages[0]) {
       // UIMessage format from direct generation - convert using AI SDK utility
-      modelMessages = convertToModelMessages(messages as UIMessage[])
+      modelMessages = await convertToModelMessages(messages as UIMessage[])
     } else {
       // ModelMessage format from multi-pass system - use directly
       modelMessages = messages as Parameters<typeof generateObject>[0]['messages']
