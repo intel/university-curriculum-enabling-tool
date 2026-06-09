@@ -1,0 +1,65 @@
+name: "Zizmor Scan"
+run-name: "Zizmor Scan"
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    branches:
+      - main
+      - release/*
+  push:
+    branches:
+      - main
+      - release/*
+  schedule:
+    # Run security checks every day at 2 AM UTC
+    - cron: "0 2 * * *"
+
+# Only run at most 1 workflow concurrently per PR or per branch to keep costs down
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  detect-repo:
+    name: "Detect Repository Type"
+    runs-on: ubuntu-latest
+    env:
+      EXTERNAL_REPO: 'intel/university-curriculum-enabling-tool'
+    outputs:
+      is_external: ${{ steps.detect-repo.outputs.is_external }}
+    steps:
+      - name: "Detect if repository is external"
+        id: detect-repo
+        run: |
+          if [[ "${{ github.repository }}" == "${{ env.EXTERNAL_REPO }}" ]]; then
+            echo "Repository type: External"
+            echo "Repository: ${{ github.repository }}"
+            echo "is_external=true" >> $GITHUB_OUTPUT
+          else
+            echo "Repository type: Internal"
+            echo "Repository: ${{ github.repository }}"
+            echo "is_external=false" >> $GITHUB_OUTPUT
+          fi
+
+  zizmor-scan:
+    name: "Run Zizmor Scan"
+    permissions:
+      contents: read
+      security-events: write # Needed to upload the results to code-scanning dashboard
+    runs-on: ubuntu-latest
+    if: needs.detect-repo.outputs.is_external == 'true'
+    needs: detect-repo
+    steps:
+      - name: "Checkout code"
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: "Run Zizmor scan"
+        uses: open-edge-platform/geti-ci/actions/zizmor@0bed754fc7db24b5f9f15e7ead2eb4acdb0c7263 # zizmor/v0.1.2
+        with:
+          scan-scope: ${{ github.event_name == 'pull_request' && 'changed' || 'all' }}
+          severity-level: ${{ github.event_name == 'pull_request' && 'HIGH' || 'LOW' }}
+          fail-on-findings: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
