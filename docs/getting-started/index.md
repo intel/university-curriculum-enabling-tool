@@ -3,7 +3,7 @@
 This section will guide you through the complete setup of University Curriculum Enabling Tool.
 
 1. **[Quick Start](quick-start.md)** – Install dependencies and run the tool.
-2. **[User Guides](../guide/index.md)** – Learn how to use the tool for your role.
+2. **[User Guides](../guides/index.md)** – Learn how to use the tool for your role.
 
 ## Need Help?
 
