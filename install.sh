@@ -14,8 +14,8 @@ NODE_BIN="$SCRIPT_DIR/thirdparty/node/bin/node"
 if [ -z "$PROVIDER" ]; then
   echo "Which backend do you want to install?"
   echo "  [1] Ollama (default)"
-  echo -e "\e[2m  [2] OVMS Not Available For Now\e[0m"
-  if ! read -r -t 15 -p "Enter 1 for Ollama: " SERVICE_CHOICE; then
+  echo "  [2] OVMS"
+  if ! read -r -t 15 -p "Enter 1 for Ollama or 2 for OVMS (auto-selects Ollama after 15s): " SERVICE_CHOICE; then
     echo -e "\nNo response after 15 seconds. Defaulting to Ollama."
     SERVICE_CHOICE=""
   fi
