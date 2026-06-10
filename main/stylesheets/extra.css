@@ -1,0 +1,135 @@
+/* span.title {
+  font-weight: bold;
+}
+
+span.em {
+  font-weight: bold;
+}
+
+.separator {
+  border-bottom: 1px solid #e3e8ee;
+}
+
+a.field {
+  font-weight: 600;
+  color: #3c4257;
+  font-size: .8rem;
+}
+
+span.parent-field {
+  font-weight: 600;
+  color:#a3acb9;
+  font-size: .85em;
+}
+
+span.type {
+  color: #8792a2;
+  font-size: .7rem;
+  margin-right: 4px;
+}
+
+span.version {
+  color: #8792a2;
+  font-size: .7rem;
+  float: right;
+}
+
+span.faint {
+  color: #8792a2;
+}
+
+[data-md-color-primary="orange"] {
+	--md-primary-bg-color: #fff;
+} */
+
+/* 
+[data-md-color-scheme="intel"] {
+  --md-primary-fg-color:        #ffffff;
+  --md-primary-fg-color--light: #0068B5;
+  --md-primary-fg-color--dark:  #ffffff;
+  --md-footer-bg-color: #0068B5;
+  --md-footer-bg-color--dark: #000000;
+}
+
+.md-header a {
+  color: #0068B5 !important;
+}
+
+.md-header__title, .md-header .md-header-nav__title {
+  color: #0068B5 !important;
+} */
+
+:root {
+  --md-accent-fg-color: #000000; /* Makes accent color — e.g. hovered nav titles — black */
+}
+
+.md-nav__link {
+  color: #737373 !important;  /* Navigation font color - normal */
+}
+
+.md-nav__link:hover {
+  color: #3a3a3a !important;  /* Navigation font color - hover */
+}
+.md-nav__link--active {
+  color: #343434 !important;  /* Navigation font color - active */
+  font-weight: bold;
+}
+
+.md-nav__title {
+  color: #000000 !important;
+}
+
+/* Apply to all SVG icons across site */
+svg {
+  fill: currentcolor !important;
+}
+
+/* Set the default icon color */
+/* svg {
+  color: #3a3a3a;
+} */
+
+/* Hide logo button and show only site title */
+.md-header__button.md-logo {
+  display: none;
+}
+
+/* Ensure site title is visible and properly styled */
+.md-header__title {
+  display: block !important;
+  margin-left: .6rem !important;
+}
+
+/* .md-header__title .md-header__title--site {
+  font-weight: 700;
+} */
+
+footer svg {
+  color:#cecece !important;
+  fill: currentcolor !important;
+}
+
+.md-typeset a             { color: #0068B5 !important; }  /* Link font color - normal */
+.md-typeset a:hover       { color: #333333 !important; }  /* Link font color - hover */
+
+/* Version selector styling */
+.md-version__current {
+  font-size: 0.7rem;
+}
+
+/* Version dropdown list styling */
+.md-version__list {
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+/* Version dropdown item hover effect */
+.md-version__item:hover {
+  background-color: rgba(134, 134, 134, 0.1); 
+}
+
+/* Border on all content images */
+.md-typeset img {
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+}
