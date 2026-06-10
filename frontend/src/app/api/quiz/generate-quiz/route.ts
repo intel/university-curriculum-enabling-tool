@@ -598,6 +598,12 @@ IMPORTANT:
           options = ['True', 'False']
         } else if (Array.isArray(q.options)) {
           options = (q.options as unknown[]).map((o) => toStringSafe(o))
+          if (expectedType === 'mcq' && options.length > 4) {
+            console.warn(
+              `Warning: MCQ question has ${options.length} options instead of 4. Truncating to first 4.`,
+            )
+            options = options.slice(0, 4)
+          }
         }
 
         const explanation = toStringSafe(q.explanation)
