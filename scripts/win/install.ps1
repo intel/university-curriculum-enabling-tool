@@ -134,11 +134,10 @@ function Read-HostWithTimeout {
 if (-not $env:PROVIDER) {
     Write-Host "Which backend do you want to install?"
     Write-Host "  [1] Ollama (default)"
-    Write-Host "  [2] " -NoNewline
-    Write-Host "OVMS Not Available For Now" -ForegroundColor DarkGray
+    Write-Host "  [2] OVMS"
  
     $ServiceChoice = Read-HostWithTimeout `
-        -Prompt "Enter 1 for Ollama" `
+        -Prompt "Enter 1 for Ollama or 2 for OVMS (auto-selects Ollama after 15s)" `
         -TimeoutSeconds 15
  
     if (-not $ServiceChoice) {
