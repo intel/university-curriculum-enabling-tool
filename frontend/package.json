@@ -120,7 +120,7 @@
     "typescript": "^5"
   },
   "overrides": {
-    "dompurify": "^3.4.1",
+    "dompurify": "^3.4.11",
     "drizzle-orm": "^0.45.2",
     "esbuild": "^0.27.2",
     "prismjs": "^1.30.0",
