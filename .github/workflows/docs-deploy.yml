@@ -21,29 +21,34 @@ jobs:
     steps:
       - name: Configure runner settings
         id: configure
+        env:
+          GITHUB_REPO: ${{ github.repository }}
         run: |
-          if [[ "${{ github.repository }}" == "${{ env.EXTERNAL_REPO }}" ]]; then
+          if [[ "${GITHUB_REPO}" == "${EXTERNAL_REPO}" ]]; then
             RUNNER_LABELS='["ubuntu-latest"]'
             echo "Repository type: External"
-            echo "Repository: ${{ github.repository }}"
+            echo "Repository: ${GITHUB_REPO}"
           else
             RUNNER_LABELS='["self-hosted", "vm"]'
             echo "Repository type: Internal"
-            echo "Repository: ${{ github.repository }}"
+            echo "Repository: ${GITHUB_REPO}"
           fi
           
           echo "runner_labels=${RUNNER_LABELS}" >> $GITHUB_OUTPUT
           echo "Runner configuration: ${RUNNER_LABELS}"
       
       - name: Generate configuration summary
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+          RUNNER_LABELS: ${{ steps.configure.outputs.runner_labels }}
         run: |
           echo "## ⚙️ Runner Configuration" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Repository | \`${{ github.repository }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| External Repo | \`${{ env.EXTERNAL_REPO }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Runner Labels | \`${{ steps.configure.outputs.runner_labels }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Repository | \`${GITHUB_REPO}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| External Repo | \`${EXTERNAL_REPO}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Runner Labels | \`${RUNNER_LABELS}\` |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
   # Detect version information
@@ -64,7 +69,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
-      
+          persist-credentials: false
       - name: Detect version from branch
         id: version
         env:
@@ -144,8 +149,8 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
+          token: ${{ secrets.GITHUB_TOKEN }} 
+          persist-credentials: false
       - name: Fetch gh-pages branch
         run: |
           echo "[INFO] Fetching gh-pages branch..."
@@ -242,7 +247,17 @@ jobs:
       - name: Deployment Summary
         env:
           EXTERNAL_REPO: 'intel/university-curriculum-enabling-tool'
-          GITHUB_REF_NAME: ${{ github.ref_name }}  # Prevent injection via env var
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          RUNNER_NAME: ${{ runner.name }}
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          VERSION: ${{ needs.detect-version.outputs.version }}
+          VERSION_TITLE: ${{ needs.detect-version.outputs.title }}
+          VERSION_ALIAS: ${{ needs.detect-version.outputs.alias }}
+          SET_DEFAULT: ${{ needs.detect-version.outputs.set_default }}
+          DETECT_VERSION_RESULT: ${{ needs.detect-version.result }}
+          DEPLOY_MIKE_RESULT: ${{ needs.deploy-with-mike.result }}
         run: |
           echo "## 📚 Documentation Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -252,10 +267,10 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Repository | [\`${{ github.repository }}\`](https://github.com/${{ github.repository }}) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Repository | [\`${GITHUB_REPO}\`](https://github.com/${GITHUB_REPO}) |" >> $GITHUB_STEP_SUMMARY
           echo "| Branch | \`${GITHUB_REF_NAME}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Event | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Runner | \`${{ runner.name }}\` (${{ runner.environment }}) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Event | ${GITHUB_EVENT_NAME} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Runner | \`${RUNNER_NAME}\` (${RUNNER_ENVIRONMENT}) |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           # Version information
@@ -263,23 +278,23 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Version | \`${{ needs.detect-version.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Title | ${{ needs.detect-version.outputs.title }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Alias | \`${{ needs.detect-version.outputs.alias }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Set as Default | ${{ needs.detect-version.outputs.set_default }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | \`${VERSION}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Title | ${VERSION_TITLE} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Alias | \`${VERSION_ALIAS}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Set as Default | ${SET_DEFAULT} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           # Job status
           echo "### Job Status" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [[ "${{ needs.detect-version.result }}" == "success" ]]; then
+          if [[ "${DETECT_VERSION_RESULT}" == "success" ]]; then
             echo "- ✅ Version Detection: Success" >> $GITHUB_STEP_SUMMARY
           else
             echo "- ❌ Version Detection: Failed" >> $GITHUB_STEP_SUMMARY
           fi
           
-          if [[ "${{ needs.deploy-with-mike.result }}" == "success" ]]; then
+          if [[ "${DEPLOY_MIKE_RESULT}" == "success" ]]; then
             echo "- ✅ Documentation Deployment: Success" >> $GITHUB_STEP_SUMMARY
           else
             echo "- ❌ Documentation Deployment: Failed" >> $GITHUB_STEP_SUMMARY
@@ -292,11 +307,11 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           
           # Extract organization and repository name
-          ORG_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f1)
-          REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+          ORG_NAME=$(echo "${GITHUB_REPO}" | cut -d'/' -f1)
+          REPO_NAME=$(echo "${GITHUB_REPO}" | cut -d'/' -f2)
           
           # Construct GitHub Pages URL dynamically
-          SITE_URL="https://${ORG_NAME}.github.io/${REPO_NAME}/${{ needs.detect-version.outputs.version }}/"
+          SITE_URL="https://${ORG_NAME}.github.io/${REPO_NAME}/${VERSION}/"
           
           echo "Documentation URL: ${SITE_URL}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
