@@ -3,13 +3,23 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { Document, Packer, Paragraph, TextRun, ImageRun } from 'docx'
+import { safeImageFetch, SSRFGuardError } from '@/lib/ssrf-guard'
 
 // Helper to fetch image as ArrayBuffer
-async function fetchImageBuffer(url: string) {
-  const urlObj = new URL(url).href
-  const res = await fetch(urlObj)
-  const blob = await res.blob()
-  return await blob.arrayBuffer()
+async function fetchImageBuffer(url: string): Promise<ArrayBuffer | null> {
+  try {
+    const res = await safeImageFetch(url)
+    if (!res.ok) return null
+    const blob = await res.blob()
+    return await blob.arrayBuffer()
+  } catch (err) {
+    if (err instanceof SSRFGuardError) {
+      console.warn('[download-docx] Blocked image URL:', url, err.message)
+    } else {
+      console.error('[download-docx] Failed to fetch image:', url, err)
+    }
+    return null
+  }
 }
 
 // Helper to parse inline markdown for bold, italic, code, and links
@@ -29,7 +39,6 @@ function parseInlineMarkdown(text: string) {
       )
     }
     if (match[1]) {
-      // Bold
       runs.push(
         new TextRun({
           text: match[2],
@@ -39,7 +48,6 @@ function parseInlineMarkdown(text: string) {
         }),
       )
     } else if (match[3]) {
-      // Italic
       runs.push(
         new TextRun({
           text: match[4],
@@ -49,7 +57,6 @@ function parseInlineMarkdown(text: string) {
         }),
       )
     } else if (match[5]) {
-      // Inline code
       runs.push(
         new TextRun({
           text: match[5],
@@ -59,7 +66,6 @@ function parseInlineMarkdown(text: string) {
         }),
       )
     } else if (match[6] && match[7]) {
-      // Link (render as blue underlined text)
       runs.push(
         new TextRun({
           text: match[6],
@@ -93,7 +99,6 @@ function parseInlineMarkdown(text: string) {
   return runs
 }
 
-// Helper to parse markdown line and return docx children
 async function parseMarkdownLine(
   line: string,
   extraOptions: Partial<{ keepLines: boolean; keepNext: boolean }> = {},
@@ -102,8 +107,9 @@ async function parseMarkdownLine(
   const imgMatch = line.match(/!\[.*?\]\((.*?)\)/)
   if (imgMatch) {
     const imageUrl = imgMatch[1]
-    try {
-      const buffer = await fetchImageBuffer(imageUrl)
+    const buffer = await fetchImageBuffer(imageUrl)
+
+    if (buffer) {
       return [
         new Paragraph({
           children: [
@@ -116,16 +122,17 @@ async function parseMarkdownLine(
           spacing: { after: 24 },
         }),
       ]
-    } catch {
-      return [
-        new Paragraph({
-          children: [new TextRun('Image could not be loaded.')],
-          spacing: { after: 24 },
-        }),
-      ]
     }
+
+    return [
+      new Paragraph({
+        children: [new TextRun('Image could not be loaded.')],
+        spacing: { after: 24 },
+      }),
+    ]
   }
-  // Heading (##, ###, etc.)
+
+  // Heading
   const headerMatch = line.match(/^(#{1,6})\s+(.*)/)
   if (headerMatch) {
     return [
@@ -192,34 +199,32 @@ async function parseMarkdownLine(
 
 export async function POST(req: NextRequest) {
   try {
-    // Accept both { summary, sourceName } and { content, sourceName }
     const body = await req.json()
     const summary = body.summary || body.content || ''
     const sourceName = body.sourceName || 'source'
-    // Clean up markdown heading symbols for headings (remove **, __, etc. from headings)
+
     const lines = summary.split(/\r?\n/)
     const children = []
     let i = 0
+
     while (i < lines.length) {
       let line = lines[i]
-      // If heading, remove markdown bold/italic from heading text
       const headerMatch = line.match(/^(#{1,6})\s+(.*)/)
       if (headerMatch) {
-        // Remove **, __, *, _ from heading text
         const cleanHeading = headerMatch[2].replace(/(\*\*|__|\*|_)(.*?)\1/g, '$2')
         line = `${headerMatch[1]} ${cleanHeading}`
-        // Start a new block with the heading
         const blockLines = [line]
         i++
-        // Collect all lines until next heading or empty line
-        while (i < lines.length && !lines[i].match(/^(#{1,6})\s+(.*)/) && lines[i].trim() !== '') {
+        while (
+          i < lines.length &&
+          !lines[i].match(/^(#{1,6})\s+(.*)/) &&
+          lines[i].trim() !== ''
+        ) {
           blockLines.push(lines[i])
           i++
         }
-        // Parse all lines in the block
         const blockParagraphs: Paragraph[] = []
         for (const [idx, blockLine] of blockLines.entries()) {
-          // All but last: keepLines + keepNext, last: keepLines only
           const isLast = idx === blockLines.length - 1
           const extraOptions = isLast ? { keepLines: true } : { keepLines: true, keepNext: true }
           const paragraphs = await parseMarkdownLine(blockLine, extraOptions)

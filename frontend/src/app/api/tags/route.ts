@@ -4,6 +4,7 @@
 import { getProviderInfo } from '@/lib/providers'
 import { getLLMUrl } from '@/lib/getLLMUrl'
 import { getOVMSModelDetails } from '@/lib/ovms/ovms-models'
+import { safeFetch } from '@/lib/ssrf-guard'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -13,11 +14,9 @@ export async function GET() {
 
   if (providerName === 'ovms') {
     try {
-      // OVMS /v3/models endpoint returns 400 "Invalid request URL"
-      // This endpoint may only work with specific OVMS configurations
-      // Instead, use the /v1/config endpoint which lists all loaded models
       const configUrl = new URL('/v1/config', baseURL).href
-      const res = await fetch(configUrl)
+
+      const res = await safeFetch(configUrl)
 
       if (!res.ok) {
         console.warn(`OVMS /v1/config returned status ${res.status}`)
@@ -25,8 +24,6 @@ export async function GET() {
       }
 
       const data = await res.json()
-
-      // Get detailed model information from the filesystem
       const modelDetails = await getOVMSModelDetails(data)
 
       console.log(`Loaded ${modelDetails.length} models from OVMS /v1/config`)
@@ -39,11 +36,14 @@ export async function GET() {
     try {
       const ollamaUrl = await getLLMUrl()
       const tagsUrl = new URL('/api/tags', ollamaUrl).href
-      const res = await fetch(tagsUrl)
+
+      const res = await safeFetch(tagsUrl)
+
       if (!res.ok) {
         console.error(`Ollama /api/tags returned status ${res.status}`)
         return Response.json({ models: [] })
       }
+
       return new Response(res.body, res)
     } catch (error) {
       console.error('Error fetching models:', error)

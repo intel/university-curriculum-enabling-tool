@@ -2,6 +2,7 @@
 ## University Curriculum Enabling Tool
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+> **Notice:** This software is currently in pre-production status, designed to run locally on a single system for a single user only. It supports multiple personas, but these are intended solely for that single user to demonstrate and test features from different perspectives, not for concurrent multi-user access.
 
 University Curriculum Enabling Tool is an advanced application leveraging fine-tuned Language Models and Retrieval Augmented Generation (RAG) technology to support diverse academic needs:
 
@@ -42,10 +43,6 @@ Powered by Intel CPUs and GPUs, the tool ensures accurate, contextually relevant
 | 8080        | Web Interface             | Application UI access           |
 | 8016        | Backend                   | Internal REST API               |
 | 5950       | Ollama Model Serving      | LLM inference and embeddings    |
-
-## Disclaimer
-
-> **Important Notice:** This software is currently in pre-production status, designed to run locally on a single system only. For more stable version, please refer to our latest tagged pre-release.
 
 ## Quick Start Linux
 

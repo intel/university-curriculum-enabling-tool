@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPayload } from 'payload'
 import config from '@payload-config'
 import { clearLLMUrlCache, getLLMConfig } from '@/lib/getLLMUrl'
+import { validateLLMUrl, SSRFGuardError } from '@/lib/ssrf-guard'
 
 /**
  * GET /api/settings/llm-config
@@ -75,7 +76,6 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Validate URL
     if (!llmURL || typeof llmURL !== 'string') {
       return NextResponse.json(
         {
@@ -88,7 +88,7 @@ export async function POST(request: NextRequest) {
 
     const trimmedURL = llmURL.trim()
 
-    // Basic URL validation
+    // Basic URL format check
     try {
       new URL(trimmedURL)
     } catch {
@@ -101,13 +101,31 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    try {
+      validateLLMUrl(trimmedURL)
+    } catch (err) {
+      if (err instanceof SSRFGuardError) {
+        console.warn('[llm-config] Blocked disallowed URL:', trimmedURL, err.message)
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'The provided URL is not permitted. Check ALLOWED_LLM_PROTOCOLS and ALLOWED_LLM_HOSTS configuration.',
+            detail: err.message,
+          },
+          { status: 422 },
+        )
+      }
+      throw err
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     // Update the global config in Payload CMS
     const payload = await getPayload({ config })
     await payload.updateGlobal({
       slug: 'llm-config',
       data: {
         llmURL: trimmedURL,
-        ...(providerType && { providerType }), // Will be properly typed after regenerating Payload types
+        ...(providerType && { providerType }),
       },
     })
 

@@ -4,18 +4,17 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getProviderInfo } from '@/lib/providers'
 import { getLLMUrl } from '@/lib/getLLMUrl'
+import { safeFetch } from '@/lib/ssrf-guard'
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
 
-// app/api/model/route.ts
 export async function POST(req: Request) {
   const { name } = await req.json()
 
   const ollamaUrl = await getLLMUrl()
-
   const ollamaPullUrl = new URL('/api/pull', ollamaUrl).href
-  const response = await fetch(ollamaPullUrl, {
+  const response = await safeFetch(ollamaPullUrl, {
     method: 'POST',
     body: JSON.stringify({ name }),
   })
@@ -62,7 +61,6 @@ function createProgressStream(
 
         const progressMessage = JSON.stringify({ progress })
         controller.enqueue(new TextEncoder().encode(progressMessage + '\n'))
-
         controller.enqueue(value)
       }
     },
@@ -82,10 +80,8 @@ export async function DELETE(req: NextRequest) {
     const { providerName } = await getProviderInfo()
 
     if (providerName === 'ovms') {
-      // Handle OVMS model deletion
       return await deleteOVMSModel(model)
     } else {
-      // Handle Ollama model deletion
       return await deleteOllamaModel(model)
     }
   } catch (error) {
@@ -108,7 +104,7 @@ async function deleteOllamaModel(model: string): Promise<NextResponse> {
   }
 
   const ollamaDeleteUrl = new URL('/api/delete', PROVIDER_URL).href
-  const ollamaResponse = await fetch(ollamaDeleteUrl, {
+  const ollamaResponse = await safeFetch(ollamaDeleteUrl, {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',
@@ -139,17 +135,13 @@ async function deleteOVMSModel(modelName: string): Promise<NextResponse> {
   try {
     const homeDir = os.homedir()
 
-    // Break taint chain by reconstructing from validated components
-    // Character-by-character copying to break taint on homeDir
     let sanitizedHomeDir = ''
     for (let i = 0; i < homeDir.length; i++) {
       sanitizedHomeDir += homeDir[i]
     }
 
-    // Construct paths using known-safe string literals combined with sanitized homeDir
     const ovmsModelsDir = path.join(sanitizedHomeDir, '.ucet', 'models', 'ovms')
 
-    // Validate and sanitize modelName to prevent path traversal
     if (
       !modelName ||
       typeof modelName !== 'string' ||
@@ -163,7 +155,6 @@ async function deleteOVMSModel(modelName: string): Promise<NextResponse> {
       )
     }
 
-    // Break taint chain on modelName using character-by-character copying
     let sanitizedModelName = ''
     for (let i = 0; i < modelName.length; i++) {
       sanitizedModelName += modelName[i]
@@ -171,7 +162,6 @@ async function deleteOVMSModel(modelName: string): Promise<NextResponse> {
 
     const modelPath = path.join(ovmsModelsDir, sanitizedModelName)
 
-    // Break taint chain on configPath by character-by-character copying
     const configPathTemp = path.join(ovmsModelsDir, 'config.json')
     let configPath = ''
     for (let i = 0; i < configPathTemp.length; i++) {
@@ -180,7 +170,6 @@ async function deleteOVMSModel(modelName: string): Promise<NextResponse> {
 
     const hfCacheDir = path.join(sanitizedHomeDir, '.ucet', 'models', 'huggingface')
 
-    // Check if model directory exists
     if (!fs.existsSync(modelPath)) {
       return NextResponse.json(
         { error: 'Model not found', details: `Model ${modelName} does not exist` },
@@ -188,12 +177,9 @@ async function deleteOVMSModel(modelName: string): Promise<NextResponse> {
       )
     }
 
-    // Delete the model directory recursively
     console.log(`Deleting OVMS model directory: ${modelPath}`)
     fs.rmSync(modelPath, { recursive: true, force: true })
 
-    // Also clean up HuggingFace cache for this model
-    // Extract the HuggingFace model ID from the path (e.g., "OpenVINO/model-name")
     try {
       const hfModelPath = path.join(
         hfCacheDir,
@@ -206,16 +192,13 @@ async function deleteOVMSModel(modelName: string): Promise<NextResponse> {
       }
     } catch (cacheError) {
       console.warn('Error cleaning HuggingFace cache:', cacheError)
-      // Continue anyway - main model directory is deleted
     }
 
-    // Update config.json to remove the model entry
     if (fs.existsSync(configPath)) {
       try {
         const configContent = fs.readFileSync(configPath, 'utf-8')
         const config = JSON.parse(configContent)
 
-        // Remove references to the model from mediapipe_config_list and model_config_list
         let configChanged = false
         if (config.mediapipe_config_list) {
           const before = config.mediapipe_config_list.length
@@ -246,7 +229,6 @@ async function deleteOVMSModel(modelName: string): Promise<NextResponse> {
           }
         }
 
-        // model_config_list entries use the nested { config: { name, base_path, ... } } shape
         if (config.model_config_list) {
           const before = config.model_config_list.length
           const removedEntries: Array<string> = []
@@ -256,8 +238,6 @@ async function deleteOVMSModel(modelName: string): Promise<NextResponse> {
               const name = typeof cfg.name === 'string' ? cfg.name.trim() : undefined
               const basePath = typeof cfg.base_path === 'string' ? cfg.base_path.trim() : undefined
 
-              // Remove when name equals modelName, name starts with `${modelName}_` (tokenizer/embeddings suffixes),
-              // or base_path equals modelName or starts with `${modelName}/`.
               const referencesModel =
                 name === modelName ||
                 (typeof name === 'string' && name.startsWith(modelName + '_')) ||
@@ -281,7 +261,6 @@ async function deleteOVMSModel(modelName: string): Promise<NextResponse> {
         }
 
         if (configChanged) {
-          // Write updated config back
           fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
           console.log('Updated config.json to remove', modelName)
         } else {
@@ -289,12 +268,9 @@ async function deleteOVMSModel(modelName: string): Promise<NextResponse> {
         }
       } catch (configError) {
         console.warn('Error updating config.json:', configError)
-        // Continue anyway - model directory is deleted
       }
     }
 
-    // Wait for OVMS to detect the config change (polling interval is 1 second)
-    // Give it up to 3 seconds to reload
     const PROVIDER_URL = await getLLMUrl()
     let reloadSuccess = false
 
@@ -305,13 +281,11 @@ async function deleteOVMSModel(modelName: string): Promise<NextResponse> {
       })
 
       try {
-        // Check if model is still in OVMS config
         const configUrl = new URL('/v1/config', PROVIDER_URL).href
-        const configResponse = await fetch(configUrl)
+        const configResponse = await safeFetch(configUrl)
 
         if (configResponse.ok) {
           const configData = await configResponse.json()
-          // Check if the deleted model is no longer in the response
           if (!configData[modelName]) {
             console.log(`OVMS config reloaded successfully, model ${modelName} removed`)
             reloadSuccess = true

@@ -2,6 +2,8 @@
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
+> **Notice:** This software is currently in pre-production status, designed to run locally on a single system for a single user only. It supports multiple personas, but these are intended solely for that single user to demonstrate and test features from different perspectives, not for concurrent multi-user access.
+
 University Curriculum Enabling Tool is an advanced application leveraging fine-tuned Language Models and Retrieval Augmented Generation (RAG) technology to support diverse academic needs:
 
 - **Curriculum Builder:** Designed for faculty, this tool streamlines the creation and refinement of course content, enabling the development of tailored curricula and continuous improvement of teaching materials.
