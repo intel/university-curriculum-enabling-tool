@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { NextRequest, NextResponse } from 'next/server'
+import { validateLLMUrl, SSRFGuardError } from '@/lib/ssrf-guard'
 
 /**
  * POST /api/settings/llm-config/test
@@ -37,6 +38,23 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    try {
+      validateLLMUrl(trimmedURL)
+    } catch (err) {
+      if (err instanceof SSRFGuardError) {
+        console.warn('[llm-config/test] Blocked disallowed URL:', trimmedURL, err.message)
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'The provided URL is not permitted. Check ALLOWED_LLM_PROTOCOLS and ALLOWED_LLM_HOSTS configuration.',
+            detail: err.message,
+          },
+          { status: 422 },
+        )
+      }
+      throw err
+    }
+
     // Auto-detect provider type by testing endpoints sequentially
     const errors: string[] = []
 
@@ -49,6 +67,7 @@ export async function POST(request: NextRequest) {
       const ollamaResponse = await fetch(ollamaEndpoint, {
         method: 'GET',
         signal: ollamaController.signal,
+        redirect: 'error',
       })
       clearTimeout(ollamaTimeoutId)
 
@@ -80,6 +99,7 @@ export async function POST(request: NextRequest) {
       const ovmsResponse = await fetch(ovmsEndpoint, {
         method: 'GET',
         signal: ovmsController.signal,
+        redirect: 'error',
       })
       clearTimeout(ovmsTimeoutId)
 

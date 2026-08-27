@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "cross-env NODE_OPTIONS=--no-deprecation next dev -p 8080",
-    "dev:lecturer": "cross-env NODE_OPTIONS=--no-deprecation PERSONA=lecturer next dev -p 8080",
-    "dev:student": "cross-env NODE_OPTIONS=--no-deprecation PERSONA=student next dev -p 8080",
+    "dev": "cross-env NODE_OPTIONS=--no-deprecation next dev -p 8080 -H 127.0.0.1",
+    "dev:lecturer": "cross-env NODE_OPTIONS=--no-deprecation PERSONA=lecturer next dev -p 8080 -H 127.0.0.1",
+    "dev:student": "cross-env NODE_OPTIONS=--no-deprecation PERSONA=student next dev -p 8080 -H 127.0.0.1",
     "build": "cross-env NODE_OPTIONS=--no-deprecation next build",
     "prebuild:faculty": "npm run ensure-deps && npm run build:lecturer && npm run build:student",
     "ensure-deps": "npm install",
