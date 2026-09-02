@@ -10,12 +10,7 @@ export class SSRFGuardError extends Error {
 }
 
 function getAllowedProtocols(): Set<string> {
-  const raw = process.env.ALLOWED_LLM_PROTOCOLS
-  if (!raw) {
-    throw new SSRFGuardError(
-      'ALLOWED_LLM_PROTOCOLS environment variable is not set.'
-    )
-  }
+  const raw = process.env.ALLOWED_LLM_PROTOCOLS ?? 'http://,https://'
   return new Set(
     raw
       .split(',')
@@ -28,17 +23,22 @@ function getAllowedProtocols(): Set<string> {
 }
 
 function getAllowedHosts(): Set<string> {
-  const raw = process.env.ALLOWED_LLM_HOSTS
-  if (!raw) {
-    throw new SSRFGuardError(
-      'ALLOWED_LLM_HOSTS environment variable is not set.'
-    )
-  }
+  const raw = process.env.ALLOWED_LLM_HOSTS ?? 'localhost,127.0.0.1'
   return new Set(
     raw
       .split(',')
       .map((h) => h.trim().toLowerCase().replace(/^["']|["']$/g, ''))
       .filter((h) => h.length > 0)
+  )
+}
+
+function getAllowedPorts(): Set<string> {
+  const raw = process.env.ALLOWED_LLM_PORTS ?? '11434,5950'
+  return new Set(
+    raw
+      .split(',')
+      .map((p) => p.trim().replace(/^["']|["']$/g, ''))
+      .filter((p) => p.length > 0)
   )
 }
 
@@ -65,6 +65,14 @@ export function validateLLMUrl(rawUrl: string): URL {
   if (!allowedHosts.has(hostname)) {
     throw new SSRFGuardError(
       `Disallowed host "${parsed.hostname}". Allowed hosts: ${[...allowedHosts].join(', ')}.`
+    )
+  }
+
+  const allowedPorts = getAllowedPorts()
+  const port = parsed.port
+  if (port && !allowedPorts.has(port)) {
+    throw new SSRFGuardError(
+      `Disallowed port "${port}". Allowed ports: ${[...allowedPorts].join(', ')}.`
     )
   }
 
@@ -142,6 +150,14 @@ export async function safeFetch(
   if (!allowedHosts.has(validatedHostname)) {
     throw new SSRFGuardError(
       `Disallowed host "${parsed.hostname}". Allowed hosts: ${[...allowedHosts].join(', ')}.`
+    )
+  }
+
+  const allowedPorts = getAllowedPorts()
+  const port = parsed.port
+  if (port && !allowedPorts.has(port)) {
+    throw new SSRFGuardError(
+      `Disallowed port "${port}". Allowed ports: ${[...allowedPorts].join(', ')}.`
     )
   }
 
