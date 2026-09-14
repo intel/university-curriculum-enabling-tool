@@ -22,7 +22,7 @@
     "@ai-sdk/openai": "^3.0.0",
     "@ai-sdk/openai-compatible": "^2.0.0",
     "@ai-sdk/provider": "^2.0.0",
-    "@ai-sdk/provider-utils": "^4.0.27",
+    "@ai-sdk/provider-utils": "^4.0.33",
     "@ai-sdk/react": "^3.0.197",
     "@emoji-mart/data": "^1.2.1",
     "@hookform/resolvers": "^5.2.2",
