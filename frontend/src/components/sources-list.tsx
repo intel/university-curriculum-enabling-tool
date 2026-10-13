@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import type { CheckedState } from '@radix-ui/react-checkbox'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   Dialog,
@@ -67,11 +68,12 @@ export function SourcesList() {
   const { renameSourceById } = useRenameSource()
   const { deleteSourceById, deleteSelectedSources } = useDeleteSource()
 
-  const handleSelectAll = (checked: boolean) => {
-    setSelectAll(checked)
+  const handleSelectAll = (checked: CheckedState) => {
+    const isChecked = checked === true
+    setSelectAll(isChecked)
     const updatedSources = sources.map((source) => ({
       ...source,
-      selected: checked,
+      selected: isChecked,
     }))
     setSources(updatedSources)
   }

@@ -188,8 +188,8 @@ export default function SettingsPage() {
             <Label htmlFor="language">Response Language</Label>
             <Select
               value={currentLang}
-              onValueChange={(val: 'en' | 'id') => {
-                setPendingLang(val)
+              onValueChange={(val: string) => {
+                setPendingLang(val as 'en' | 'id')
                 setConfirmOpen(true)
               }}
             >
