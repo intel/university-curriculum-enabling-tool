@@ -6,6 +6,7 @@ import config from '@payload-config'
 import { EmbeddingChunk } from '../types/embedding-chunk'
 import { ClientSource } from '../types/client-source'
 import type { Embedding, Chunk } from '@/payload-types'
+import { getExplicitlySelectedSourceIds } from '@/lib/rag/prompt-safety'
 
 /**
  * Converts the stored embedding field into a number array.
@@ -48,8 +49,8 @@ function parseEmbedding(embedding: unknown): number[] {
 export async function getStoredEmbeddings(
   selectedSources: ClientSource[],
 ): Promise<EmbeddingChunk[]> {
-  const sourceIds = selectedSources.map((s) => s.id)
-  console.log('sourceIds:', sourceIds)
+  const sourceIds = getExplicitlySelectedSourceIds(selectedSources)
+  if (sourceIds.length === 0) return []
 
   const payload = await getPayload({ config })
   // Only fetch text embeddings: chunk set, media not set

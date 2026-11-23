@@ -44,10 +44,11 @@ export async function retrieveContextByEmbedding(
     return []
   }
 
-  console.log('DEBUG: embeddingRetrival topK:', topK)
-  console.log('DEBUG: embeddingRetrival stored embedding length:', storedEmbeddings.length)
-  console.log('DEBUG: embeddingRetrival query:', query)
-  console.log('DEBUG: embeddingRetrival query embedding length:', queryEmbeddingData.length)
+  console.log('Embedding retrieval completed:', {
+    topK,
+    storedEmbeddingCount: storedEmbeddings.length,
+    queryEmbeddingCount: queryEmbeddingData.length,
+  })
 
   // Extract the embedding vector from the generated data
   const queryEmbedding = queryEmbeddingData[0].embedding

@@ -8,6 +8,8 @@
     "dev:lecturer": "cross-env NODE_OPTIONS=--no-deprecation PERSONA=lecturer next dev -p 8080 -H 127.0.0.1",
     "dev:student": "cross-env NODE_OPTIONS=--no-deprecation PERSONA=student next dev -p 8080 -H 127.0.0.1",
     "build": "cross-env NODE_OPTIONS=--no-deprecation next build",
+    "test:security": "node --experimental-strip-types --test test/rag-prompt-safety.test.ts",
+    "test:security:live": "cross-env RUN_LIVE_RAG_REDTEAM=1 node --experimental-strip-types --test test/rag-redteam.live.test.ts",
     "prebuild:faculty": "npm run ensure-deps && npm run build:lecturer && npm run build:student",
     "ensure-deps": "npm install",
     "migrate": "cross-env NODE_OPTIONS=--no-deprecation PAYLOAD_CONFIG_PATH=src/payload.config.ts payload migrate",

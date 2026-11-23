@@ -15,6 +15,7 @@ import {
 import { extractJsonFromText } from '../utils/jsonHelpers'
 import { stripThinkTags, stripCodeFences } from '../utils/generalHelpers'
 import { ensureTargetLanguageText } from '../utils/languageHelpers'
+import { withRagSourceSafety } from '@/lib/rag/prompt-safety'
 
 // Zod schema for marking criteria (inline for OVMS compatibility)
 const explanationObjectSchema = z.object({
@@ -44,7 +45,7 @@ export async function generateModelAnswer(
   courseInfo?: CourseInfo,
   language: 'en' | 'id' = 'en',
 ): Promise<string> {
-  console.log(`Generating model answer for question: ${question.substring(0, 100)}...`)
+  console.log('Generating model answer')
 
   // Determine if we have source materials
   const hasSourceMaterials = (assistantMessage.content as string).includes('SOURCE MATERIALS:')
@@ -94,6 +95,11 @@ export async function generateModelAnswer(
     }
   }
 
+  systemMessage = {
+    ...systemMessage,
+    content: withRagSourceSafety(String(systemMessage.content)),
+  }
+
   try {
     // First attempt with full context
     try {
@@ -114,7 +120,7 @@ export async function generateModelAnswer(
       console.log('Model answer language enforced to', language)
 
       cleaned = cleaned.replace(/^[ \t]*[\*-]\s+/gm, '• ')
-      console.log('Model answer response:', cleaned.substring(0, 100) + '...')
+      console.log('Model answer generated')
       return cleaned
     } catch (firstError) {
       console.warn('First attempt failed, trying with reduced context:', firstError)
@@ -128,7 +134,7 @@ export async function generateModelAnswer(
             : ''
 
       const reducedAssistantMessage: ModelMessage = {
-        role: 'assistant',
+        role: 'user',
         content: reducedContent,
       }
 
@@ -149,7 +155,7 @@ export async function generateModelAnswer(
       console.log('Model answer language enforced to', language, '(retry)')
 
       cleaned = cleaned.replace(/^[ \t]*[\*-]\s+/gm, '• ')
-      console.log('Model answer response (retry):', cleaned.substring(0, 100) + '...')
+      console.log('Model answer generated on retry')
       return cleaned
     }
   } catch (error) {
@@ -159,8 +165,8 @@ export async function generateModelAnswer(
     const errorMessage = error instanceof Error ? error.message : 'Unknown error'
     const fallbackAnswer =
       language === 'id'
-        ? `Tidak dapat menghasilkan jawaban model karena keterbatasan konteks. Pertanyaan: ${question.substring(0, 200)}...\n\nSilakan coba dengan sumber materi yang lebih sedikit atau gunakan bahasa Inggris.`
-        : `Unable to generate a model answer due to context limitations. Question: ${question.substring(0, 200)}...\n\nPlease try with fewer source materials or use English as the response language.`
+        ? 'Tidak dapat menghasilkan jawaban model karena keterbatasan konteks. Silakan coba dengan sumber materi yang lebih sedikit atau gunakan bahasa Inggris.'
+        : 'Unable to generate a model answer due to context limitations. Please try with fewer source materials or use English as the response language.'
 
     console.log('Using fallback answer due to error:', errorMessage)
     return fallbackAnswer
@@ -234,7 +240,7 @@ export async function generateMarkingCriteria(
   courseInfo?: CourseInfo,
   language: 'en' | 'id' = 'en',
 ): Promise<ExplanationObject> {
-  console.log(`Generating marking criteria for question: ${question.substring(0, 100)}...`)
+  console.log('Generating marking criteria')
 
   // Determine if we have source materials
   const hasSourceMaterials = (assistantMessage.content as string).includes('SOURCE MATERIALS:')
@@ -252,7 +258,7 @@ export async function generateMarkingCriteria(
 
   const systemMessage: ModelMessage = {
     role: 'system',
-    content: systemPrompt,
+    content: withRagSourceSafety(systemPrompt),
   }
 
   const userMessage: ModelMessage = {
@@ -364,7 +370,7 @@ export async function generateMarkingCriteria(
 
     const cleanedRaw = stripThinkTags(response.text)
     const cleaned = stripCodeFences(cleanedRaw)
-    console.log('Marking criteria response:', cleaned.substring(0, 100) + '...')
+    console.log('Marking criteria generated')
 
     try {
       const markingCriteria = JSON.parse(cleaned)

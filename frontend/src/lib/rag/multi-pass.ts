@@ -4,6 +4,7 @@
 import { ContextChunk } from '../types/context-chunk'
 import { ModelMessage } from 'ai'
 import { effectiveTokenCountForText } from '@/lib/utils'
+import { formatUntrustedSourceMaterials, withRagSourceSafety } from '@/lib/rag/prompt-safety'
 import {
   SystemPromptGenerator,
   UserPromptGenerator,
@@ -152,7 +153,7 @@ export async function processChunksMultiPass<TContent = Record<string, unknown>>
   // Prepare messages
   const systemMessage: ModelMessage = {
     role: 'system',
-    content: systemPrompt,
+    content: withRagSourceSafety(systemPrompt),
   }
 
   const userMessage: ModelMessage = {
@@ -161,9 +162,11 @@ export async function processChunksMultiPass<TContent = Record<string, unknown>>
   }
 
   // The assistant message contains the chunks as context
-  const assistantContent = chunkContent || 'No relevant knowledge found.'
+  const assistantContent = chunkContent
+    ? formatUntrustedSourceMaterials([{ chunk: chunkContent.trim() }])
+    : 'No relevant knowledge found.'
   const assistantMessage: ModelMessage = {
-    role: 'assistant',
+    role: 'user',
     content: assistantContent,
   }
 

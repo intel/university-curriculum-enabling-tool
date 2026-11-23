@@ -27,6 +27,7 @@ import { getSelectContextDescription } from '@/lib/utils/context-messages'
 import { ContextRequirementMessage } from '@/components/context-requirement-message'
 import { useCourses } from '@/lib/hooks/use-courses'
 import type { CitationReference, Citation } from '@/lib/types/citation-types'
+import { safeMarkdownUrl } from '@/lib/rag/prompt-safety'
 import React from 'react'
 
 function preprocessMarkdown(md: string): string {
@@ -401,16 +402,6 @@ export default function SummaryPage() {
     return style
   }
 
-  // Add debugging for markdown content rendering
-  useEffect(() => {
-    if (summary) {
-      console.log('DEBUG: Rendering summary markdown:', summary)
-    }
-    if (citations && citations.length > 0) {
-      console.log('DEBUG: Rendering citations markdown:', citations)
-    }
-  }, [summary, citations])
-
   // Map to store unique citation keys and their assigned numbers
   const citationNumberMap = new Map<string, number>()
   let citationCounter = 1
@@ -776,6 +767,7 @@ export default function SummaryPage() {
                                 <ReactMarkdown
                                   remarkPlugins={[remarkGfm, remarkBreaks]}
                                   className={`prose-sm inline max-w-none text-sm markdown-content${c.type === 'list' ? 'mb-0' : ''}`}
+                                  urlTransform={safeMarkdownUrl}
                                 >
                                   {preprocessMarkdown(
                                     c.type === 'list' && c.items
@@ -919,6 +911,7 @@ export default function SummaryPage() {
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm, remarkBreaks]}
                         className="prose-sm markdown-content max-w-none text-sm"
+                        urlTransform={safeMarkdownUrl}
                       >
                         {preprocessMarkdown(summary)}
                       </ReactMarkdown>

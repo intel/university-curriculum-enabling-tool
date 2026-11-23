@@ -9,6 +9,7 @@ import { extractJsonFromText } from '../utils/jsonHelpers'
 import { stripThinkTags, logAssessmentDebug } from '../utils/generalHelpers'
 import { ensureTargetLanguageText } from '../utils/languageHelpers'
 import { generateProjectDescription } from './projectDescriptionGenerator'
+import { withRagSourceSafety } from '@/lib/rag/prompt-safety'
 
 export async function generateQuestions(
   assessmentType: string,
@@ -164,7 +165,7 @@ DO NOT include any text outside the JSON array.`
 
   const systemMessage: ModelMessage = {
     role: 'system',
-    content: systemPrompt,
+    content: withRagSourceSafety(systemPrompt),
   }
 
   const userMessage: ModelMessage = {
@@ -204,7 +205,7 @@ DO NOT include any text outside the JSON array.`
     })
 
     const cleaned = stripThinkTags(response.text)
-    logAssessmentDebug('Questions response:', cleaned)
+    logAssessmentDebug('Questions response received')
 
     try {
       const questions = JSON.parse(cleaned)

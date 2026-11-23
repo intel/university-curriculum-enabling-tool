@@ -161,19 +161,8 @@ export async function generateEmbeddings(
       return null
     }
 
-    // Log full chunk if sanitization changed it
-    if (sanitized !== chunk) {
-      const sanitizeLog = `
-Sanitized chunk ${index + 1}:
-Before: ${chunk}
-After : ${sanitized}
-Length: ${chunk.length} -> ${sanitized.length}
--------`
-      console.log(sanitizeLog)
-    }
     const maxRetries = 5
     const tokens = tokenize(chunk)
-    const preview = chunk.slice(0, 500)
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
@@ -194,9 +183,8 @@ Length: ${chunk.length} -> ${sanitized.length}
           embeddingUrl = new URL('/api/embed', baseUrl)
         }
 
-        console.log('DEBUG: Attempting to call /v3/embeddings for OVMS, checking contents')
+        console.log('DEBUG: Sending embedding request')
         console.log(`DEBUG: effectiveModelName=${effectiveModelName}`)
-        console.log(`DEBUG: sanitized=${sanitized}`)
 
         const response = await fetch(embeddingUrl.href, {
           method: 'POST',
@@ -215,10 +203,7 @@ Length: ${chunk.length} -> ${sanitized.length}
         }
 
         const responseText = await response.text()
-        console.log(
-          `DEBUG: Raw response for chunk ${index + 1} (first 200 chars):`,
-          responseText.substring(0, 200),
-        )
+        console.log(`DEBUG: Received embedding response for chunk ${index + 1}`)
 
         let embedding: number[]
 
@@ -263,7 +248,7 @@ Length: ${chunk.length} -> ${sanitized.length}
           }
         } catch (parseError) {
           throw new Error(
-            `Failed to parse JSON response: ${parseError}. Response: ${responseText.substring(0, 500)}`,
+            `Failed to parse embedding JSON response: ${parseError}`,
           )
         }
 
@@ -276,13 +261,7 @@ Length: ${chunk.length} -> ${sanitized.length}
         completedCount++
         const completionPercentage = ((completedCount / totalChunks) * 100).toFixed(2)
 
-        const successLog = `
-✅ Successfully generated embedding for chunk ${index + 1}/${totalChunks}
-Length: ${chunk.length}, Tokens: ${tokens.length}
-Preview: ${preview}
-Embedding length: ${embedding.length}
-Completion: ${completionPercentage}% (${completedCount}/${totalChunks})
--------`
+        const successLog = `Generated embedding for chunk ${index + 1}/${totalChunks}; tokens: ${tokens.length}; embedding length: ${embedding.length}; completion: ${completionPercentage}%`
         console.log(successLog)
         return {
           order: index + 1,
@@ -305,7 +284,6 @@ Completion: ${completionPercentage}% (${completedCount}/${totalChunks})
         const errorLog = `
 ❌ Attempt ${attempt}/${maxRetries} failed for chunk ${index + 1}/${totalChunks}
 Length: ${chunk.length}, Tokens: ${tokens.length}
-Preview: ${preview}
 Error: ${message}
 ${stack ? `Stack: ${stack}` : ''}
 -------`
@@ -323,7 +301,6 @@ ${stack ? `Stack: ${stack}` : ''}
     const finalErrorLog = `
 💥 Failed permanently for chunk ${index + 1}/${totalChunks}
 Length: ${chunk.length}, Tokens: ${tokens.length}
-Preview: ${preview}
 -------`
     console.error(finalErrorLog)
     return null

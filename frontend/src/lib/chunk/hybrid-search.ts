@@ -265,12 +265,11 @@ function logRankingResults(sortedChunks: ScoredChunk[], limit: number = 10): voi
       (i + 1).toString().padEnd(4),
       `chunk #${chunk.originalIndex + 1}`.padEnd(14),
       chunk.combinedScore.toFixed(5).padEnd(14),
-      `"${chunk.chunk.substring(0, 30).replace(/\n/g, ' ')}..."`,
     ])
 
   logger.table(
     'Chunk ordering before & after hybrid sort (first 10 chunks):',
-    ['Rank', 'Original Index', 'Combined Score', 'Chunk Preview'],
+    ['Rank', 'Original Index', 'Combined Score'],
     rows,
   )
 }
@@ -317,15 +316,7 @@ function normalizeRerankScores(rerankedChunks: ScoredChunk[]): void {
  * Logs reranking comparison results
  */
 function logRerankingResults(rerankedChunks: ScoredChunk[], sortedChunks: ScoredChunk[]): void {
-  // Log first few reranked results
-  logger.log('First 5 chunks after reranking:')
-  rerankedChunks.slice(0, 5).forEach((c, i) => {
-    logger.log(
-      `Rank ${i + 1} - Combined: ${c.combinedScore.toFixed(4)}, ` +
-        `Rerank: ${c.rerankScore?.toFixed(4) || 'N/A'}, ` +
-        `Chunk: "${c.chunk.substring(0, 50)}..."`,
-    )
-  })
+  logger.log(`Reranked ${rerankedChunks.length} chunks`)
 
   // Compare original ranking with reranked results
   logger.log('Ranking comparison (first 5 results):')
@@ -342,13 +333,12 @@ function logRerankingResults(rerankedChunks: ScoredChunk[], sortedChunks: Scored
       `chunk #${chunk.originalIndex + 1}`.padEnd(14),
       hybridRank.toString().padEnd(11),
       (chunk.rerankScore || 0).toFixed(4).padEnd(12),
-      `"${chunk.chunk.substring(0, 25).replace(/\n/g, ' ')}..."`,
     ]
   })
 
   logger.table(
     'Chunk ordering changes after reranking (top 10):',
-    ['Rank', 'Original Index', 'Hybrid Rank', 'Rerank Score', 'Chunk Preview'],
+    ['Rank', 'Original Index', 'Hybrid Rank', 'Rerank Score'],
     rows,
   )
 

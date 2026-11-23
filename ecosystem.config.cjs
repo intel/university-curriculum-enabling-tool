@@ -190,7 +190,7 @@ module.exports = {
       autorestart: true,
       env: {
         NODE_ENV:     'production',
-        HOSTNAME:     readEnvVariable('FRONTEND_HOST',  '127.0.0.1'),
+        HOSTNAME:     '127.0.0.1',
         PORT:         readEnvVariable('FRONTEND_PORT',  '8080'),
         HF_TOKEN:     readEnvVariable('HF_TOKEN',       ''),
         PACKAGE_ROOT: PACKAGE_ROOT,

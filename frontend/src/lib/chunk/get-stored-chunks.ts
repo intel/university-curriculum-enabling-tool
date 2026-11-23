@@ -6,6 +6,7 @@ import config from '@payload-config'
 import { ClientSource } from '../types/client-source'
 import { ContextChunk } from '../types/context-chunk'
 import type { Chunk } from '@/payload-types'
+import { getExplicitlySelectedSourceIds } from '@/lib/rag/prompt-safety'
 
 /**
  * Sanitizes a text chunk to prevent issues with JSON parsing
@@ -43,7 +44,8 @@ function sanitizeChunkText(text: string): string {
  *          the source type as 'stored', and the order of the chunk.
  */
 export async function getStoredChunks(selectedSources: ClientSource[]): Promise<ContextChunk[]> {
-  const sourceIds = selectedSources.map((s) => s.id)
+  const sourceIds = getExplicitlySelectedSourceIds(selectedSources)
+  if (sourceIds.length === 0) return []
   const payload = await getPayload({ config })
   const cmsResponse = await payload.find({
     collection: 'chunks',

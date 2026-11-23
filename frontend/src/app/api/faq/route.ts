@@ -17,6 +17,8 @@ import {
   ProcessResult,
 } from '@/lib/rag/multi-pass'
 import { ContextChunk } from '@/lib/types/context-chunk'
+import type { ClientSource } from '@/lib/types/client-source'
+import { getExplicitlySelectedSources } from '@/lib/rag/prompt-safety'
 
 // Zod schema for FAQ items
 const faqItemSchema = z.object({
@@ -363,9 +365,9 @@ export async function POST(req: Request) {
     const { provider } = await getProviderInfo()
 
     // Parse request data
+    const requestBody = await req.json()
     const {
       selectedModel,
-      selectedSources,
       faqCount,
       searchQuery,
       multiPassState,
@@ -374,11 +376,13 @@ export async function POST(req: Request) {
       _recursionDepth = 0,
       courseInfo, // Add courseInfo parameter
       language = 'en',
-    } = await req.json()
+    } = requestBody
+    let selectedSources = getExplicitlySelectedSources<ClientSource>(requestBody.selectedSources)
+    if (!Array.isArray(selectedSources)) selectedSources = []
 
     // Debug logging
     console.log('DEBUG FAQ API: courseInfo received:', courseInfo)
-    console.log('DEBUG FAQ API: selectedSources length:', selectedSources?.length || 0)
+    console.log('DEBUG FAQ API: selectedSources length:', selectedSources.length)
 
     // Safety check to prevent infinite loops
     if (_recursionDepth > 10) {
@@ -392,7 +396,7 @@ export async function POST(req: Request) {
     }
 
     // Check if we have valid sources
-    const hasValidSources = Array.isArray(selectedSources) && selectedSources.length > 0
+    const hasValidSources = selectedSources.length > 0
 
     // Process user query
     const safeSearchQuery = typeof searchQuery === 'string' ? searchQuery : ''

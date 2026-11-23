@@ -11,6 +11,7 @@ import { ASSESSMENT_CONCURRENCY, getDefaultDuration } from './config/constants'
 import { mapWithConcurrency } from './utils/generalHelpers'
 import { generateQuestions } from './generators/questionsGenerator'
 import { generateAssessmentMetadata } from './generators/metadataGenerator'
+import { formatUntrustedSourceMaterials } from '@/lib/rag/prompt-safety'
 import { processQuestion } from './processors/questionProcessor'
 import { prepareSourceContent } from './services/sourceContentService'
 
@@ -35,28 +36,24 @@ export async function POST(req: Request) {
 
     console.log('=== ASSESSMENT GENERATION STARTED ===')
     console.log('Parameters:', { assessmentType, difficultyLevel, numQuestions })
-    console.log('Course Info:', courseInfo)
-    console.log('Selected Sources Raw:', selectedSources)
-    console.log('Selected Sources Type:', typeof selectedSources)
-    console.log('Selected Sources Array?:', Array.isArray(selectedSources))
+    console.log('Selected sources count:', Array.isArray(selectedSources) ? selectedSources.length : 0)
 
     // Get the provider instance (supports both Ollama and OVMS)
     const { provider } = await getProviderInfo()
 
     // Prepare source content using the modularized service
-    const assistantContent = await prepareSourceContent(selectedSources, courseInfo, language)
+    const preparedAssistantContent = await prepareSourceContent(selectedSources, courseInfo, language)
+    const assistantContent = preparedAssistantContent.includes('SOURCE MATERIALS:')
+      ? formatUntrustedSourceMaterials([{ chunk: preparedAssistantContent }])
+      : preparedAssistantContent
 
     // Create assistant message with the source content
     const assistantMessage: ModelMessage = {
-      role: 'assistant',
+      role: 'user',
       content: assistantContent,
     }
 
-    console.log('=== ASSISTANT MESSAGE CONTENT DEBUG ===')
     console.log('Assistant content length:', assistantContent.length)
-    console.log('Contains SOURCE MATERIALS:', assistantContent.includes('SOURCE MATERIALS:'))
-    console.log('Assistant content preview:', assistantContent.substring(0, 300) + '...')
-    console.log('=== END ASSISTANT MESSAGE DEBUG ===')
 
     // Generate assessment metadata using the modularized generator
     const assessmentMetadata = await generateAssessmentMetadata(
@@ -69,7 +66,7 @@ export async function POST(req: Request) {
       language,
     )
 
-    console.log('Final metadata:', assessmentMetadata)
+    console.log('Assessment metadata generated')
 
     // Step 1: Generate unique questions using the modularized generator
     const questionTexts = await generateQuestions(
@@ -131,7 +128,7 @@ export async function POST(req: Request) {
     // Return the assessment data to the frontend
     return NextResponse.json(assessmentData)
   } catch (error: unknown) {
-    console.error('Error generating assessment:', error)
+    console.error('Error generating assessment:', error instanceof Error ? error.name : 'Unknown')
     const errorMessage = error instanceof Error ? error.message : 'Unknown error'
     return NextResponse.json(
       {

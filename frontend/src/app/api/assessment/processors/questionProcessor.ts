@@ -36,14 +36,12 @@ export async function processQuestion(
 
     console.log(`Processing ${assessmentType} question ${questionIndex + 1}:`, {
       type: questionType,
-      description: questionString.substring(0, 100) + '...',
+      length: questionString.length,
     })
   } else {
     // If it's already a string, use it directly
     questionString = questionText
-    console.log(
-      `Processing ${assessmentType} question ${questionIndex + 1}: ${questionString.substring(0, 100)}...`,
-    )
+    console.log(`Processing ${assessmentType} question ${questionIndex + 1}`)
   }
 
   try {

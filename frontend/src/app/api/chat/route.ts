@@ -10,6 +10,13 @@ import { getMostRelevantImage } from '@/lib/embedding/get-most-relevant-image'
 import { extractTextFromMessage } from '@/lib/utils/message'
 import { getPayload } from 'payload'
 import config from '@payload-config'
+import type { ClientSource } from '@/lib/types/client-source'
+import {
+  filterChatHistoryMessages,
+  formatUntrustedSourceMaterials,
+  getExplicitlySelectedSources,
+  withRagSourceSafety,
+} from '@/lib/rag/prompt-safety'
 
 // export const runtime = "edge";
 export const dynamic = 'force-dynamic'
@@ -34,14 +41,29 @@ const TOKEN_CONTEXT_BUDGET = TOKEN_MAX - TOKEN_RESPONSE_BUDGET
  * @returns A promise that resolves to a response object.
  */
 export async function POST(req: Request) {
-  const { messages, selectedModel, selectedSources, data, language } = await req.json()
+  const body: unknown = await req.json().catch(() => null)
+  if (!body || typeof body !== 'object') {
+    return new Response('Invalid chat request', { status: 400 })
+  }
+
+  const requestBody = body as Record<string, unknown>
+  const messages = filterChatHistoryMessages(requestBody.messages)
+  const selectedModel = requestBody.selectedModel
+  const selectedSources = getExplicitlySelectedSources<ClientSource>(requestBody.selectedSources)
+  const language = requestBody.language
+
+  if (
+    messages.length === 0 ||
+    messages[messages.length - 1].role !== 'user' ||
+    typeof selectedModel !== 'string' ||
+    selectedModel.trim() === ''
+  ) {
+    return new Response('Invalid chat request', { status: 400 })
+  }
+
   const { providerName, provider } = await getProviderInfo()
 
   console.log('DEBUG: CHAT API selectedModel:', selectedModel)
-
-  // Handle legacy image data for backward compatibility
-  const legacyImages = data?.images || []
-  console.log('DEBUG: Legacy images count:', legacyImages.length)
 
   // Prepare: Calculate the total number of selected sources
   // const totalSelectedSources = selectedSources.filter(
@@ -55,60 +77,26 @@ export async function POST(req: Request) {
   console.log(`DEBUG: TOKEN_RESPONSE_RATIO: ${TOKEN_RESPONSE_RATIO}`)
 
   // Step 1: Extract attachments and convert to coreMessages
-  console.log('DEBUG: Raw messages received:', JSON.stringify(messages, null, 2))
-
-  // Extract image attachments from messages
-  const messageImages: string[] = []
-  messages.forEach((msg: unknown, idx: number) => {
-    const m = msg as Record<string, unknown>
-
-    if (m.attachments && Array.isArray(m.attachments)) {
-      m.attachments.forEach((attachment: unknown) => {
-        const att = attachment as Record<string, unknown>
-        if (
-          att.contentType &&
-          typeof att.contentType === 'string' &&
-          att.contentType.startsWith('image/')
-        ) {
-          if (att.url && typeof att.url === 'string') {
-            messageImages.push(att.url)
-          }
-        }
-      })
-    }
-
-    console.log(`DEBUG: Message ${idx}:`, {
-      role: m.role,
-      hasContent: !!m.content,
-      hasParts: !!m.parts,
-      hasAttachments: !!m.attachments,
-      attachmentsCount: Array.isArray(m.attachments) ? m.attachments.length : 0,
-      partsLength: Array.isArray(m.parts) ? m.parts.length : 0,
-      partsTypes: Array.isArray(m.parts)
-        ? m.parts.map((p: unknown) => (p as Record<string, unknown>)?.type)
-        : [],
-    })
-  })
-
-  // Combine all images (message attachments + legacy)
-  const allImages = [...messageImages, ...legacyImages]
-  console.log('DEBUG: Total images available:', allImages.length)
+  console.log('DEBUG: Chat messages received:', messages.length)
 
   // Step 2: Extract the latest user query
   const originalLatestMessage = messages[messages.length - 1]
   let latestQuery = ''
 
   // Handle 'parts' structure
-  if (originalLatestMessage?.parts && Array.isArray(originalLatestMessage.parts)) {
-    interface MessagePart {
-      type: string
-      text?: string
+  if (originalLatestMessage) {
+    const latestMessageParts = originalLatestMessage.parts
+    if (Array.isArray(latestMessageParts)) {
+      interface MessagePart {
+        type: string
+        text?: string
+      }
+      const textPart = latestMessageParts.find(
+        (part: unknown): part is MessagePart =>
+          typeof part === 'object' && part !== null && (part as MessagePart).type === 'text',
+      )
+      latestQuery = textPart?.text || ''
     }
-    const textPart = originalLatestMessage.parts.find(
-      (part: unknown): part is MessagePart =>
-        typeof part === 'object' && part !== null && (part as MessagePart).type === 'text',
-    )
-    latestQuery = textPart?.text || ''
   }
 
   // Fallback: try the utility function for complex extraction
@@ -118,20 +106,13 @@ export async function POST(req: Request) {
   }
 
   if (!latestQuery) {
-    console.warn('Could not extract text from latest message:', {
-      originalLatestMessage,
-    })
+    console.warn('Could not extract text from latest user message')
   }
 
-  console.log('DEBUG: Final extracted latestQuery:', latestQuery)
+  console.log('DEBUG: Extracted latest user message:', latestQuery.length, 'characters')
 
   // Step 2.5: Check if any sources are selected and valid
-  const hasSelectedSources =
-    Array.isArray(selectedSources) &&
-    selectedSources.length > 0 &&
-    selectedSources.every(
-      (source) => source && typeof source === 'object' && 'id' in source && 'name' in source,
-    )
+  const hasSelectedSources = selectedSources.length > 0
 
   // Step 3: Find the most relevant image (only if sources are selected)
   let mostRelevantImageMarkdown = ''
@@ -229,12 +210,13 @@ Keep it to 2–3 bullets. Do not reveal internal chain-of-thought or hidden step
 
   const systemMessage: ModelMessage = {
     role: 'system',
-    content: systemPrompt,
+    content: withRagSourceSafety(systemPrompt),
   }
 
   // Token count estimation
   let usedTokens =
-    effectiveTokenCountForText(systemPrompt) + effectiveTokenCountForText(latestQuery)
+    effectiveTokenCountForText(systemMessage.content.toString()) +
+    effectiveTokenCountForText(latestQuery)
   let chunkContent = ''
   let chunksAdded = 0
   let assistantContent = ''
@@ -255,21 +237,21 @@ Keep it to 2–3 bullets. Do not reveal internal chain-of-thought or hidden step
 
     // Loop through retrieved chunks, summing effective token counts.
     for (const chunk of retrievedChunks) {
-      const chunkTokenCount = effectiveTokenCountForText(chunk.chunk)
-      // console.log(
-      //   `DEBUG: chat API chunk token ${chunk.order}/${retrievedChunks.length} effective count:`,
-      //   chunkTokenCount
-      // );
+      const candidateChunkContent = `${chunkContent}\n\n${chunk.chunk}`
+      const candidateAssistantContent = formatUntrustedSourceMaterials([
+        { sourceId: chunk.sourceId, chunk: candidateChunkContent.trim() },
+      ])
+      const chunkTokenCount = effectiveTokenCountForText(candidateAssistantContent)
       if (usedTokens + chunkTokenCount <= TOKEN_CONTEXT_BUDGET) {
-        chunkContent += `\n\n${chunk.chunk}`
+        chunkContent = candidateChunkContent
+        assistantContent = candidateAssistantContent
         usedTokens += chunkTokenCount
         chunksAdded++
       } else {
         break // Stop adding chunks if exceeding token budget
       }
     }
-    //" I should always return this in my answer : " + imageresult.text + ". Chunk content start here : " +
-    assistantContent = chunkContent || 'No relevant knowledge found.'
+    assistantContent = assistantContent || 'No relevant knowledge found.'
     console.log(
       `Total Chunks: ${chunksAdded}/${retrievedChunks.length} | ` +
         `Prompt tokens: ` +
@@ -296,30 +278,28 @@ Keep it to 2–3 bullets. Do not reveal internal chain-of-thought or hidden step
 
   const uiAssistantMessage = {
     id: 'assistant-1',
-    role: 'assistant',
+    role: 'user',
     content: assistantContent,
   }
 
   // Combine all messages in UI format, then convert to ModelMessage format for provider
-  console.log('DEBUG: Before combining - uiSystemMessage:', uiSystemMessage)
-  console.log('DEBUG: Before combining - uiAssistantMessage:', uiAssistantMessage)
-  console.log('DEBUG: Before combining - messages:', JSON.stringify(messages, null, 2))
+  console.log('DEBUG: Combining system, retrieved context, and validated chat history')
 
   // Validate and clean messages before combining
   const validatedMessages = messages.filter((msg: unknown) => {
     const m = msg as Record<string, unknown>
     if (!msg || typeof msg !== 'object' || !m.role) {
-      console.warn('DEBUG: Filtering out invalid message:', msg)
+      console.warn('DEBUG: Filtering out invalid chat message')
       return false
     }
     // Ensure parts array exists if it's a user message with parts structure
     if (m.parts && !Array.isArray(m.parts)) {
-      console.warn('DEBUG: Message has invalid parts (not array):', msg)
+      console.warn('DEBUG: Chat message has invalid parts')
       return false
     }
     // Ensure attachments array exists if specified
     if (m.attachments && !Array.isArray(m.attachments)) {
-      console.warn('DEBUG: Message has invalid attachments (not array):', msg)
+      console.warn('DEBUG: Chat message has invalid attachments')
       return false
     }
     return true
@@ -327,7 +307,6 @@ Keep it to 2–3 bullets. Do not reveal internal chain-of-thought or hidden step
 
   const allUIMessages = [uiSystemMessage, uiAssistantMessage, ...validatedMessages]
 
-  console.log('DEBUG: allUIMessages after validation:', JSON.stringify(allUIMessages, null, 2))
   console.log('DEBUG: allUIMessages length:', allUIMessages.length)
 
   if (allUIMessages.length === 0) {
@@ -362,7 +341,7 @@ Keep it to 2–3 bullets. Do not reveal internal chain-of-thought or hidden step
         if (!part || typeof part !== 'object') continue
 
         const p = part as Record<string, unknown>
-        console.log(`DEBUG: Processing part:`, { type: p.type, hasText: !!p.text, text: p.text })
+        console.log(`DEBUG: Processing part:`, { type: p.type, hasText: !!p.text })
 
         if (p.type === 'text' && typeof p.text === 'string' && p.text.trim()) {
           textParts.push(p.text.trim())
@@ -370,10 +349,7 @@ Keep it to 2–3 bullets. Do not reveal internal chain-of-thought or hidden step
       }
 
       const content = textParts.length > 0 ? textParts.join('\n') : ''
-      console.log(`DEBUG: Extracted content from parts:`, {
-        contentLength: content.length,
-        content: content.substring(0, 100) + '...',
-      })
+        console.log(`DEBUG: Extracted content from parts:`, { contentLength: content.length })
 
       if (!content) {
         // Fallback: try extractTextFromMessage utility
@@ -408,7 +384,7 @@ Keep it to 2–3 bullets. Do not reveal internal chain-of-thought or hidden step
   const validatedFullMessages = fullMessages.filter((msg) => {
     const content = typeof msg.content === 'string' ? msg.content : String(msg.content || '')
     if (!content || content.trim() === '') {
-      console.warn('DEBUG: Filtering out message with empty content:', msg)
+      console.warn('DEBUG: Filtering out chat message with empty content')
       return false
     }
     return true
@@ -418,11 +394,7 @@ Keep it to 2–3 bullets. Do not reveal internal chain-of-thought or hidden step
     throw new Error('No messages with valid content found')
   }
 
-  console.log('DEBUG: latestQuery:', latestQuery)
-  console.log(
-    'DEBUG: validatedFullMessages after conversion:',
-    JSON.stringify(validatedFullMessages, null, 2),
-  )
+  console.log('DEBUG: Validated model message count:', validatedFullMessages.length)
 
   // Step 6: Prepare messages based on provider type
   let messagesToSend: ModelMessage[]
@@ -445,7 +417,7 @@ Keep it to 2–3 bullets. Do not reveal internal chain-of-thought or hidden step
     messagesToSend = validatedFullMessages
     console.log('DEBUG: Ollama mode - sending full message history')
   }
-  console.log('DEBUG: Messages to send:', JSON.stringify(messagesToSend, null, 2))
+  console.log('DEBUG: Model message count:', messagesToSend.length)
 
   // Step 7: Stream AI response using the selected provider
   const startTime = Date.now()

@@ -5,6 +5,7 @@ import { ModelMessage, generateText } from 'ai'
 import { ScoredChunk } from '../types/context-chunk'
 import { getProviderInfo } from '@/lib/providers'
 import { getLLMUrl } from '@/lib/getLLMUrl'
+import { formatUntrustedSourceMaterials, RAG_SOURCE_SAFETY_INSTRUCTION } from '@/lib/rag/prompt-safety'
 
 const { provider } = await getProviderInfo()
 const ollamaUrl = await getLLMUrl()
@@ -39,12 +40,12 @@ const logger = {
   table: (rerankedChunks: ScoredChunk[]) => {
     if (!CONFIG.debug) return
     console.log('\nDEBUG: Reranked candidates summary:')
-    console.log('| Cand # | Original Idx | Combined Score | Rerank Score | Content Preview |')
-    console.log('|--------|--------------|----------------|--------------|-----------------|')
+    console.log('| Cand # | Original Idx | Combined Score | Rerank Score |')
+    console.log('|--------|--------------|----------------|--------------|')
     rerankedChunks.forEach((chunk, i) => {
       const originalIdx = chunk.originalIndex !== undefined ? chunk.originalIndex : 'N/A'
       console.log(
-        `| ${(i + 1).toString().padStart(6)} | ${originalIdx.toString().padStart(11)} | ${chunk.combinedScore.toFixed(4).padStart(13)} | ${(chunk.rerankScore || 0).toFixed(4).padStart(12)} | "${chunk.chunk.substring(0, 25).replace(/\n/g, ' ')}..." |`,
+        `| ${(i + 1).toString().padStart(6)} | ${originalIdx.toString().padStart(11)} | ${chunk.combinedScore.toFixed(4).padStart(13)} | ${(chunk.rerankScore || 0).toFixed(4).padStart(12)} |`,
       )
     })
     console.log('')
@@ -57,13 +58,16 @@ const logger = {
 function createRerankingPrompt(query: string, chunk: string): ModelMessage {
   return {
     role: 'user',
-    content: `Rate the relevance of the following passage to the query on a scale from 0 to 10.
+    content: `${RAG_SOURCE_SAFETY_INSTRUCTION}
+  Rate the relevance of the following passage to the query on a scale from 0 to 10.
 Consider:
 - Direct answer to the query
 - Information completeness
 - Factual accuracy
-Query: ${query}
-Passage: ${chunk}
+  ${formatUntrustedSourceMaterials([
+      { sourceName: 'query', chunk: query },
+      { sourceName: 'passage', chunk },
+    ])}
 Output only the relevance score (0-10):`,
   }
 }

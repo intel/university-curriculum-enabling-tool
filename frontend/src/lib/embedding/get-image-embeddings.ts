@@ -6,11 +6,12 @@ import config from '@payload-config'
 import { ImageEmbeddingChunk } from '../types/image-embedding-chunk'
 import { ClientSource } from '../types/client-source'
 import type { Embedding, Media } from '@/payload-types'
+import { getExplicitlySelectedSourceIds } from '@/lib/rag/prompt-safety'
 
 export async function getAllImageEmbeddings(
   selectedSources: ClientSource[],
 ): Promise<ImageEmbeddingChunk[]> {
-  const sourceIds = selectedSources.map((s) => s.id)
+  const sourceIds = getExplicitlySelectedSourceIds(selectedSources)
   if (sourceIds.length === 0) return []
   const payload = await getPayload({ config })
   const cmsResponse = await payload.find({
