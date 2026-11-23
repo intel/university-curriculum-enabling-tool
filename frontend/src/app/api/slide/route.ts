@@ -4,6 +4,8 @@
 import { NextResponse } from 'next/server'
 import type { CourseContentRequest } from './types'
 import { generateCourseContent } from './content-generator'
+import type { ClientSource } from '@/lib/types/client-source'
+import { getExplicitlySelectedSources } from '@/lib/rag/prompt-safety'
 import { normalizeLanguage } from '@/lib/utils/lang'
 
 export const dynamic = 'force-dynamic'
@@ -176,7 +178,6 @@ export async function POST(req: Request) {
     // Otherwise, handle content generation
     const {
       selectedModel,
-      selectedSources,
       contentType,
       contentStyle,
       sessionLength,
@@ -185,6 +186,7 @@ export async function POST(req: Request) {
       language,
       courseInfo,
     } = requestData
+    const selectedSources = getExplicitlySelectedSources<ClientSource>(requestData.selectedSources)
 
     console.log('Data from request:', {
       selectedModel,
@@ -198,12 +200,7 @@ export async function POST(req: Request) {
     })
 
     // Basic validation: ensure either sources or course info is provided
-    const hasValidSources =
-      Array.isArray(selectedSources) &&
-      selectedSources.length > 0 &&
-      selectedSources.every(
-        (source) => source && typeof source === 'object' && 'id' in source && 'name' in source,
-      )
+    const hasValidSources = selectedSources.length > 0
 
     if (!hasValidSources && !courseInfo?.courseName && !courseInfo?.courseDescription) {
       console.warn('DEBUG: No sources or course information provided in POST /api/slide')

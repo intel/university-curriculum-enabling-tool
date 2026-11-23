@@ -10,6 +10,11 @@ import { cosineSimilarity } from 'ai'
 import { ClientSource } from '@/lib/types/client-source'
 import { ContextChunk } from '@/lib/types/context-chunk'
 import { z } from 'zod'
+import {
+  formatUntrustedSourceMaterials,
+  getExplicitlySelectedSources,
+  withRagSourceSafety,
+} from '@/lib/rag/prompt-safety'
 
 const sectionSchema = z.object({
   heading: z.string().optional(), // Optional section heading
@@ -94,15 +99,12 @@ const similarityThreshold = 0.8
 
 export async function POST(req: Request) {
   const { provider } = await getProviderInfo()
-  const { selectedModel, selectedSources, courseInfo, language } = await req.json()
+  const requestBody = await req.json()
+  const { selectedModel, courseInfo, language } = requestBody
+  const selectedSources = getExplicitlySelectedSources<ClientSource>(requestBody.selectedSources)
 
   // Check if we have valid sources
-  const hasValidSources =
-    Array.isArray(selectedSources) &&
-    selectedSources.length > 0 &&
-    selectedSources.every(
-      (source) => source && typeof source === 'object' && 'id' in source && 'name' in source,
-    )
+  const hasValidSources = selectedSources.length > 0
 
   // --- VALIDATION: Ensure either sources OR course info is provided ---
   if (!hasValidSources && !courseInfo?.courseName && !courseInfo?.courseDescription) {
@@ -131,19 +133,19 @@ export async function POST(req: Request) {
         useReranker,
       )
 
-      // DEBUG: Top chunks from hybrid search used for summary generation
-      console.debug('DEBUG: Top chunks from hybrid search used for summary generation:')
-      topChunks.forEach((chunk, idx) => {
-        console.debug(
-          `DEBUG: Chunk #${idx + 1} (sourceId: ${chunk.sourceId}, order: ${chunk.order}):\n${chunk.chunk}\n`,
-        )
-      })
+      console.debug('Retrieved summary chunks:', topChunks.length)
     } else {
       console.log('No valid sources provided, will generate using course context')
     }
 
     const topChunkContent = hasValidSources
-      ? topChunks.map((chunk) => chunk.chunk).join('\n\n')
+      ? formatUntrustedSourceMaterials(
+          topChunks.map((chunk) => ({
+            sourceId: chunk.sourceId,
+            sourceName: chunk.sourceName,
+            chunk: chunk.chunk,
+          })),
+        )
       : ''
 
     const isID = language === 'id'
@@ -217,14 +219,17 @@ STRICTNESS: Only use the provided context. Do not invent facts.`
 - Include technical detail, facts, and examples from general academic knowledge
 - End with a short conclusion if appropriate`
 
-    const systemMessage: ModelMessage = { role: 'system', content: SystemPrompt }
+    const systemMessage: ModelMessage = {
+      role: 'system',
+      content: withRagSourceSafety(SystemPrompt),
+    }
     const userMessage: ModelMessage = { role: 'user', content: UserPrompt }
 
     // Combine messages - only include assistant message if source is selected
     const fullMessages = hasValidSources
       ? [
           systemMessage,
-          { role: 'assistant', content: topChunkContent } as ModelMessage,
+          { role: 'user', content: topChunkContent } as ModelMessage,
           userMessage,
         ]
       : [systemMessage, userMessage]
@@ -265,7 +270,7 @@ STRICTNESS: Only use the provided context. Do not invent facts.`
         `Duration: ${finalTimeTakenSeconds.toFixed(2)} s`,
     )
 
-    console.log('DEBUG: LLM summary JSON object:', summaryObj)
+    console.log('DEBUG: Summary generated with sections:', summaryObj.sections?.length ?? 0)
 
     // Normalize summary response to content blocks for citation processing
     function normalizeToBlocks(summary: SummaryResponse): ContentBlock[] {
@@ -525,7 +530,7 @@ STRICTNESS: Only use the provided context. Do not invent facts.`
     blocks.forEach((block, i) => {
       console.log(`\nBlock #${i} [${block.type}]`)
       if (block.type === 'paragraph') {
-        console.log(`Content: ${block.content}`)
+        console.log(`Content length: ${block.content.length}`)
         const paraSentences = splitIntoSentences(block.content || '')
         paraSentences.forEach((sentence, sidx) => {
           const found = blockCitations.find(
@@ -544,7 +549,7 @@ STRICTNESS: Only use the provided context. Do not invent facts.`
               console.log('    No references found for this sentence.')
             }
           } else {
-            console.log(`  Sentence #${sidx + 1}: ${sentence} (no citation block found)`)
+            console.log(`  Sentence #${sidx + 1}: no citation block found`)
           }
         })
       } else if (block.type === 'list' && block.items) {
@@ -564,7 +569,7 @@ STRICTNESS: Only use the provided context. Do not invent facts.`
           }
         })
       } else {
-        console.log(`Content: ${block.content}`)
+        console.log(`Content length: ${block.content.length}`)
         console.log('  (No citations for this block type)')
       }
     })

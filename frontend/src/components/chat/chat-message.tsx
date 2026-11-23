@@ -16,6 +16,7 @@ import CodeDisplayBlock from '../code-display-block'
 import { UIMessage } from '@ai-sdk/react'
 import { toast } from 'sonner'
 import { extractTextFromMessage } from '@/lib/utils/message'
+import { safeMarkdownUrl } from '@/lib/rag/prompt-safety'
 
 export type ChatMessageProps = {
   message: UIMessage
@@ -221,7 +222,9 @@ function ChatMessage({
           Thinking process
         </summary>
         <div className="mt-2 text-xs text-muted-foreground">
-          <Markdown remarkPlugins={[remarkGfm]}>{thinkContent}</Markdown>
+          <Markdown remarkPlugins={[remarkGfm]} urlTransform={safeMarkdownUrl}>
+            {thinkContent}
+          </Markdown>
         </div>
       </details>
     )
@@ -230,7 +233,12 @@ function ChatMessage({
     contentParts.map((part: string, index: number) =>
       index % 2 === 0 ? (
         <div className="text-sm" key={index}>
-          <Markdown className="markdown-content" key={index} remarkPlugins={[remarkGfm]}>
+          <Markdown
+            className="markdown-content"
+            key={index}
+            remarkPlugins={[remarkGfm]}
+            urlTransform={safeMarkdownUrl}
+          >
             {part}
           </Markdown>
         </div>

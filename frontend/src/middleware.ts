@@ -3,6 +3,7 @@
 
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
+import { isAllowedLocalRequest } from '@/lib/security/local-request'
 
 // Define path exclusions for each persona type
 const PERSONA_EXCLUSIONS = {
@@ -28,6 +29,10 @@ const PERSONA_EXCLUSIONS = {
 }
 
 export function middleware(request: NextRequest) {
+  if (!isAllowedLocalRequest(request)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
+
   // Get the pathname from the URL
   const { pathname } = request.nextUrl
 

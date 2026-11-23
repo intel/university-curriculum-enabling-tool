@@ -10,6 +10,7 @@ import { TEMPERATURE, TOKEN_RESPONSE_BUDGET, langDirective } from '../config/con
 import { extractJsonFromText } from '../utils/jsonHelpers'
 import { stripThinkTags, logAssessmentDebug } from '../utils/generalHelpers'
 import { needLanguageEnforcementForCriteria, enforceRubricLanguage } from '../utils/languageHelpers'
+import { withRagSourceSafety } from '@/lib/rag/prompt-safety'
 
 // Zod schema for project rubric criterion (inline for OVMS compatibility)
 const projectRubricCriterionSchema = z.object({
@@ -403,7 +404,7 @@ IMPORTANT: Do not use markdown formatting (**, ##, etc.). Pure JSON only.`
 
   const systemMessage: ModelMessage = {
     role: 'system',
-    content: systemPrompt,
+    content: withRagSourceSafety(systemPrompt),
   }
 
   const userMessage: ModelMessage = {
@@ -455,7 +456,7 @@ IMPORTANT: Do not use markdown formatting (**, ##, etc.). Pure JSON only.`
     })
 
     const cleaned = stripThinkTags(response.text)
-    logAssessmentDebug(`${section} criteria response:`, cleaned.substring(0, 100) + '...')
+    logAssessmentDebug(`${section} criteria response received`)
 
     // Strip markdown formatting that might interfere with JSON parsing
     const jsonContent = cleaned
@@ -467,7 +468,7 @@ IMPORTANT: Do not use markdown formatting (**, ##, etc.). Pure JSON only.`
 
     logAssessmentDebug(
       `${section} criteria after markdown cleanup:`,
-      jsonContent.substring(0, 200) + '...',
+      jsonContent.length,
     )
 
     try {

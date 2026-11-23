@@ -11,6 +11,7 @@ import {
 } from '../config/constants'
 import { stripThinkTags, stripHorizontalRules } from '../utils/generalHelpers'
 import { detectLikelyLanguage, ensureTargetLanguageText } from '../utils/languageHelpers'
+import { withRagSourceSafety } from '@/lib/rag/prompt-safety'
 
 // Generate project description based on course information and source materials
 export async function generateProjectDescription(
@@ -28,11 +29,6 @@ export async function generateProjectDescription(
   console.log('Has source materials:', hasSourceMaterials)
   console.log('Language:', language)
   console.log('Will use source-based prompts:', hasSourceMaterials)
-  console.log('Assistant message content length:', (assistantMessage.content as string).length)
-  console.log(
-    'Assistant message preview:',
-    (assistantMessage.content as string).substring(0, 200) + '...',
-  )
   console.log('=== END PROJECT DESCRIPTION DEBUG ===')
 
   // Use modular prompt builder for project description
@@ -46,7 +42,7 @@ export async function generateProjectDescription(
 
   const systemMessage: ModelMessage = {
     role: 'system',
-    content: systemPrompt,
+    content: withRagSourceSafety(systemPrompt),
   }
 
   const userMessage: ModelMessage = {
@@ -63,10 +59,7 @@ export async function generateProjectDescription(
     })
 
     let cleaned = stripThinkTags(response.text)
-    console.log(
-      'Raw project description (before language enforcement):',
-      cleaned.substring(0, 200) + '...',
-    )
+    console.log('Project description response received')
 
     // Always ensure final text adheres to the selected language (regardless of source language)
     // But be careful not to override source-based content with course-based content
@@ -94,7 +87,6 @@ export async function generateProjectDescription(
 
     cleaned = stripHorizontalRules(cleaned)
     cleaned = cleaned.replace(/^[ \t]*[\*-]\s+/gm, '• ')
-    console.log('Final project description:', cleaned.substring(0, 200) + '...')
     console.log('Project description generated successfully')
     return cleaned
   } catch (error) {

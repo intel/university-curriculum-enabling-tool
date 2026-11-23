@@ -7,6 +7,7 @@ import type { CourseInfo } from '@/lib/types/course-info-types'
 import { TEMPERATURE, TOKEN_MAX, langDirective, getDefaultDuration } from '../config/constants'
 import { extractJsonFromText } from '../utils/jsonHelpers'
 import { stripThinkTags } from '../utils/generalHelpers'
+import { withRagSourceSafety } from '@/lib/rag/prompt-safety'
 
 export async function generateAssessmentMetadata(
   assessmentType: string,
@@ -126,7 +127,7 @@ DO NOT include any text outside the JSON object.`
 
   const systemMessage: ModelMessage = {
     role: 'system',
-    content: systemPrompt,
+    content: withRagSourceSafety(systemPrompt),
   }
 
   const userMessage: ModelMessage = {
@@ -154,7 +155,7 @@ DO NOT include any text outside the JSON object.`
     })
 
     const cleaned = stripThinkTags(response.text)
-    console.log('Metadata response:', cleaned)
+    console.log('Metadata response received')
 
     try {
       const metadata = JSON.parse(cleaned)
@@ -234,7 +235,7 @@ DO NOT include any text outside the JSON object.`
       description: extractedDescription,
     }
 
-    console.log('Using constructed metadata:', constructedMetadata)
+    console.log('Assessment metadata constructed')
     return constructedMetadata
   } catch (error) {
     console.error('Error generating metadata:', error)

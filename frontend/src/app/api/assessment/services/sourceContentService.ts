@@ -7,61 +7,30 @@ import type { CourseInfo } from '@/lib/types/course-info-types'
 import { getStoredChunks } from '@/lib/chunk/get-stored-chunks'
 import { countTokens, truncateToTokenLimit, logAssessmentDebug } from '../utils/generalHelpers'
 import { TOKEN_CONTEXT_BUDGET, langDirective, MAX_CHUNKS_PER_SOURCE } from '../config/constants'
+import { getExplicitlySelectedSources } from '@/lib/rag/prompt-safety'
 
 export async function prepareSourceContent(
   selectedSources: ClientSource[] | undefined,
   courseInfo: CourseInfo | undefined,
   language: 'en' | 'id',
 ): Promise<string> {
-  // Selected sources handling: if items include an explicit `selected` flag, use it;
-  // otherwise, treat any non-empty array as selected (backward compatibility with clients
-  // that only send selected items without the flag)
-  let hasSelectedSources = false
-  let effectiveSources: ClientSource[] = []
-
-  if (Array.isArray(selectedSources) && selectedSources.length > 0) {
-    const anyHasSelectedFlag = selectedSources.some((s: ClientSource) => 'selected' in s)
-    effectiveSources = anyHasSelectedFlag
-      ? (selectedSources as ClientSource[]).filter((s) => s.selected)
-      : (selectedSources as ClientSource[])
-    hasSelectedSources = effectiveSources.length > 0
-  }
+  const effectiveSources = getExplicitlySelectedSources<ClientSource>(selectedSources)
+  const hasSelectedSources = effectiveSources.length > 0
 
   logAssessmentDebug(
     'Selected sources count:',
     hasSelectedSources ? effectiveSources.length : 'No sources selected',
   )
-  logAssessmentDebug(
-    'Effective sources:',
-    effectiveSources.map((s) => ({
-      id: s.id,
-      name: s.name,
-      selected: s.selected,
-    })),
-  )
+  logAssessmentDebug('Effective source selection validated')
 
   let assistantContent = ''
 
   try {
     // Only retrieve chunks if there are selected sources
     if (hasSelectedSources) {
-      logAssessmentDebug(
-        'Attempting to retrieve chunks for sources:',
-        effectiveSources.map((s) => s.id),
-      )
+      logAssessmentDebug('Retrieving chunks for selected sources')
       const retrievedChunks = await getStoredChunks(effectiveSources)
       logAssessmentDebug('Retrieved chunks:', retrievedChunks.length)
-      logAssessmentDebug('Retrieved chunks sample:', retrievedChunks.slice(0, 2))
-      logAssessmentDebug(
-        'First few chunks preview:',
-        retrievedChunks.slice(0, 3).map((c) => ({
-          sourceId: c.sourceId,
-          chunkLength: c.chunk?.length || 0,
-          chunkPreview: c.chunk?.substring(0, 100) + '...',
-          sourceType: c.sourceType,
-          hasSourceName: !!c.sourceName,
-        })),
-      )
 
       if (retrievedChunks.length > 0) {
         // Process chunks to create a structured context
@@ -115,10 +84,6 @@ export async function prepareSourceContent(
           structuredContent = truncateToTokenLimit(structuredContent, TOKEN_CONTEXT_BUDGET)
           logAssessmentDebug('Original content length:', originalContent.length)
           logAssessmentDebug('Truncated content length:', structuredContent.length)
-          logAssessmentDebug(
-            'Truncated content preview:',
-            structuredContent.substring(0, 500) + '...',
-          )
         } else {
           logAssessmentDebug(
             `Content fits within context budget (${countTokens(structuredContent)} tokens <= ${TOKEN_CONTEXT_BUDGET} tokens)`,
@@ -126,10 +91,6 @@ export async function prepareSourceContent(
         }
 
         logAssessmentDebug(`Final context size: ${countTokens(structuredContent)} tokens`)
-        logAssessmentDebug(
-          'Structured content preview:',
-          structuredContent.substring(0, 500) + '...',
-        )
         logAssessmentDebug(
           'Structured content includes SOURCE MATERIALS marker:',
           structuredContent.includes('SOURCE MATERIALS:'),

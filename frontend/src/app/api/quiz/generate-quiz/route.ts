@@ -10,6 +10,11 @@ import { errorResponse } from '@/lib/api-response'
 import { z } from 'zod'
 import type { ClientSource } from '@/lib/types/client-source'
 import type { ContextChunk } from '@/lib/types/context-chunk'
+import {
+  formatUntrustedSourceMaterials,
+  getExplicitlySelectedSources,
+  withRagSourceSafety,
+} from '@/lib/rag/prompt-safety'
 
 export const dynamic = 'force-dynamic'
 
@@ -361,7 +366,7 @@ IMPORTANT:
 
     const systemMessage: ModelMessage = {
       role: 'system',
-      content: quizSystemPrompt,
+      content: withRagSourceSafety(quizSystemPrompt),
     }
 
     const userMessage: ModelMessage = {
@@ -382,12 +387,7 @@ IMPORTANT:
     const keywordQuery =
       searchKeywords && typeof searchKeywords === 'string' ? searchKeywords.trim() : ''
 
-    let effectiveSources: ClientSource[] = []
-    if (Array.isArray(selectedSources)) {
-      const sources = selectedSources as ClientSource[]
-      const anyHasSelectedFlag = sources.some((source) => typeof source?.selected === 'boolean')
-      effectiveSources = anyHasSelectedFlag ? sources.filter((source) => source?.selected) : sources
-    }
+    const effectiveSources = getExplicitlySelectedSources<ClientSource>(selectedSources)
     const hasSelectedSources = effectiveSources.length > 0
 
     const courseName =
@@ -435,9 +435,12 @@ IMPORTANT:
       }
 
       if (chunkContent) {
+        const untrustedChunkContent = formatUntrustedSourceMaterials([
+          { chunk: chunkContent.trim() },
+        ])
         assistantContent = keywordQuery
-          ? `${chunkContent}\n\nFocus on these user-provided topics and keywords:\n${keywordQuery}`
-          : chunkContent
+          ? `${untrustedChunkContent}\n\nFocus on these user-provided topics and keywords:\n${keywordQuery}`
+          : untrustedChunkContent
       } else if (courseContext) {
         assistantContent = keywordQuery
           ? `${courseContext}\n\nAdditional user-provided topics and keywords:\n${keywordQuery}`
@@ -471,7 +474,7 @@ IMPORTANT:
     }
 
     const assistantMessage: ModelMessage = {
-      role: 'assistant',
+      role: 'user',
       content: assistantContent,
     }
 
@@ -508,7 +511,7 @@ IMPORTANT:
     console.log(
       `Usage tokens: promptEst(${usedTokens}) prompt(${usage?.inputTokens ?? 0}) completion(${usage?.outputTokens ?? 0}) | ${tokenGenerationSpeed.toFixed(2)} t/s | Duration: ${timeTakenSeconds.toFixed(2)} s`,
     )
-    console.log('Generated Quiz:', JSON.stringify(quiz, null, 2))
+    console.log('Quiz generated')
 
     // Normalize the quiz shape to always be { questions: [...] } and fix true/false specifics
     type NormalizedQuestion = {

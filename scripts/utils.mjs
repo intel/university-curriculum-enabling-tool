@@ -2031,7 +2031,8 @@ export async function startFrontend(persona) {
         ...process.env,
         NODE_ENV: 'production',
         PERSONA: persona.toLowerCase(),
-        PORT: '3000',
+        HOSTNAME: '127.0.0.1',
+        PORT: '8080',
       },
     });
 
