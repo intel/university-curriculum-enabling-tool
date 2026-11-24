@@ -77,9 +77,9 @@ export function getExplicitlySelectedSources<T extends { id: number; name: strin
 
   const seenIds = new Set<number>()
   return value.filter((source): source is T => {
+    if (typeof source !== 'object' || source === null) return false
+
     const valid =
-      typeof source === 'object' &&
-      source !== null &&
       Number.isSafeInteger(source.id) &&
       source.id > 0 &&
       typeof source.name === 'string' &&

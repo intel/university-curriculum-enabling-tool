@@ -291,7 +291,7 @@ export function ModelDownloader({ open, onOpenChange }: ModelDownloaderProps) {
                         <Input
                           {...field}
                           type="password"
-                          placeholder="hf_xxxxxxxxxxxxxxxxxxxxx"
+                          placeholder="Enter your HuggingFace access token"
                           value={field.value || ''}
                         />
                       </FormControl>
