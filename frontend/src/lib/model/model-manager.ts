@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { getProviderInfo } from '@/lib/providers'
+import { safeFetch } from '@/lib/ssrf-guard'
 
 /**
  * Model Manager for AI Providers
@@ -41,7 +42,7 @@ export async function isModelAvailable(providerUrl: string, modelName: string): 
     if (providerName === 'ovms') {
       // OVMS uses /v1/config endpoint
       const configUrl = new URL('/v1/config', providerUrl).href
-      const response = await fetch(configUrl)
+      const response = await safeFetch(configUrl)
 
       if (!response.ok) {
         console.error(`OVMS config endpoint returned ${response.status}`)
@@ -73,7 +74,7 @@ export async function isModelAvailable(providerUrl: string, modelName: string): 
     } else {
       // Ollama uses /api/tags endpoint
       const tagsUrl = new URL('/api/tags', providerUrl).href
-      const response = await fetch(tagsUrl)
+      const response = await safeFetch(tagsUrl)
 
       if (!response.ok) {
         console.error(`Ollama tags endpoint returned ${response.status}`)
@@ -166,7 +167,7 @@ export async function downloadModel(ollamaUrl: string, modelName: string): Promi
     console.log(`Downloading Ollama model: ${modelName}...`)
 
     const pullOllamaUrl = new URL('/api/pull', ollamaUrl).href
-    const response = await fetch(pullOllamaUrl, {
+    const response = await safeFetch(pullOllamaUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: modelName }),
@@ -342,7 +343,7 @@ export async function isOVMSModelAvailable(ovmsUrl: string, modelName: string): 
 
     // OVMS uses /v3/models endpoint
     const modelsUrl = new URL('/v3/models', ovmsUrl).href
-    const response = await fetch(modelsUrl)
+    const response = await safeFetch(modelsUrl)
 
     if (!response.ok) {
       console.error(`OVMS models endpoint returned ${response.status}`)

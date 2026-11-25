@@ -6,6 +6,7 @@ import { detokenize, effectiveTokenCount, tokenize } from '../utils'
 import { randomInt } from 'crypto'
 import { getProviderInfo } from '../providers'
 import { verifyModel } from '../model/model-manager'
+import { safeFetch } from '../ssrf-guard'
 
 interface OllamaEmbedResponse {
   embeddings?: number[][]
@@ -186,7 +187,7 @@ export async function generateEmbeddings(
         console.log('DEBUG: Sending embedding request')
         console.log(`DEBUG: effectiveModelName=${effectiveModelName}`)
 
-        const response = await fetch(embeddingUrl.href, {
+        const response = await safeFetch(embeddingUrl.href, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

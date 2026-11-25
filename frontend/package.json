@@ -18,6 +18,8 @@
     "build:student": "cross-env NODE_OPTIONS=--no-deprecation STANDALONE_BUILD=true PERSONA=student next build",
     "lint": "cross-env NODE_OPTIONS=--no-deprecation eslint --ext .js,.jsx,.ts,.tsx .",
     "lint:fix": "cross-env NODE_OPTIONS=--no-deprecation eslint --ext .js,.jsx,.ts,.tsx . --fix",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "payload": "cross-env PAYLOAD_CONFIG_PATH=src/payload.config.ts payload"
   },
   "dependencies": {
@@ -75,7 +77,7 @@
     "jspdf-autotable": "^5.0.7",
     "lodash": "^4.18.1",
     "lucide-react": "^0.474.0",
-    "next": "16.4.2",
+    "next": "16.4.6",
     "next-themes": "^0.4.6",
     "payload": "^3.90.2",
     "pdf-parse": "^1.1.1",
@@ -119,7 +121,8 @@
     "prettier-plugin-tailwindcss": "^0.6.12",
     "tailwindcss": "^3.4.1",
     "terser-webpack-plugin": "^5.3.14",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^2.1.9"
   },
   "overrides": {
     "dompurify": "^3.4.17",

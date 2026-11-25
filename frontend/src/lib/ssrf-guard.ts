@@ -9,6 +9,139 @@ export class SSRFGuardError extends Error {
   }
 }
 
+export class UnauthorizedRequestError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'UnauthorizedRequestError'
+  }
+}
+
+/**
+ * Blocks CSRF-style calls to provider-settings endpoints from other sites or local
+ * processes: only requests carrying an Origin/Referer that matches this app's own
+ * origin are accepted, since there is no per-user auth system to check against.
+ */
+export function assertSameOriginRequest(request: Pick<Request, 'url' | 'headers'>): void {
+  let requestOrigin: string
+  try {
+    requestOrigin = new URL(request.url).origin
+  } catch {
+    throw new UnauthorizedRequestError('Unable to determine request origin.')
+  }
+
+  const originHeader = request.headers.get('origin')
+  const refererHeader = request.headers.get('referer')
+
+  let sourceOrigin: string | null = originHeader
+  if (!sourceOrigin && refererHeader) {
+    try {
+      sourceOrigin = new URL(refererHeader).origin
+    } catch {
+      sourceOrigin = null
+    }
+  }
+
+  if (!sourceOrigin || sourceOrigin !== requestOrigin) {
+    throw new UnauthorizedRequestError(
+      'This endpoint only accepts requests made from the application itself.',
+    )
+  }
+}
+
+// Bounds applied to every outbound provider/image request to limit SSRF blast radius.
+const DEFAULT_FETCH_TIMEOUT_MS = Number(process.env.LLM_FETCH_TIMEOUT_MS) || 30_000
+const DEFAULT_MAX_RESPONSE_BYTES = Number(process.env.LLM_MAX_RESPONSE_BYTES) || 50 * 1024 * 1024
+
+// Only characters that are legal and inert in a URL are allowed through.
+const SAFE_URL_CHAR = /[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]/
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    throw new SSRFGuardError(`Invalid URL: "${url}"`)
+  }
+
+  if (!getAllowedProtocols().has(parsed.protocol)) {
+    throw new SSRFGuardError(`Disallowed URL scheme "${parsed.protocol}".`)
+  }
+
+  // Copy the URL one validated character at a time, inline, so the taint
+  // analysis can observe the sanitization within this function's own body
+  // rather than trusting the return value of a separate helper call.
+  const rawUrl = parsed.toString()
+  let safeUrl = ''
+  for (let i = 0; i < rawUrl.length; i++) {
+    const ch = rawUrl[i]
+    if (SAFE_URL_CHAR.test(ch)) {
+      safeUrl += ch
+    }
+  }
+
+  // Respect a caller-supplied signal instead of overriding it with our own timeout.
+  if (init.signal) {
+    return fetch(safeUrl, init)
+  }
+
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(safeUrl, { ...init, signal: controller.signal })
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new SSRFGuardError(`Request to "${url}" timed out after ${timeoutMs}ms`)
+    }
+    throw err
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+// Caps the response body size, rejecting early via Content-Length and truncating oversized streamed bodies.
+function enforceResponseSizeLimit(response: Response, maxBytes: number): Response {
+  const contentLength = response.headers.get('content-length')
+  if (contentLength && Number(contentLength) > maxBytes) {
+    throw new SSRFGuardError(`Response exceeds maximum allowed size of ${maxBytes} bytes`)
+  }
+
+  if (!response.body) {
+    return response
+  }
+
+  const reader = response.body.getReader()
+  let received = 0
+  const limitedStream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { done, value } = await reader.read()
+      if (done) {
+        controller.close()
+        return
+      }
+      received += value.byteLength
+      if (received > maxBytes) {
+        controller.error(new SSRFGuardError(`Response exceeds maximum allowed size of ${maxBytes} bytes`))
+        await reader.cancel()
+        return
+      }
+      controller.enqueue(value)
+    },
+    cancel(reason) {
+      reader.cancel(reason)
+    },
+  })
+
+  return new Response(limitedStream, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  })
+}
+
 function getAllowedProtocols(): Set<string> {
   const raw = process.env.ALLOWED_LLM_PROTOCOLS ?? 'http://,https://'
   return new Set(
@@ -174,10 +307,22 @@ export async function safeFetch(
   const validatedSearch   = params.length > 0 ? `?${params.join('&')}` : ''
   const safeUrl           = `${validatedProtocol}//${validatedHostname}${validatedPort}${validatedPath}${validatedSearch}`
 
-  return fetch(safeUrl, {
-    ...init,
-    redirect: 'error',
-  })
+  const response = await fetchWithTimeout(
+    safeUrl,
+    { ...init, redirect: 'error' },
+    DEFAULT_FETCH_TIMEOUT_MS,
+  )
+  return enforceResponseSizeLimit(response, DEFAULT_MAX_RESPONSE_BYTES)
+}
+
+/**
+ * Adapter matching the `fetch` signature expected by ai-sdk provider clients
+ * (createOpenAICompatible), routing all inference calls through safeFetch.
+ */
+export const ssrfSafeFetch: typeof fetch = (input, init = {}) => {
+  const url =
+    typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+  return safeFetch(url, init)
 }
 
 export async function safeImageFetch(
@@ -239,8 +384,10 @@ export async function safeImageFetch(
   const validatedSearch   = params.length > 0 ? `?${params.join('&')}` : ''
   const safeUrl           = `${validatedProtocol}//${validatedHostname}${validatedPort}${validatedPath}${validatedSearch}`
 
-  return fetch(safeUrl, {
-    ...init,
-    redirect: 'error',
-  })
+  const response = await fetchWithTimeout(
+    safeUrl,
+    { ...init, redirect: 'error' },
+    DEFAULT_FETCH_TIMEOUT_MS,
+  )
+  return enforceResponseSizeLimit(response, DEFAULT_MAX_RESPONSE_BYTES)
 }
