@@ -12,6 +12,7 @@
 
 import { ScoredChunk } from '../types/context-chunk'
 import { breakTaintChain } from '../utils'
+import { safeFetch } from '../ssrf-guard'
 
 // Cache to track which models have been downloaded
 const downloadedModels = new Set<string>()
@@ -72,7 +73,7 @@ async function ensureOVMSRerankModelAvailable(modelId: string): Promise<void> {
     const ovmsBaseUrl = await getLLMUrl()
     const configUrl = new URL('/v1/config', ovmsBaseUrl)
 
-    const configResponse = await fetch(configUrl.href, {
+    const configResponse = await safeFetch(configUrl.href, {
       method: 'GET',
       signal: AbortSignal.timeout(5000),
     })
@@ -229,7 +230,7 @@ export async function rerankWithOVMS(
 
     // Call OVMS rerank endpoint
     const rerankUrl = new URL('/v3/rerank', ovmsBaseUrl)
-    const response = await fetch(rerankUrl.href, {
+    const response = await safeFetch(rerankUrl.href, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

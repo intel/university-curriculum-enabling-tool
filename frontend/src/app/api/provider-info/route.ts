@@ -10,23 +10,15 @@
 
 import { NextResponse } from 'next/server'
 import { getProviderInfo } from '@/lib/providers'
-import { getLLMConfig } from '@/lib/getLLMUrl'
 
 export async function GET() {
   try {
-    const { providerName, baseURL } = await getProviderInfo()
-    const config = await getLLMConfig()
+    const { providerName } = await getProviderInfo()
 
     return NextResponse.json({
       success: true,
       provider: {
         providerName, // 'ollama' or 'ovms' from database
-        baseURL,
-        configured: {
-          PROVIDER_ENV: process.env.PROVIDER || '(not set)',
-          providerType: config.providerType,
-          llmURL: config.llmURL,
-        },
       },
     })
   } catch (error) {

@@ -2,13 +2,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { NextRequest, NextResponse } from 'next/server'
-import { validateLLMUrl, SSRFGuardError } from '@/lib/ssrf-guard'
+import { assertSameOriginRequest, UnauthorizedRequestError, validateLLMUrl, SSRFGuardError } from '@/lib/ssrf-guard'
 
 /**
  * POST /api/settings/llm-config/test
  * Test connection to the LLM server and auto-detect provider type
  */
 export async function POST(request: NextRequest) {
+  try {
+    assertSameOriginRequest(request)
+  } catch (err) {
+    if (err instanceof UnauthorizedRequestError) {
+      return NextResponse.json({ success: false, error: err.message }, { status: 403 })
+    }
+    throw err
+  }
+
   try {
     const body = await request.json()
     const { llmURL } = body

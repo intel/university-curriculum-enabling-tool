@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
+import { ssrfSafeFetch } from '@/lib/ssrf-guard'
 
 // Create an Ollama provider instance with a dynamic base URL
 export function createOllamaProvider(baseURL: string) {
@@ -10,6 +11,7 @@ export function createOllamaProvider(baseURL: string) {
   const provider = createOpenAICompatible({
     name: 'ollama',
     baseURL: formattedURL,
+    fetch: ssrfSafeFetch,
   })
 
   return { provider, baseURL: formattedURL }

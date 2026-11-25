@@ -5,11 +5,14 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPayload } from 'payload'
 import config from '@payload-config'
 import { clearLLMUrlCache, getLLMConfig } from '@/lib/getLLMUrl'
-import { validateLLMUrl, SSRFGuardError } from '@/lib/ssrf-guard'
+import { assertSameOriginRequest, UnauthorizedRequestError, validateLLMUrl, SSRFGuardError } from '@/lib/ssrf-guard'
 
 /**
  * GET /api/settings/llm-config
  * Fetch current LLM configuration including provider type and URL
+ *
+ * Read-only, so it isn't gated by assertSameOriginRequest: browsers omit the Origin
+ * header on simple same-origin GETs, and this must stay reliable for the settings page.
  */
 export async function GET() {
   try {
@@ -61,6 +64,15 @@ export async function GET() {
  * Body: { providerType: string, llmURL: string }
  */
 export async function POST(request: NextRequest) {
+  try {
+    assertSameOriginRequest(request)
+  } catch (err) {
+    if (err instanceof UnauthorizedRequestError) {
+      return NextResponse.json({ success: false, error: err.message }, { status: 403 })
+    }
+    throw err
+  }
+
   try {
     const body = await request.json()
     const { providerType, llmURL } = body

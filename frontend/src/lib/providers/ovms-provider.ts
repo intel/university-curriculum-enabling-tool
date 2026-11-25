@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
+import { ssrfSafeFetch } from '@/lib/ssrf-guard'
 
 // Create an OVMS provider instance with a dynamic base URL
 // OVMS OpenAI-compatible endpoints:
@@ -17,6 +18,7 @@ export function createOVMSProvider(baseURL: string) {
     baseURL: formattedURL,
     includeUsage: true,
     supportsStructuredOutputs: true,
+    fetch: ssrfSafeFetch,
   })
 
   return { provider, baseURL: formattedURL }
