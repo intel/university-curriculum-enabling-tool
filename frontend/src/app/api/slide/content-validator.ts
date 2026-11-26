@@ -17,6 +17,47 @@ interface PartialContent {
   [key: string]: unknown
 }
 
+// Size limits guard against oversized/deeply-nested model output reaching the
+// PPTX/PDF generators (T11: document and archive injection).
+const MAX_TITLE_LENGTH = 300
+const MAX_TEXT_LENGTH = 20_000
+const MAX_SLIDES = 80
+const MAX_ACTIVITIES = 40
+const MAX_ASSESSMENT_IDEAS = 30
+const MAX_QUESTIONS_PER_IDEA = 50
+const MAX_KEY_TERMS = 150
+const MAX_FURTHER_READINGS = 80
+const MAX_LEARNING_OUTCOMES = 100
+const MAX_LIST_ITEMS = 100
+
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g
+const UNSAFE_URI_SCHEME_RE = /\b(javascript|vbscript|data):/gi
+
+// Model/document content is untrusted: strip control characters and neutralize
+// script-like URI schemes before the text reaches any generated file.
+function sanitizeText(value: unknown, maxLength: number = MAX_TEXT_LENGTH): string {
+  if (typeof value !== 'string') return ''
+  const cleaned = value.replace(CONTROL_CHARS_RE, '').replace(UNSAFE_URI_SCHEME_RE, 'blocked-uri:')
+  return cleaned.slice(0, maxLength)
+}
+
+function sanitizeTextArray(
+  value: unknown,
+  maxItems: number = MAX_LIST_ITEMS,
+  maxLength: number = MAX_TEXT_LENGTH,
+): string[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is string => typeof item === 'string')
+    .slice(0, maxItems)
+    .map((item) => sanitizeText(item, maxLength))
+}
+
+function limitItems<T>(value: T[], maxItems: number): T[] {
+  return value.slice(0, maxItems)
+}
+
 // Validate and sanitize the combined response
 export function validateAndSanitizeContent(
   content: unknown,
@@ -30,63 +71,59 @@ export function validateAndSanitizeContent(
 
   // Create a sanitized version with defaults for any missing properties
   const sanitized: LectureContent = {
-    title: typedContent.title || 'Untitled Content',
-    learningOutcomes: Array.isArray(typedContent.learningOutcomes)
-      ? (typedContent.learningOutcomes as string[])
-      : [],
+    title: sanitizeText(typedContent.title, MAX_TITLE_LENGTH) || 'Untitled Content',
+    learningOutcomes: sanitizeTextArray(typedContent.learningOutcomes, MAX_LEARNING_OUTCOMES),
     keyTerms: Array.isArray(typedContent.keyTerms)
-      ? typedContent.keyTerms.map((item: unknown) => {
+      ? limitItems(typedContent.keyTerms, MAX_KEY_TERMS).map((item: unknown) => {
           const keyTermItem = item as Record<string, unknown>
           return {
-            term: (keyTermItem?.term as string) || '',
-            definition: (keyTermItem?.definition as string) || '',
+            term: sanitizeText(keyTermItem?.term, MAX_TITLE_LENGTH),
+            definition: sanitizeText(keyTermItem?.definition),
           }
         })
       : [],
-    introduction: typedContent.introduction || '',
+    introduction: sanitizeText(typedContent.introduction),
     slides: Array.isArray(typedContent.slides)
-      ? typedContent.slides.map((slide: unknown) => {
+      ? limitItems(typedContent.slides, MAX_SLIDES).map((slide: unknown) => {
           const slideItem = slide as Record<string, unknown>
           return {
-            title: (slideItem?.title as string) || 'Untitled Slide',
-            content: Array.isArray(slideItem?.content) ? slideItem.content : [],
-            notes: (slideItem?.notes as string) || '',
+            title: sanitizeText(slideItem?.title, MAX_TITLE_LENGTH) || 'Untitled Slide',
+            content: sanitizeTextArray(slideItem?.content),
+            notes: sanitizeText(slideItem?.notes),
           }
         })
       : [],
     activities: Array.isArray(typedContent.activities)
-      ? typedContent.activities.map((activity: unknown) => {
+      ? limitItems(typedContent.activities, MAX_ACTIVITIES).map((activity: unknown) => {
           const activityItem = activity as Record<string, unknown>
           return {
-            title: (activityItem?.title as string) || 'Untitled Activity',
-            type: (activityItem?.type as string) || 'Activity',
-            description: (activityItem?.description as string) || '',
-            duration: (activityItem?.duration as string) || '15 minutes',
-            instructions: Array.isArray(activityItem?.instructions)
-              ? activityItem.instructions
-              : [],
-            materials: Array.isArray(activityItem?.materials) ? activityItem.materials : [],
+            title: sanitizeText(activityItem?.title, MAX_TITLE_LENGTH) || 'Untitled Activity',
+            type: sanitizeText(activityItem?.type, 100) || 'Activity',
+            description: sanitizeText(activityItem?.description),
+            duration: sanitizeText(activityItem?.duration, 100) || '15 minutes',
+            instructions: sanitizeTextArray(activityItem?.instructions),
+            materials: sanitizeTextArray(activityItem?.materials),
           }
         })
       : [],
     assessmentIdeas: Array.isArray(typedContent.assessmentIdeas)
-      ? typedContent.assessmentIdeas.map((idea: unknown) => {
+      ? limitItems(typedContent.assessmentIdeas, MAX_ASSESSMENT_IDEAS).map((idea: unknown) => {
           if (typeof idea === 'string') {
             // Convert string to object format
             return {
               type: 'Assessment',
               duration: 'Varies',
-              description: idea,
+              description: sanitizeText(idea),
               exampleQuestions: [],
             }
           } else if (typeof idea === 'object' && idea !== null) {
             const ideaItem = idea as Record<string, unknown>
             return {
-              type: (ideaItem.type as string) || 'Assessment',
-              duration: (ideaItem.duration as string) || 'Varies',
-              description: (ideaItem.description as string) || '',
+              type: sanitizeText(ideaItem.type, 100) || 'Assessment',
+              duration: sanitizeText(ideaItem.duration, 100) || 'Varies',
+              description: sanitizeText(ideaItem.description),
               exampleQuestions: Array.isArray(ideaItem.exampleQuestions)
-                ? ideaItem.exampleQuestions.map((q: unknown) => {
+                ? limitItems(ideaItem.exampleQuestions, MAX_QUESTIONS_PER_IDEA).map((q: unknown) => {
                     const questionItem = q as Record<string, unknown>
 
                     // Properly handle explanation - ensure it's either string, object with properties, or undefined
@@ -95,7 +132,7 @@ export function validateAndSanitizeContent(
                       typeof questionItem.explanation === 'string' &&
                       questionItem.explanation.trim() !== ''
                     ) {
-                      explanation = questionItem.explanation
+                      explanation = sanitizeText(questionItem.explanation)
                     } else if (
                       typeof questionItem.explanation === 'object' &&
                       questionItem.explanation !== null &&
@@ -105,15 +142,13 @@ export function validateAndSanitizeContent(
                     }
 
                     return {
-                      question: (questionItem.question as string) || '',
+                      question: sanitizeText(questionItem.question),
                       options: Array.isArray(questionItem.options)
-                        ? (questionItem.options as unknown[]).filter(
-                            (opt): opt is string => typeof opt === 'string',
-                          )
+                        ? sanitizeTextArray(questionItem.options)
                         : undefined,
-                      correctAnswer: (questionItem.correctAnswer as string) || '',
+                      correctAnswer: sanitizeText(questionItem.correctAnswer, MAX_TITLE_LENGTH),
                       explanation,
-                      pointAllocation: (questionItem.pointAllocation as string) || '1 point',
+                      pointAllocation: sanitizeText(questionItem.pointAllocation, 100) || '1 point',
                     }
                   })
                 : [],
@@ -128,20 +163,20 @@ export function validateAndSanitizeContent(
         })
       : [],
     furtherReadings: Array.isArray(typedContent.furtherReadings)
-      ? typedContent.furtherReadings.map((reading: unknown) => {
+      ? limitItems(typedContent.furtherReadings, MAX_FURTHER_READINGS).map((reading: unknown) => {
           if (typeof reading === 'string') {
             // Convert string to object format
             return {
               title: 'Recommended Reading',
               author: 'Various',
-              readingDescription: reading,
+              readingDescription: sanitizeText(reading),
             }
           } else if (typeof reading === 'object' && reading !== null) {
             const readingItem = reading as Record<string, unknown>
             return {
-              title: (readingItem.title as string) || 'Recommended Reading',
-              author: (readingItem.author as string) || 'Various',
-              readingDescription: (readingItem.readingDescription as string) || '',
+              title: sanitizeText(readingItem.title, MAX_TITLE_LENGTH) || 'Recommended Reading',
+              author: sanitizeText(readingItem.author, MAX_TITLE_LENGTH) || 'Various',
+              readingDescription: sanitizeText(readingItem.readingDescription),
             }
           }
           return {
@@ -151,8 +186,8 @@ export function validateAndSanitizeContent(
           }
         })
       : [],
-    contentType: finalContentType,
-    difficultyLevel: difficultyLevel,
+    contentType: sanitizeText(finalContentType, 50),
+    difficultyLevel: sanitizeText(difficultyLevel, 50),
   }
 
   // Ensure we have at least 5 slides for lecture content
