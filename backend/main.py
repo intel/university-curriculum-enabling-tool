@@ -5,6 +5,7 @@ from pydantic import BaseModel
 import fitz  # PyMuPDF
 from pathlib import Path
 import os
+import re
 import shutil
 import glob
 from generate_caption import generate_dynamic_caption
@@ -21,7 +22,55 @@ import uuid
 from typing import Dict
 import json
 
+# Maximum accepted request body size, in bytes (T11: oversized content).
+MAX_REQUEST_BODY_BYTES = int(os.environ.get("MAX_REQUEST_BODY_BYTES", 50 * 1024 * 1024))
+
+
+class MaxBodySizeMiddleware:
+    """Rejects oversized request bodies before any parser or generator sees them."""
+
+    def __init__(self, app, max_body_size: int):
+        self.app = app
+        self.max_body_size = max_body_size
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers") or [])
+        content_length = headers.get(b"content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > self.max_body_size:
+                    response = JSONResponse(
+                        {"detail": "Request body exceeds the maximum allowed size."},
+                        status_code=413,
+                    )
+                    await response(scope, receive, send)
+                    return
+            except ValueError:
+                pass
+
+        total_size = 0
+
+        async def guarded_receive():
+            nonlocal total_size
+            message = await receive()
+            if message["type"] == "http.request":
+                total_size += len(message.get("body", b"") or b"")
+                if total_size > self.max_body_size:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Request body exceeds the maximum allowed size.",
+                    )
+            return message
+
+        await self.app(scope, guarded_receive, send)
+
+
 app = FastAPI()
+app.add_middleware(MaxBodySizeMiddleware, max_body_size=MAX_REQUEST_BODY_BYTES)
 
 # Get the root directory of the project dynamically
 BASE_DIR = Path(__file__).resolve().parent
@@ -142,10 +191,53 @@ class PPTXRequest(BaseModel):
     language: str | None = "en"
 
 
+# Size limits guard against oversized/deeply-nested model output reaching the
+# PPTX generator (T11: document and archive injection).
+MAX_TITLE_LENGTH = 300
+MAX_TEXT_LENGTH = 20_000
+MAX_SHORT_FIELD_LENGTH = 100
+MAX_SLIDES = 80
+MAX_ACTIVITIES = 40
+MAX_ASSESSMENT_IDEAS = 30
+MAX_QUESTIONS_PER_IDEA = 50
+MAX_KEY_TERMS = 150
+MAX_FURTHER_READINGS = 80
+MAX_LEARNING_OUTCOMES = 100
+MAX_LIST_ITEMS = 100
+
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
+_UNSAFE_URI_SCHEME_RE = re.compile(r"(?i)\b(javascript|vbscript|data):")
+
+
+def sanitize_text(value, max_length: int = MAX_TEXT_LENGTH) -> str:
+    """Strip control characters and neutralize script-like URI schemes from untrusted text."""
+    if not isinstance(value, str):
+        return ""
+    cleaned = _CONTROL_CHARS_RE.sub("", value)
+    cleaned = _UNSAFE_URI_SCHEME_RE.sub("blocked-uri:", cleaned)
+    return cleaned[:max_length]
+
+
+def sanitize_text_list(value, max_items: int = MAX_LIST_ITEMS, max_length: int = MAX_TEXT_LENGTH):
+    if not isinstance(value, list):
+        return []
+    return [sanitize_text(item, max_length) for item in value[:max_items] if isinstance(item, str)]
+
+
+def as_dict_list(value, max_items: int):
+    if not isinstance(value, list):
+        return []
+    return [item for item in value[:max_items] if isinstance(item, dict)]
+
+
 def validate_and_transform_content(content: dict) -> dict:
     """
-    Validate and transform the incoming content to match the expected format
-    used in the create_pptx function.
+    Validate, size-limit, and sanitize the incoming content to match the
+    expected format used in the create_pptx function.
+
+    Treats all model/document content as untrusted: text fields are stripped of
+    control characters and script-like URI schemes, and every list is capped to
+    prevent oversized or deeply nested payloads.
 
     Args:
         content (dict): The incoming content structure.
@@ -155,52 +247,60 @@ def validate_and_transform_content(content: dict) -> dict:
     """
     # Ensure required keys exist with default values if missing
     transformed_content = {
-        "title": content.get("title", ""),
-        "contentType": content.get("contentType", "lecture"),
-        "difficultyLevel": content.get("difficultyLevel", "intermediate"),
-        "slides": content.get("slides", []),
-        "activities": content.get("activities", []),
-        "assessmentIdeas": content.get("assessmentIdeas", []),
-        "keyTerms": content.get("keyTerms", []),
-        "furtherReadings": content.get("furtherReadings", []),
-        "learningOutcomes": content.get("learningOutcomes", []),
+        "title": sanitize_text(content.get("title", ""), MAX_TITLE_LENGTH),
+        "contentType": sanitize_text(content.get("contentType", "lecture"), MAX_SHORT_FIELD_LENGTH),
+        "difficultyLevel": sanitize_text(
+            content.get("difficultyLevel", "intermediate"), MAX_SHORT_FIELD_LENGTH
+        ),
+        "slides": as_dict_list(content.get("slides", []), MAX_SLIDES),
+        "activities": as_dict_list(content.get("activities", []), MAX_ACTIVITIES),
+        "assessmentIdeas": as_dict_list(content.get("assessmentIdeas", []), MAX_ASSESSMENT_IDEAS),
+        "keyTerms": as_dict_list(content.get("keyTerms", []), MAX_KEY_TERMS),
+        "furtherReadings": as_dict_list(content.get("furtherReadings", []), MAX_FURTHER_READINGS),
+        "learningOutcomes": sanitize_text_list(
+            content.get("learningOutcomes", []), MAX_LEARNING_OUTCOMES
+        ),
     }
 
     # Validate slides structure
     for slide in transformed_content["slides"]:
-        slide.setdefault("title", "")
-        slide.setdefault("content", [])
-        slide.setdefault("notes", "")
+        slide["title"] = sanitize_text(slide.get("title", ""), MAX_TITLE_LENGTH)
+        slide["content"] = sanitize_text_list(slide.get("content", []))
+        slide["notes"] = sanitize_text(slide.get("notes", ""))
 
     # Validate activities structure
     for activity in transformed_content["activities"]:
-        activity.setdefault("title", "")
-        activity.setdefault("description", "")
-        activity.setdefault("type", "Exercise")
-        activity.setdefault("duration", "20 minutes")
-        activity.setdefault("instructions", [])
-        activity.setdefault("materials", [])
+        activity["title"] = sanitize_text(activity.get("title", ""), MAX_TITLE_LENGTH)
+        activity["description"] = sanitize_text(activity.get("description", ""))
+        activity["type"] = sanitize_text(activity.get("type", "Exercise"), MAX_SHORT_FIELD_LENGTH)
+        activity["duration"] = sanitize_text(
+            activity.get("duration", "20 minutes"), MAX_SHORT_FIELD_LENGTH
+        )
+        activity["instructions"] = sanitize_text_list(activity.get("instructions", []))
+        activity["materials"] = sanitize_text_list(activity.get("materials", []))
 
     # Validate assessment ideas structure
     for idea in transformed_content["assessmentIdeas"]:
-        idea.setdefault("type", "Assessment")
-        idea.setdefault("exampleQuestions", [])
+        idea["type"] = sanitize_text(idea.get("type", "Assessment"), MAX_SHORT_FIELD_LENGTH)
+        idea["exampleQuestions"] = as_dict_list(
+            idea.get("exampleQuestions", []), MAX_QUESTIONS_PER_IDEA
+        )
         for question in idea["exampleQuestions"]:
-            question.setdefault("question", "Example question")
-            question.setdefault("options", [])
-            question.setdefault("correctAnswer", "")
-            question.setdefault("explanation", "")
+            question["question"] = sanitize_text(question.get("question", "Example question"))
+            question["options"] = sanitize_text_list(question.get("options", []))
+            question["correctAnswer"] = sanitize_text(question.get("correctAnswer", ""))
+            question["explanation"] = sanitize_text(question.get("explanation", ""))
 
     # Validate key terms structure
     for term in transformed_content["keyTerms"]:
-        term.setdefault("term", "")
-        term.setdefault("definition", "")
+        term["term"] = sanitize_text(term.get("term", ""), MAX_TITLE_LENGTH)
+        term["definition"] = sanitize_text(term.get("definition", ""))
 
     # Validate further readings structure
     for reading in transformed_content["furtherReadings"]:
-        reading.setdefault("title", "")
-        reading.setdefault("author", "")
-        reading.setdefault("readingDescription", "")
+        reading["title"] = sanitize_text(reading.get("title", ""), MAX_TITLE_LENGTH)
+        reading["author"] = sanitize_text(reading.get("author", ""), MAX_TITLE_LENGTH)
+        reading["readingDescription"] = sanitize_text(reading.get("readingDescription", ""))
 
     return transformed_content
 

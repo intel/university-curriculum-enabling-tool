@@ -7,6 +7,7 @@ import { generateCourseContent } from './content-generator'
 import type { ClientSource } from '@/lib/types/client-source'
 import { getExplicitlySelectedSources } from '@/lib/rag/prompt-safety'
 import { normalizeLanguage } from '@/lib/utils/lang'
+import { readJsonWithLimit, RequestTooLargeError } from '@/lib/request-size-guard'
 
 export const dynamic = 'force-dynamic'
 
@@ -19,7 +20,7 @@ const REQUEST_TIMEOUT_MS = (() => {
 
 export async function POST(req: Request) {
   try {
-    const requestData: CourseContentRequest = await req.json()
+    const requestData = await readJsonWithLimit<CourseContentRequest>(req)
 
     // Check if this is a PPTX download request
     if (requestData.action === 'download-pptx') {
@@ -226,6 +227,9 @@ export async function POST(req: Request) {
     return NextResponse.json(generatedContent)
   } catch (error) {
     console.error('Error in POST handler:', error)
+    if (error instanceof RequestTooLargeError) {
+      return NextResponse.json({ error: error.message }, { status: 413 })
+    }
     return NextResponse.json(
       { error: 'An error occurred while processing the request.' },
       { status: 500 },

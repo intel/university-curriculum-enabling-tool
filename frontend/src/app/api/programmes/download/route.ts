@@ -9,6 +9,7 @@ import os from 'os'
 import { Readable } from 'stream'
 import { fileURLToPath } from 'url'
 import { getProviderInfo } from '@/lib/providers'
+import { readJsonWithLimit, RequestTooLargeError } from '@/lib/request-size-guard'
 
 // Inline abbreviation function to avoid "unknown function" taint
 const createSafeAbbreviation = (name: string): string => {
@@ -67,7 +68,7 @@ export async function POST(req: Request) {
 
   try {
     // Parse JSON request body
-    const body = await req.json()
+    const body = await readJsonWithLimit(req)
     const { persona, programme } = body as { persona: string; programme: Programme }
 
     if (!persona || !programme) {
@@ -480,6 +481,9 @@ export async function POST(req: Request) {
       } catch (cleanupError) {
         console.error('Error during cleanup:', cleanupError)
       }
+    }
+    if (error instanceof RequestTooLargeError) {
+      return NextResponse.json({ error: error.message }, { status: 413 })
     }
     return NextResponse.json(
       {

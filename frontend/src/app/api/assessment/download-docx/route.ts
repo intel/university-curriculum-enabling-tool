@@ -4,11 +4,13 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { normalizeLanguage, type Lang } from '@/lib/utils/lang'
 import { generateAssessmentDocx } from '@/lib/assessment/docx/builder'
+import { readJsonWithLimit, RequestTooLargeError } from '@/lib/request-size-guard'
 
 // Slim API route: validates body and delegates to modular DOCX generator.
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const body = await readJsonWithLimit<any>(request)
     const { courseInfo, difficultyLevel, language } = body || {}
     const lang: Lang = normalizeLanguage(language)
     const { assessment, format, metadata } = courseInfo || {}
@@ -39,6 +41,9 @@ export async function POST(request: NextRequest) {
       },
     })
   } catch (error: unknown) {
+    if (error instanceof RequestTooLargeError) {
+      return NextResponse.json({ error: error.message }, { status: 413 })
+    }
     const message = error instanceof Error ? error.message : 'Unknown error occurred'
     return NextResponse.json(
       { error: 'Failed to generate Word document: ' + message },
